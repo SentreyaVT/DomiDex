@@ -11,4 +11,6 @@ Capture quality and recognition confidence remain separate concepts:
 
 The contour detector is deliberately conservative and device testing with real sleeved and unsleeved cards is still required before enabling auto-capture. The future continuous workflow should wait for stable green quality, auto-capture, identify the card, show only plausible language/finish/printing variants, preselect only when confidence supports it, confirm with one tap, increment repeated copies, provide haptic/audio feedback and immediate undo, then continue without leaving the scanner. Holo and reverse-holo always remain manually overridable.
 
+Live validation on 2026-08-16 used a physical card through a Logitech C270 USB webcam connected to the Android emulator. The quality state reached green and a 175 KB JPEG was saved locally. Moving the card away returned the live state to red, as expected. This validates the end-to-end gate on that setup but does not replace broader testing across phones, sleeves, backgrounds, lighting, and card finishes.
+
 Guided grading capture is a separate mode tied to a collection entry. It will request front, back, and angled/lighted views and store photo references and analysis history. It must not reuse scanner quality as a claimed PSA estimate.
