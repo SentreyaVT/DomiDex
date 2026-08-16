@@ -45,6 +45,7 @@ import java.text.NumberFormat
 import java.util.Locale
 import java.time.LocalDate
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 private enum class Destination(@param:StringRes val label: Int, val glyph: String) {
     DASHBOARD(R.string.nav_portfolio, "⌂"), SCANNER(R.string.nav_scanner, "▣"),
@@ -145,6 +146,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     var adding by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<CollectionCard?>(null) }
     var deleting by remember { mutableStateOf<CollectionCard?>(null) }
+    var linking by remember { mutableStateOf<CollectionCard?>(null) }
     val scope = rememberCoroutineScope()
     val filtered = cards.filter { it.name.contains(query, true) || it.set.contains(query, true) }
     LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.card)) {
@@ -155,13 +157,14 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     items(filtered, key = { it.entryId }) { card -> CardRow(card) { editing = card } }; item { DataNote() }
     }
     if (adding) ManualCardDialog(onDismiss = { adding = false }, onSave = { input -> scope.launch { repository.addManualCard(input) }; adding = false })
-    editing?.let { card -> EditEntryDialog(card, onDismiss = { editing = null }, onDelete = { editing = null; deleting = card }, onSave = { update -> scope.launch { repository.updateEntry(card.entryId, update) }; editing = null }) }
+    editing?.let { card -> EditEntryDialog(card, onDismiss = { editing = null }, onDelete = { editing = null; deleting = card }, onLink = { editing = null; linking = card }, onSave = { update -> scope.launch { repository.updateEntry(card.entryId, update) }; editing = null }) }
+    linking?.let { card -> CatalogLinkDialog(card, repository, onDismiss = { linking = null }, onLinked = { productId -> scope.launch { repository.linkCatalogProduct(card.entryId, productId) }; linking = null }) }
     deleting?.let { card -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text(stringResource(R.string.delete_entry_title)) }, text = { Text(stringResource(R.string.delete_entry_body, card.name)) }, confirmButton = { TextButton(onClick = { scope.launch { repository.deleteEntry(card.entryId) }; deleting = null }) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.action_cancel)) } }) }
 }
 
 @Composable private fun CardRow(card: CollectionCard, onClick: (() -> Unit)? = null) = ElevatedCard(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier), shape = CardVaultShapes.card, colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) { Row(Modifier.padding(CardVaultSpacing.card), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CardVaultSpacing.card)) {
     Box(Modifier.size(48.dp, 66.dp).background(Color(card.accent), CardVaultShapes.thumbnail), contentAlignment = Alignment.Center) { Text(card.name.take(1), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black) }
-    Column(Modifier.weight(1f)) { Text(card.name, fontWeight = FontWeight.Bold); Text("${card.set} · ${card.number}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.card_metadata, card.language.label, card.condition, card.quantity), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
+    Column(Modifier.weight(1f)) { Text(card.name, fontWeight = FontWeight.Bold); Text("${card.set} · ${card.number}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.card_metadata, card.language.label, card.condition, card.quantity), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp); if (card.externalProductId != null) Text(stringResource(R.string.catalog_linked_badge), color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
     Column(horizontalAlignment = Alignment.End) { Text(if (card.priceUpdatedAtEpochMillis == null) stringResource(R.string.no_market_price) else euro(card.currentValueEur * card.quantity), fontWeight = FontWeight.Bold, fontSize = if (card.priceUpdatedAtEpochMillis == null) 11.sp else 14.sp); if (card.priceUpdatedAtEpochMillis != null) Text((if (card.changePercent >= 0) "+" else "") + "%.1f%%".format(Locale.US, card.changePercent), color = if (card.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error, fontSize = 12.sp) }
 } }
 
@@ -183,15 +186,49 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     }, confirmButton = { TextButton(enabled = valid, onClick = { onSave(ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE })) }) { Text(stringResource(R.string.action_save)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
 }
 
-@Composable private fun EditEntryDialog(card: CollectionCard, onDismiss: () -> Unit, onDelete: () -> Unit, onSave: (CollectionEntryUpdate) -> Unit) {
+@Composable private fun EditEntryDialog(card: CollectionCard, onDismiss: () -> Unit, onDelete: () -> Unit, onLink: () -> Unit, onSave: (CollectionEntryUpdate) -> Unit) {
     var quantity by rememberSaveable(card.entryId) { mutableStateOf(card.quantity.toString()) }; var condition by rememberSaveable(card.entryId) { mutableStateOf(card.condition) }; var notes by rememberSaveable(card.entryId) { mutableStateOf(card.notes) }
     var price by rememberSaveable(card.entryId) { mutableStateOf(card.acquisitionPriceEur?.let { "%.2f".format(Locale.GERMANY, it) } ?: "") }; var date by rememberSaveable(card.entryId) { mutableStateOf(card.acquisitionDateEpochDay?.let { LocalDate.ofEpochDay(it).toString() } ?: "") }
     val valid = (quantity.toIntOrNull() ?: 0) > 0 && condition.isNotBlank() && parseDate(date) != Long.MIN_VALUE && parsePrice(price) != Double.NEGATIVE_INFINITY
     AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(R.string.edit_entry_title)) }, text = { LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("${card.name} · ${card.set}", color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold) }
+        item { OutlinedButton(onClick = onLink, modifier = Modifier.fillMaxWidth()) { Text(if (card.externalProductId == null) stringResource(R.string.catalog_link_action) else stringResource(R.string.catalog_change_action)) }; Text(if (card.externalProductId == null) stringResource(R.string.catalog_unlinked_hint) else stringResource(R.string.catalog_linked_hint, card.externalProductId), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
         item { OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.grading_action)) }; Text(stringResource(R.string.grading_card_future), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
         item { FormField(quantity, { quantity = it.filter(Char::isDigit) }, R.string.field_quantity, KeyboardType.Number) }; item { FormField(condition, { condition = it }, R.string.field_condition) }; item { FormField(price, { price = it }, R.string.field_acquisition_price, KeyboardType.Decimal) }; item { FormField(date, { date = it }, R.string.field_acquisition_date) }; item { FormField(notes, { notes = it }, R.string.field_notes, singleLine = false) }
     } }, confirmButton = { TextButton(enabled = valid, onClick = { onSave(CollectionEntryUpdate(quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE })) }) { Text(stringResource(R.string.action_save)) } }, dismissButton = { Row { TextButton(onClick = onDelete) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) }; TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } } })
+}
+
+@Composable private fun CatalogLinkDialog(card: CollectionCard, repository: CollectionRepository, onDismiss: () -> Unit, onLinked: (Long?) -> Unit) {
+    var query by rememberSaveable(card.entryId) { mutableStateOf(card.name) }
+    var results by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    LaunchedEffect(query) {
+        if (query.trim().length < 2) { results = emptyList(); loading = false; return@LaunchedEffect }
+        loading = true; delay(250); results = repository.searchCatalog(query); loading = false
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.catalog_link_title)) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(stringResource(R.string.catalog_link_explanation, card.name, card.number), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            OutlinedTextField(query, { query = it }, label = { Text(stringResource(R.string.catalog_search_label)) }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field)
+            if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 340.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!loading && results.isEmpty()) item { Text(stringResource(if (query.length < 2) R.string.catalog_search_prompt else R.string.catalog_search_empty), color = VaultTextMuted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 18.dp)) }
+                items(results, key = { it.productId }) { result ->
+                    OutlinedCard(onClick = { onLinked(result.productId) }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), shape = CardVaultShapes.card) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Column(Modifier.weight(1f)) { Text(result.name, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.catalog_expansion_id, result.expansionId), color = VaultTextMuted, fontSize = 11.sp) }
+                            Text(result.trendPriceEur?.let(::euro) ?: stringResource(R.string.no_market_price), color = if (result.trendPriceEur == null) VaultTextMuted else MewIce, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+            Text(stringResource(R.string.catalog_link_warning), color = VaultTextMuted, fontSize = 11.sp)
+        } },
+        confirmButton = {},
+        dismissButton = { Row { if (card.externalProductId != null) TextButton(onClick = { onLinked(null) }) { Text(stringResource(R.string.catalog_unlink_action), color = MaterialTheme.colorScheme.error) }; TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } } },
+    )
 }
 
 @Composable private fun FormField(value: String, onValueChange: (String) -> Unit, @StringRes label: Int, keyboardType: KeyboardType = KeyboardType.Text, singleLine: Boolean = true) {

@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [CatalogCardEntity::class, CollectionEntryEntity::class, RawPriceSnapshotEntity::class, GradedMarketRecordEntity::class, GradingAnalysisEntity::class, AppMetadataEntity::class, CatalogSyncStateEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class CardVaultDatabase : RoomDatabase() {
@@ -21,7 +21,7 @@ abstract class CardVaultDatabase : RoomDatabase() {
         fun get(context: Context): CardVaultDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, CardVaultDatabase::class.java, "cardvault.db")
                 // Every future schema version must provide explicit migrations. Never silently erase collections.
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build().also { instance = it }
         }
 
@@ -41,6 +41,14 @@ abstract class CardVaultDatabase : RoomDatabase() {
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_catalog_cards_externalSource_externalProductId ON catalog_cards(externalSource, externalProductId)")
                 // Remove only explicitly marked Phase-1 demonstration prices, never user or imported data.
                 db.execSQL("DELETE FROM raw_price_snapshots WHERE source = 'DEMO_LOCAL'")
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE collection_entries ADD COLUMN externalProductSource TEXT")
+                db.execSQL("ALTER TABLE collection_entries ADD COLUMN externalProductId INTEGER")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_collection_entries_externalProductSource_externalProductId ON collection_entries(externalProductSource, externalProductId)")
             }
         }
     }

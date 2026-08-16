@@ -20,7 +20,7 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
 
     override val portfolio: Flow<PortfolioSummary> = combine(dao.observeCollection(), dao.observeRawPriceHistory()) { rows, prices ->
         val cards = rows.map { row ->
-            val cardPrices = prices.filter { it.cardId == row.cardId && it.marketValueMinor != null }
+            val cardPrices = prices.filter { it.cardId == row.priceCardId && it.marketValueMinor != null }
             val first = cardPrices.firstOrNull()?.marketValueMinor
             val latest = row.marketValueMinor
             val change = if (first != null && latest != null && first != 0L) (latest - first) * 100.0 / first else 0.0
@@ -28,6 +28,7 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
                 CardLanguage.fromStorage(row.language), row.finish, row.variant, row.condition, row.quantity,
                 (latest ?: 0L) / 100.0, change, row.priceUpdatedAtEpochMillis, row.notes,
                 row.acquisitionPriceMinor?.div(100.0), row.acquisitionDateEpochDay, accentFor(row.name))
+                .copy(externalProductId = row.externalProductId)
         }
         PortfolioSummary(cards, buildHistory(rows, prices))
     }
@@ -56,10 +57,18 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
 
     override suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate) = dao.updateEntry(entryId, update.quantity.coerceAtLeast(1), update.condition.trim(), update.notes.trim(), update.acquisitionPriceEur?.times(100)?.roundToLong(), update.acquisitionPriceEur?.let { "EUR" }, update.acquisitionDateEpochDay)
     override suspend fun deleteEntry(entryId: Long) = dao.deleteCollectionEntry(entryId)
+    override suspend fun searchCatalog(query: String, limit: Int): List<CatalogSearchResult> {
+        val normalized = query.trim()
+        if (normalized.length < 2) return emptyList()
+        return dao.searchCatalog(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, normalized, limit).map {
+            CatalogSearchResult(it.externalProductId, it.name, it.setId, it.marketValueMinor?.div(100.0), it.currency)
+        }
+    }
+    override suspend fun linkCatalogProduct(entryId: Long, productId: Long?) = dao.linkExternalProduct(entryId, productId?.let { com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }, productId, System.currentTimeMillis())
 
     private fun buildHistory(rows: List<CollectionProjection>, prices: List<RawPriceSnapshotEntity>): List<PortfolioPoint> =
         prices.map { it.effectiveAtEpochMillis }.distinct().sorted().map { timestamp ->
-            val total = rows.sumOf { row -> prices.filter { it.cardId == row.cardId && it.effectiveAtEpochMillis <= timestamp }.maxByOrNull { it.effectiveAtEpochMillis }?.marketValueMinor?.times(row.quantity) ?: 0L }
+            val total = rows.sumOf { row -> prices.filter { it.cardId == row.priceCardId && it.effectiveAtEpochMillis <= timestamp }.maxByOrNull { it.effectiveAtEpochMillis }?.marketValueMinor?.times(row.quantity) ?: 0L }
             PortfolioPoint(java.time.Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("MMM")), total / 100.0)
         }
 

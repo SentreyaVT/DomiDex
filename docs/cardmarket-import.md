@@ -9,6 +9,8 @@ CardVault uses only Cardmarket's public Pokémon downloads, never listing-page s
 
 The downloaded product ID is stored as an external identity (`CARDMARKET_PUBLIC_DOWNLOAD`, `idProduct`). Imported catalog rows use stable internal IDs of the form `cm-pokemon-{idProduct}`. The public product file does not provide a trustworthy collector number, language, or finish in every row; CardVault leaves those unknown rather than inferring them.
 
+Collection entries keep their user-entered identity and optionally store an explicit external product link. Search results never auto-link based on a fuzzy match; the user selects the product and may change or remove the link. This preserves local metadata while allowing the linked product's official price history to drive the portfolio.
+
 Portfolio valuation uses the raw `trend` field in EUR, without fallback to another field. Low, average, 1/7/30-day averages and available holo fields are retained separately and historically. A failed import does not delete old snapshots or collection data. Phase-1 `DEMO_LOCAL` prices are removed by migration because they were explicitly fictional demonstration values.
 
 WorkManager schedules a network-constrained daily update. Startup requests work only when the last successful import is at least 24 hours old; manual refresh uses unique work to avoid duplicate concurrent imports. Regular tests use local fixtures. The opt-in live smoke test runs only with JVM property `cardvault.liveSmoke=true`.

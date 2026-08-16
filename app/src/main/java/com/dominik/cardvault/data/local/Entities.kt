@@ -24,7 +24,7 @@ data class CatalogCardEntity(
 @Entity(
     tableName = "collection_entries",
     foreignKeys = [ForeignKey(entity = CatalogCardEntity::class, parentColumns = ["id"], childColumns = ["cardId"], onDelete = ForeignKey.RESTRICT)],
-    indices = [Index("cardId")],
+    indices = [Index("cardId"), Index(value = ["externalProductSource", "externalProductId"])],
 )
 data class CollectionEntryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -39,6 +39,8 @@ data class CollectionEntryEntity(
     val backPhotoUri: String?,
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
+    val externalProductSource: String? = null,
+    val externalProductId: Long? = null,
 )
 
 @Entity(
@@ -149,4 +151,15 @@ data class CollectionProjection(
     val marketValueMinor: Long?,
     val priceCurrency: String?,
     val priceUpdatedAtEpochMillis: Long?,
+    val externalProductSource: String?,
+    val externalProductId: Long?,
+    val priceCardId: String,
+)
+
+data class CatalogSearchProjection(
+    val externalProductId: Long,
+    val name: String,
+    val setId: String,
+    val marketValueMinor: Long?,
+    val currency: String?,
 )

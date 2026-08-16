@@ -16,12 +16,16 @@ interface CardVaultDao {
                c.language, c.finish, c.variant, e.quantity, e.condition,
                e.acquisitionPriceMinor, e.acquisitionCurrency, e.acquisitionDateEpochDay,
                e.notes, p.marketValueMinor, p.currency AS priceCurrency,
-               p.effectiveAtEpochMillis AS priceUpdatedAtEpochMillis
+               p.effectiveAtEpochMillis AS priceUpdatedAtEpochMillis,
+               e.externalProductSource, e.externalProductId,
+               COALESCE(linked.id, c.id) AS priceCardId
         FROM collection_entries e
         JOIN catalog_cards c ON c.id = e.cardId
+        LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource
+             AND linked.externalProductId = e.externalProductId
         LEFT JOIN raw_price_snapshots p ON p.id = (
             SELECT p2.id FROM raw_price_snapshots p2
-            WHERE p2.cardId = c.id
+            WHERE p2.cardId = COALESCE(linked.id, c.id)
             ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1
         )
         ORDER BY e.updatedAtEpochMillis DESC
@@ -30,6 +34,24 @@ interface CardVaultDao {
 
     @Query("SELECT * FROM raw_price_snapshots ORDER BY effectiveAtEpochMillis")
     fun observeRawPriceHistory(): Flow<List<RawPriceSnapshotEntity>>
+
+    @Query("""
+        SELECT c.externalProductId, c.name, c.setId,
+               p.marketValueMinor, p.currency
+        FROM catalog_cards c
+        LEFT JOIN raw_price_snapshots p ON p.id = (
+            SELECT p2.id FROM raw_price_snapshots p2
+            WHERE p2.cardId = c.id
+            ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1
+        )
+        WHERE c.externalSource = :source AND c.externalProductId IS NOT NULL
+          AND c.name LIKE '%' || :query || '%' COLLATE NOCASE
+        ORDER BY CASE WHEN c.name = :query COLLATE NOCASE THEN 0
+                      WHEN c.name LIKE :query || '%' COLLATE NOCASE THEN 1 ELSE 2 END,
+                 c.name COLLATE NOCASE
+        LIMIT :limit
+    """)
+    suspend fun searchCatalog(source: String, query: String, limit: Int): List<CatalogSearchProjection>
 
     @Query("SELECT * FROM catalog_sync_state WHERE source = :source")
     fun observeSyncState(source: String): Flow<CatalogSyncStateEntity?>
@@ -72,6 +94,9 @@ interface CardVaultDao {
 
     @Query("UPDATE collection_entries SET quantity = quantity + :amount, updatedAtEpochMillis = :updatedAt WHERE id = :id")
     suspend fun incrementQuantity(id: Long, amount: Int, updatedAt: Long)
+
+    @Query("UPDATE collection_entries SET externalProductSource = :source, externalProductId = :productId, updatedAtEpochMillis = :updatedAt WHERE id = :entryId")
+    suspend fun linkExternalProduct(entryId: Long, source: String?, productId: Long?, updatedAt: Long)
 
     @Query("DELETE FROM collection_entries WHERE id = :id")
     suspend fun deleteCollectionEntry(id: Long)

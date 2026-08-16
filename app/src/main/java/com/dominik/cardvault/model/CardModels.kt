@@ -8,7 +8,10 @@ data class CollectionCard(
     val quantity: Int, val currentValueEur: Double, val changePercent: Double,
     val priceUpdatedAtEpochMillis: Long?, val notes: String, val acquisitionPriceEur: Double?,
     val acquisitionDateEpochDay: Long?, val accent: Long,
+    val externalProductId: Long? = null,
 )
+
+data class CatalogSearchResult(val productId: Long, val name: String, val expansionId: String, val trendPriceEur: Double?, val currency: String?)
 
 enum class CardLanguage(val label: String) {
     GERMAN("Deutsch"), ENGLISH("Englisch"), JAPANESE("Japanisch"), CHINESE("Chinesisch");
@@ -33,6 +36,8 @@ interface CollectionRepository {
     suspend fun addManualCard(input: ManualCardInput)
     suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate)
     suspend fun deleteEntry(entryId: Long)
+    suspend fun searchCatalog(query: String, limit: Int = 30): List<CatalogSearchResult>
+    suspend fun linkCatalogProduct(entryId: Long, productId: Long?)
 }
 
 data class CatalogSyncStatus(val state: String, val lastSuccessAtEpochMillis: Long?, val dataCreatedAt: String?, val catalogProductCount: Int, val priceRecordCount: Int, val errorMessage: String?)

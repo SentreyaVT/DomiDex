@@ -97,4 +97,17 @@
     <string name="sync_failure_retention">Letzte bekannte Preise bleiben offline erhalten. Fehler: %1$s</string>
     <string name="sync_value_policy">Portfoliowert: offizieller Cardmarket-Trendpreis in EUR. Nicht zugeordnete Karten bleiben ohne Marktpreis.</string>
     <string name="unknown">unbekannt</string>
+    <string name="catalog_link_action">Mit offiziellem Katalog verknüpfen</string>
+    <string name="catalog_change_action">Katalogzuordnung ändern</string>
+    <string name="catalog_unlinked_hint">Noch nicht zugeordnet – deshalb wird kein Marktpreis geraten.</string>
+    <string name="catalog_linked_hint">Mit Cardmarket-Produkt %1$d verknüpft. Der offizielle Trendpreis wird verwendet.</string>
+    <string name="catalog_link_title">Offizielles Produkt auswählen</string>
+    <string name="catalog_link_explanation">Suche für „%1$s“ (%2$s) nach dem passenden Cardmarket-Produkt. Prüfe Name, Set und Variante sorgfältig.</string>
+    <string name="catalog_search_label">Kartenname im offiziellen Katalog</string>
+    <string name="catalog_search_prompt">Mindestens zwei Zeichen eingeben.</string>
+    <string name="catalog_search_empty">Kein passendes Produkt gefunden. Probiere den englischen Kartennamen oder einen kürzeren Suchbegriff.</string>
+    <string name="catalog_expansion_id">Cardmarket-Erweiterung %1$s</string>
+    <string name="catalog_link_warning">Der öffentliche Download enthält nicht für jedes Produkt strukturierte Angaben zu Kartennummer, Sprache oder Finish. CardVault verknüpft deshalb nur deine ausdrückliche Auswahl.</string>
+    <string name="catalog_unlink_action">Zuordnung lösen</string>
+    <string name="catalog_linked_badge">✓ Offiziell zugeordnet</string>
 </resources>
