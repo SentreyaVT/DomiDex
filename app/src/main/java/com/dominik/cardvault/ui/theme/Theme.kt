@@ -12,17 +12,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80,
+    primary = VaultMintLight,
+    secondary = VaultSlateLight,
+    tertiary = VaultCoralLight,
     background = androidx.compose.ui.graphics.Color(0xFF0D1513),
     surface = androidx.compose.ui.graphics.Color(0xFF15201D),
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40,
+    primary = VaultMintDark,
+    secondary = VaultSlateDark,
+    tertiary = VaultCoralDark,
     background = androidx.compose.ui.graphics.Color(0xFFF5FAF7),
     surface = androidx.compose.ui.graphics.Color(0xFFFBFDFB),
 
