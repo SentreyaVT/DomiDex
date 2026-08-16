@@ -110,4 +110,14 @@
     <string name="catalog_link_warning">Der öffentliche Download enthält nicht für jedes Produkt strukturierte Angaben zu Kartennummer, Sprache oder Finish. CardVault verknüpft deshalb nur deine ausdrückliche Auswahl.</string>
     <string name="catalog_unlink_action">Zuordnung lösen</string>
     <string name="catalog_linked_badge">✓ Offiziell zugeordnet</string>
+    <string name="collection_add">Karte hinzufügen</string>
+    <string name="add_mode_title">Wie möchtest du hinzufügen?</string>
+    <string name="add_from_catalog">Im offiziellen Katalog suchen</string>
+    <string name="add_from_catalog_hint">Empfohlen: Produkt auswählen, Kartendetails bestätigen und sofort den offiziellen Trendpreis verwenden.</string>
+    <string name="add_without_catalog">Ohne Katalogzuordnung eingeben</string>
+    <string name="add_without_catalog_hint">Für noch nicht gefundene Karten. CardVault zeigt dann bewusst keinen Marktpreis.</string>
+    <string name="catalog_add_search_hint">Suche zuerst nach dem Kartennamen. Kartennummer, Sprache und Holo-Variante bestätigst du im nächsten Schritt.</string>
+    <string name="catalog_add_linked_boundary">Das offizielle Produkt ist vorausgewählt. Ergänze Kartennummer und Sprache und bestätige Holo beziehungsweise Reverse-Holo selbst; der öffentliche Download liefert diese Merkmale nicht immer eindeutig.</string>
+    <string name="add_outcome_created">✓ Karte wurde lokal gespeichert.</string>
+    <string name="add_outcome_incremented">✓ Vorhandener identischer Katalogtreffer: Anzahl wurde erhöht.</string>
 </resources>

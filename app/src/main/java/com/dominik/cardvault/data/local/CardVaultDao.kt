@@ -92,6 +92,11 @@ interface CardVaultDao {
     @Query("SELECT * FROM collection_entries WHERE cardId = :cardId AND `condition` = :condition LIMIT 1")
     suspend fun findMatchingEntry(cardId: String, condition: String): CollectionEntryEntity?
 
+    @Query("""SELECT e.* FROM collection_entries e JOIN catalog_cards c ON c.id = e.cardId
+        WHERE e.externalProductSource = :source AND e.externalProductId = :productId
+          AND e.`condition` = :condition AND c.finish = :finish AND c.variant = :variant LIMIT 1""")
+    suspend fun findLinkedEntry(source: String, productId: Long, condition: String, finish: String, variant: String): CollectionEntryEntity?
+
     @Query("UPDATE collection_entries SET quantity = quantity + :amount, updatedAtEpochMillis = :updatedAt WHERE id = :id")
     suspend fun incrementQuantity(id: Long, amount: Int, updatedAt: Long)
 

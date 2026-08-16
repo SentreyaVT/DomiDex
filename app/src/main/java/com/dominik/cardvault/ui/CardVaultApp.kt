@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -144,6 +145,10 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
 @Composable private fun CollectionScreen(cards: List<CollectionCard>, repository: CollectionRepository) {
     var query by rememberSaveable { mutableStateOf("") }
     var adding by remember { mutableStateOf(false) }
+    var choosingAddMode by remember { mutableStateOf(false) }
+    var choosingCatalogCard by remember { mutableStateOf(false) }
+    var catalogDraft by remember { mutableStateOf<CatalogSearchResult?>(null) }
+    var addOutcome by remember { mutableStateOf<AddCardOutcome?>(null) }
     var editing by remember { mutableStateOf<CollectionCard?>(null) }
     var deleting by remember { mutableStateOf<CollectionCard?>(null) }
     var linking by remember { mutableStateOf<CollectionCard?>(null) }
@@ -151,12 +156,15 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     val filtered = cards.filter { it.name.contains(query, true) || it.set.contains(query, true) }
     LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.card)) {
     item { val count = cards.sumOf { it.quantity }; ScreenHeader(stringResource(R.string.collection_eyebrow), stringResource(R.string.collection_title), pluralStringResource(R.plurals.collection_cards_count, count, count) + " · " + pluralStringResource(R.plurals.collection_entries_count, cards.size, cards.size)) }
-    item { Button(onClick = { adding = true }, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card) { Text(stringResource(R.string.manual_add), fontWeight = FontWeight.Bold) } }
+    item { Button(onClick = { choosingAddMode = true }, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card) { Text(stringResource(R.string.collection_add), fontWeight = FontWeight.Bold) } }
+    addOutcome?.let { outcome -> item { Text(stringResource(if (outcome == AddCardOutcome.QUANTITY_INCREMENTED) R.string.add_outcome_incremented else R.string.add_outcome_created), color = VaultPositive, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } }
     item { OutlinedTextField(query, { query = it }, label = { Text(stringResource(R.string.collection_search)) }, singleLine = true, shape = CardVaultShapes.field, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MewRose, cursorColor = MewRose, focusedLabelColor = MewRose, unfocusedContainerColor = VaultNightRaised, focusedContainerColor = VaultNightRaised), modifier = Modifier.fillMaxWidth()) }
     if (filtered.isEmpty()) item { Text(stringResource(R.string.collection_empty), modifier = Modifier.padding(vertical = 30.dp)) }
     items(filtered, key = { it.entryId }) { card -> CardRow(card) { editing = card } }; item { DataNote() }
     }
-    if (adding) ManualCardDialog(onDismiss = { adding = false }, onSave = { input -> scope.launch { repository.addManualCard(input) }; adding = false })
+    if (choosingAddMode) AddModeDialog(onDismiss = { choosingAddMode = false }, onCatalog = { choosingAddMode = false; choosingCatalogCard = true }, onManual = { choosingAddMode = false; catalogDraft = null; adding = true })
+    if (choosingCatalogCard) CatalogProductPicker(repository, onDismiss = { choosingCatalogCard = false }, onSelected = { catalogDraft = it; choosingCatalogCard = false; adding = true })
+    if (adding) ManualCardDialog(initialCatalog = catalogDraft, onDismiss = { adding = false; catalogDraft = null }, onSave = { input -> scope.launch { addOutcome = repository.addManualCard(input) }; adding = false; catalogDraft = null })
     editing?.let { card -> EditEntryDialog(card, onDismiss = { editing = null }, onDelete = { editing = null; deleting = card }, onLink = { editing = null; linking = card }, onSave = { update -> scope.launch { repository.updateEntry(card.entryId, update) }; editing = null }) }
     linking?.let { card -> CatalogLinkDialog(card, repository, onDismiss = { linking = null }, onLinked = { productId -> scope.launch { repository.linkCatalogProduct(card.entryId, productId) }; linking = null }) }
     deleting?.let { card -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text(stringResource(R.string.delete_entry_title)) }, text = { Text(stringResource(R.string.delete_entry_body, card.name)) }, confirmButton = { TextButton(onClick = { scope.launch { repository.deleteEntry(card.entryId) }; deleting = null }) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.action_cancel)) } }) }
@@ -168,22 +176,53 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     Column(horizontalAlignment = Alignment.End) { Text(if (card.priceUpdatedAtEpochMillis == null) stringResource(R.string.no_market_price) else euro(card.currentValueEur * card.quantity), fontWeight = FontWeight.Bold, fontSize = if (card.priceUpdatedAtEpochMillis == null) 11.sp else 14.sp); if (card.priceUpdatedAtEpochMillis != null) Text((if (card.changePercent >= 0) "+" else "") + "%.1f%%".format(Locale.US, card.changePercent), color = if (card.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error, fontSize = 12.sp) }
 } }
 
-@Composable private fun ManualCardDialog(onDismiss: () -> Unit, onSave: (ManualCardInput) -> Unit) {
-    var name by rememberSaveable { mutableStateOf("") }; var set by rememberSaveable { mutableStateOf("") }; var number by rememberSaveable { mutableStateOf("") }
+@Composable private fun AddModeDialog(onDismiss: () -> Unit, onCatalog: () -> Unit, onManual: () -> Unit) = AlertDialog(
+    onDismissRequest = onDismiss, title = { Text(stringResource(R.string.add_mode_title)) },
+    text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Button(onClick = onCatalog, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card) { Text(stringResource(R.string.add_from_catalog), fontWeight = FontWeight.Bold) }
+        Text(stringResource(R.string.add_from_catalog_hint), color = VaultTextMuted, fontSize = 12.sp)
+        OutlinedButton(onClick = onManual, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card) { Text(stringResource(R.string.add_without_catalog)) }
+        Text(stringResource(R.string.add_without_catalog_hint), color = VaultTextMuted, fontSize = 12.sp)
+    } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } }
+)
+
+@Composable private fun CatalogProductPicker(repository: CollectionRepository, onDismiss: () -> Unit, onSelected: (CatalogSearchResult) -> Unit) {
+    var query by rememberSaveable { mutableStateOf("") }; var results by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }; var loading by remember { mutableStateOf(false) }
+    LaunchedEffect(query) { if (query.trim().length < 2) { results = emptyList(); loading = false; return@LaunchedEffect }; loading = true; delay(250); results = repository.searchCatalog(query); loading = false }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(R.string.add_from_catalog)) }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(stringResource(R.string.catalog_add_search_hint), color = VaultTextMuted, fontSize = 12.sp)
+        OutlinedTextField(query, { query = it }, label = { Text(stringResource(R.string.catalog_search_label)) }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field)
+        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!loading && results.isEmpty()) item { Text(stringResource(if (query.length < 2) R.string.catalog_search_prompt else R.string.catalog_search_empty), color = VaultTextMuted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 18.dp)) }
+            items(results, key = { it.productId }) { result -> CatalogResultRow(result) { onSelected(result) } }
+        }
+    } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
+}
+
+@Composable private fun CatalogResultRow(result: CatalogSearchResult, onClick: () -> Unit) = OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), shape = CardVaultShapes.card) {
+    Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.weight(1f)) { Text(result.name, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.catalog_expansion_id, result.expansionId), color = VaultTextMuted, fontSize = 11.sp) }
+        Text(result.trendPriceEur?.let(::euro) ?: stringResource(R.string.no_market_price), color = if (result.trendPriceEur == null) VaultTextMuted else MewIce, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+    }
+}
+
+@Composable private fun ManualCardDialog(initialCatalog: CatalogSearchResult? = null, onDismiss: () -> Unit, onSave: (ManualCardInput) -> Unit) {
+    var name by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.name ?: "") }; var set by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.let { "Cardmarket-Erweiterung ${it.expansionId}" } ?: "") }; var number by rememberSaveable(initialCatalog?.productId) { mutableStateOf("") }
     var language by rememberSaveable { mutableStateOf(CardLanguage.GERMAN) }; var finish by rememberSaveable { mutableStateOf("Normal") }; var variant by rememberSaveable { mutableStateOf("Standard") }
     var quantity by rememberSaveable { mutableStateOf("1") }; var condition by rememberSaveable { mutableStateOf("Nahezu neuwertig") }; var notes by rememberSaveable { mutableStateOf("") }
     var price by rememberSaveable { mutableStateOf("") }; var date by rememberSaveable { mutableStateOf("") }
     val valid = name.isNotBlank() && set.isNotBlank() && number.isNotBlank() && condition.isNotBlank() && (quantity.toIntOrNull() ?: 0) > 0 && parseDate(date) != Long.MIN_VALUE && parsePrice(price) != Double.NEGATIVE_INFINITY
     AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(R.string.manual_add_title)) }, text = {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item { Text(stringResource(R.string.manual_add_boundary), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
+            item { Text(stringResource(if (initialCatalog == null) R.string.manual_add_boundary else R.string.catalog_add_linked_boundary), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
             item { FormField(name, { name = it }, R.string.field_card_name) }; item { FormField(set, { set = it }, R.string.field_set_name) }; item { FormField(number, { number = it }, R.string.field_collector_number) }
             item { Text(stringResource(R.string.field_language), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { CardLanguage.entries.forEach { item -> FilterChip(selected = language == item, onClick = { language = item }, label = { Text(item.label.take(2), fontSize = 11.sp) }) } } }
-            item { FormField(finish, { finish = it }, R.string.field_finish) }; item { FormField(variant, { variant = it }, R.string.field_variant) }
+            item { Text(stringResource(R.string.field_finish), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { items(listOf("Normal", "Holo", "Reverse-Holo", "Sondervariante")) { option -> FilterChip(selected = finish == option, onClick = { finish = option }, label = { Text(option, fontSize = 11.sp) }) } } }; item { FormField(variant, { variant = it }, R.string.field_variant) }
             item { FormField(quantity, { quantity = it.filter(Char::isDigit) }, R.string.field_quantity, KeyboardType.Number) }; item { FormField(condition, { condition = it }, R.string.field_condition) }
             item { FormField(price, { price = it }, R.string.field_acquisition_price, KeyboardType.Decimal) }; item { FormField(date, { date = it }, R.string.field_acquisition_date) }; item { FormField(notes, { notes = it }, R.string.field_notes, singleLine = false) }
         }
-    }, confirmButton = { TextButton(enabled = valid, onClick = { onSave(ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE })) }) { Text(stringResource(R.string.action_save)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
+    }, confirmButton = { TextButton(enabled = valid, onClick = { onSave(ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, initialCatalog?.productId)) }) { Text(stringResource(R.string.action_save)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
 }
 
 @Composable private fun EditEntryDialog(card: CollectionCard, onDismiss: () -> Unit, onDelete: () -> Unit, onLink: () -> Unit, onSave: (CollectionEntryUpdate) -> Unit) {
@@ -215,14 +254,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 340.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!loading && results.isEmpty()) item { Text(stringResource(if (query.length < 2) R.string.catalog_search_prompt else R.string.catalog_search_empty), color = VaultTextMuted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 18.dp)) }
-                items(results, key = { it.productId }) { result ->
-                    OutlinedCard(onClick = { onLinked(result.productId) }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), shape = CardVaultShapes.card) {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Column(Modifier.weight(1f)) { Text(result.name, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.catalog_expansion_id, result.expansionId), color = VaultTextMuted, fontSize = 11.sp) }
-                            Text(result.trendPriceEur?.let(::euro) ?: stringResource(R.string.no_market_price), color = if (result.trendPriceEur == null) VaultTextMuted else MewIce, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-                    }
-                }
+                items(results, key = { it.productId }) { result -> CatalogResultRow(result) { onLinked(result.productId) } }
             }
             Text(stringResource(R.string.catalog_link_warning), color = VaultTextMuted, fontSize = 11.sp)
         } },

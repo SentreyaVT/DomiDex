@@ -47,12 +47,22 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
         dao.putMetadata(AppMetadataEntity(SEED_KEY, "1"))
     }
 
-    override suspend fun addManualCard(input: ManualCardInput) = database.withTransaction {
+    override suspend fun addManualCard(input: ManualCardInput): AddCardOutcome = database.withTransaction {
         val now = System.currentTimeMillis()
+        val normalizedCondition = input.condition.trim()
+        val normalizedFinish = input.finish.trim().ifBlank { "Normal" }
+        val normalizedVariant = input.variant.trim().ifBlank { "Standard" }
+        if (input.externalProductId != null) {
+            val existing = dao.findLinkedEntry(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, input.externalProductId, normalizedCondition, normalizedFinish, normalizedVariant)
+            if (existing != null) {
+                dao.incrementQuantity(existing.id, input.quantity.coerceAtLeast(1), now)
+                return@withTransaction AddCardOutcome.QUANTITY_INCREMENTED
+            }
+        }
         val cardId = "manual-${UUID.randomUUID()}"
-        dao.insertCatalogCard(CatalogCardEntity(cardId, "POKEMON", "manual", input.setName.trim(), input.name.trim(), input.collectorNumber.trim(), input.language.name, input.finish.trim(), input.variant.trim(), now))
-        dao.insertCollectionEntry(CollectionEntryEntity(cardId = cardId, quantity = input.quantity.coerceAtLeast(1), condition = input.condition.trim(), acquisitionPriceMinor = input.acquisitionPriceEur?.times(100)?.roundToLong(), acquisitionCurrency = input.acquisitionPriceEur?.let { "EUR" }, acquisitionDateEpochDay = input.acquisitionDateEpochDay, notes = input.notes.trim(), frontPhotoUri = null, backPhotoUri = null, createdAtEpochMillis = now, updatedAtEpochMillis = now))
-        Unit
+        dao.insertCatalogCard(CatalogCardEntity(cardId, "POKEMON", "manual", input.setName.trim(), input.name.trim(), input.collectorNumber.trim(), input.language.name, normalizedFinish, normalizedVariant, now))
+        dao.insertCollectionEntry(CollectionEntryEntity(cardId = cardId, quantity = input.quantity.coerceAtLeast(1), condition = normalizedCondition, acquisitionPriceMinor = input.acquisitionPriceEur?.times(100)?.roundToLong(), acquisitionCurrency = input.acquisitionPriceEur?.let { "EUR" }, acquisitionDateEpochDay = input.acquisitionDateEpochDay, notes = input.notes.trim(), frontPhotoUri = null, backPhotoUri = null, createdAtEpochMillis = now, updatedAtEpochMillis = now, externalProductSource = input.externalProductId?.let { com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }, externalProductId = input.externalProductId))
+        AddCardOutcome.CREATED
     }
 
     override suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate) = dao.updateEntry(entryId, update.quantity.coerceAtLeast(1), update.condition.trim(), update.notes.trim(), update.acquisitionPriceEur?.times(100)?.roundToLong(), update.acquisitionPriceEur?.let { "EUR" }, update.acquisitionDateEpochDay)

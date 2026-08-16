@@ -26,14 +26,15 @@ data class PortfolioSummary(val cards: List<CollectionCard>, val history: List<P
     companion object { val Empty = PortfolioSummary(emptyList(), emptyList()) }
 }
 
-data class ManualCardInput(val name: String, val setName: String, val collectorNumber: String, val language: CardLanguage, val finish: String, val variant: String, val quantity: Int, val condition: String, val notes: String, val acquisitionPriceEur: Double?, val acquisitionDateEpochDay: Long?)
+data class ManualCardInput(val name: String, val setName: String, val collectorNumber: String, val language: CardLanguage, val finish: String, val variant: String, val quantity: Int, val condition: String, val notes: String, val acquisitionPriceEur: Double?, val acquisitionDateEpochDay: Long?, val externalProductId: Long? = null)
 data class CollectionEntryUpdate(val quantity: Int, val condition: String, val notes: String, val acquisitionPriceEur: Double?, val acquisitionDateEpochDay: Long?)
+enum class AddCardOutcome { CREATED, QUANTITY_INCREMENTED }
 
 interface CollectionRepository {
     val portfolio: Flow<PortfolioSummary>
     val catalogSyncStatus: Flow<CatalogSyncStatus>
     suspend fun seedIfNeeded()
-    suspend fun addManualCard(input: ManualCardInput)
+    suspend fun addManualCard(input: ManualCardInput): AddCardOutcome
     suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate)
     suspend fun deleteEntry(entryId: Long)
     suspend fun searchCatalog(query: String, limit: Int = 30): List<CatalogSearchResult>

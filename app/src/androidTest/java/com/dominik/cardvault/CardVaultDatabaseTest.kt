@@ -59,6 +59,8 @@ class CardVaultDatabaseTest {
         assertEquals("25/165", linked.collectorNumber)
         assertEquals(345L, linked.marketValueMinor)
         assertEquals(42L, linked.externalProductId)
+        assertEquals(entryId, dao.findLinkedEntry("CARDMARKET_PUBLIC_DOWNLOAD", 42, "Sehr gut", "Holo", "Standard")?.id)
+        assertEquals(null, dao.findLinkedEntry("CARDMARKET_PUBLIC_DOWNLOAD", 42, "Sehr gut", "Reverse-Holo", "Standard"))
     }
 
     @Test fun migrationOneToTwoPreservesCollectionAndRemovesOnlyDemoPrices() {
