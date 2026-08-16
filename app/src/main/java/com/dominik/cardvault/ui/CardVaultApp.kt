@@ -51,9 +51,10 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     COLLECTION(R.string.nav_collection, "▤"), GRADING(R.string.nav_grading, "◇")
 }
 
-@Composable fun CardVaultApp(repository: CollectionRepository) {
+@Composable fun CardVaultApp(repository: CollectionRepository, refreshCatalog: () -> Unit = {}) {
     var destination by rememberSaveable { mutableStateOf(Destination.DASHBOARD) }
     val portfolio by repository.portfolio.collectAsState(initial = PortfolioSummary.Empty)
+    val syncStatus by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
     Scaffold(containerColor = Color.Transparent, bottomBar = {
         NavigationBar(containerColor = VaultNightRaised, tonalElevation = 0.dp) { Destination.entries.forEach { item -> NavigationBarItem(
             selected = destination == item,
@@ -64,7 +65,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
         ) } }
     }) { padding -> Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(VaultNight, Color(0xFF121024), VaultNight))).padding(padding)) {
         when (destination) {
-            Destination.DASHBOARD -> DashboardScreen(portfolio) { destination = Destination.SCANNER }
+            Destination.DASHBOARD -> DashboardScreen(portfolio, syncStatus, refreshCatalog) { destination = Destination.SCANNER }
             Destination.SCANNER -> ScannerScreen()
             Destination.COLLECTION -> CollectionScreen(portfolio.cards, repository)
             Destination.GRADING -> GradingScreen()
@@ -78,14 +79,30 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-@Composable private fun DashboardScreen(portfolio: PortfolioSummary, openScanner: () -> Unit) = LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
+@Composable private fun DashboardScreen(portfolio: PortfolioSummary, syncStatus: CatalogSyncStatus, refreshCatalog: () -> Unit, openScanner: () -> Unit) = LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
     item { ScreenHeader(stringResource(R.string.dashboard_eyebrow), stringResource(R.string.dashboard_title), stringResource(R.string.dashboard_subtitle)) }
     item { PortfolioHero(portfolio) }
+    item { CatalogSyncCard(syncStatus, refreshCatalog) }
     item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { StatCard(stringResource(R.string.stat_cards), portfolio.totalCards.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_unique), portfolio.cards.size.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_languages), portfolio.cards.map { it.language }.distinct().size.toString(), Modifier.weight(1f)) } }
     item { ElevatedCard(shape = CardVaultShapes.card, colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) { Column(Modifier.padding(16.dp)) { Text(stringResource(R.string.portfolio_history), color = VaultTextMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); ValueHistoryChart(portfolio.history, Modifier.fillMaxWidth().height(92.dp)) } } }
     item { Button(openScanner, Modifier.fillMaxWidth().height(CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card) { Text(stringResource(R.string.scan_card), fontWeight = FontWeight.Bold) } }
     item { Text(stringResource(R.string.recent_cards), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
     items(portfolio.cards.take(3)) { CardRow(it) }; item { DataNote() }
+}
+
+@Composable private fun CatalogSyncCard(status: CatalogSyncStatus, refresh: () -> Unit) {
+    val stale = status.lastSuccessAtEpochMillis?.let { System.currentTimeMillis() - it >= 24 * 60 * 60 * 1000L } == true
+    val label = stringResource(when { status.state == "RUNNING" -> R.string.sync_running; status.state == "ERROR" -> R.string.sync_error; stale -> R.string.sync_stale; status.state == "SUCCESS" -> R.string.sync_current; else -> R.string.sync_never })
+    val last = status.lastSuccessAtEpochMillis?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, Locale.GERMANY).format(java.util.Date(it)) }
+    OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised), shape = CardVaultShapes.card) {
+        Column(Modifier.padding(CardVaultSpacing.card), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(stringResource(R.string.sync_title), fontWeight = FontWeight.Bold); Text(label, color = if (status.state == "ERROR") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }; TextButton(onClick = refresh, enabled = status.state != "RUNNING") { Text(stringResource(R.string.sync_refresh)) } }
+            if (last != null) Text(stringResource(R.string.sync_last_success, last, status.dataCreatedAt ?: stringResource(R.string.unknown)), color = VaultTextMuted, fontSize = 11.sp)
+            if (status.catalogProductCount > 0) Text(stringResource(R.string.sync_counts, status.catalogProductCount, status.priceRecordCount), color = VaultTextMuted, fontSize = 11.sp)
+            status.errorMessage?.let { Text(stringResource(R.string.sync_failure_retention, it), color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+            Text(stringResource(R.string.sync_value_policy), color = VaultTextMuted, fontSize = 11.sp)
+        }
+    }
 }
 
 @Composable private fun PortfolioHero(portfolio: PortfolioSummary) {

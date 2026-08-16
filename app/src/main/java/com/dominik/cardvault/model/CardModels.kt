@@ -28,11 +28,14 @@ data class CollectionEntryUpdate(val quantity: Int, val condition: String, val n
 
 interface CollectionRepository {
     val portfolio: Flow<PortfolioSummary>
+    val catalogSyncStatus: Flow<CatalogSyncStatus>
     suspend fun seedIfNeeded()
     suspend fun addManualCard(input: ManualCardInput)
     suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate)
     suspend fun deleteEntry(entryId: Long)
 }
+
+data class CatalogSyncStatus(val state: String, val lastSuccessAtEpochMillis: Long?, val dataCreatedAt: String?, val catalogProductCount: Int, val priceRecordCount: Int, val errorMessage: String?)
 
 enum class GradingArea { CENTERING, CORNERS, EDGES, SURFACE }
 data class GradingFinding(val area: GradingArea, val summary: String, val confidence: Float)

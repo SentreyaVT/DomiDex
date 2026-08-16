@@ -5,7 +5,7 @@ import com.dominik.cardvault.data.local.*
 import com.dominik.cardvault.model.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import java.time.LocalDate
+import kotlinx.coroutines.flow.map
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.UUID
@@ -13,6 +13,10 @@ import kotlin.math.roundToLong
 
 class RoomCollectionRepository(private val database: CardVaultDatabase) : CollectionRepository {
     private val dao = database.cardVaultDao()
+    override val catalogSyncStatus: Flow<CatalogSyncStatus> = dao.observeSyncState(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE).map { state ->
+        state?.let { CatalogSyncStatus(it.status, it.lastSuccessAtEpochMillis, it.dataCreatedAt, it.catalogProductCount, it.priceRecordCount, it.errorMessage) }
+            ?: CatalogSyncStatus("IDLE", null, null, 0, 0, null)
+    }
 
     override val portfolio: Flow<PortfolioSummary> = combine(dao.observeCollection(), dao.observeRawPriceHistory()) { rows, prices ->
         val cards = rows.map { row ->
@@ -32,20 +36,13 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
         if (dao.metadata(SEED_KEY) != null) return@withTransaction
         val now = System.currentTimeMillis()
         val definitions = listOf(
-            SeedCard("sv3-198", "Charizard ex", "sv3", "Obsidian Flames", "198/197", CardLanguage.ENGLISH, 1, "Nahezu neuwertig", 3840),
-            SeedCard("sv2a-025", "Pikachu", "sv2a", "Pokémon Card 151", "025/165", CardLanguage.JAPANESE, 2, "Nahezu neuwertig", 785),
-            SeedCard("base-004", "Glurak", "base", "Basis", "4/102", CardLanguage.GERMAN, 1, "Sehr gut", 18200),
-            SeedCard("s12a-205", "Mew", "s12a", "VSTAR Universe", "205/172", CardLanguage.JAPANESE, 1, "Nahezu neuwertig", 3160),
+            SeedCard("sv3-198", "Charizard ex", "sv3", "Obsidian Flames", "198/197", CardLanguage.ENGLISH, 1, "Nahezu neuwertig"),
+            SeedCard("sv2a-025", "Pikachu", "sv2a", "Pokémon Card 151", "025/165", CardLanguage.JAPANESE, 2, "Nahezu neuwertig"),
+            SeedCard("base-004", "Glurak", "base", "Basis", "4/102", CardLanguage.GERMAN, 1, "Sehr gut"),
+            SeedCard("s12a-205", "Mew", "s12a", "VSTAR Universe", "205/172", CardLanguage.JAPANESE, 1, "Nahezu neuwertig"),
         )
         dao.insertCatalogCards(definitions.map { it.catalog(now) })
         dao.insertCollectionEntries(definitions.map { it.entry(now) })
-        val totals = listOf(23200L, 24100L, 23850L, 25100L, 25920L, 26770L)
-        val dates = (5 downTo 0).map { LocalDate.now().minusMonths(it.toLong()).withDayOfMonth(1).atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli() }
-        val currentTotal = definitions.sumOf { it.priceMinor * it.quantity }
-        dao.insertRawPrices(dates.flatMapIndexed { index, date -> definitions.map { card ->
-            val value = (card.priceMinor * (totals[index].toDouble() / currentTotal)).roundToLong()
-            RawPriceSnapshotEntity(cardId = card.id, source = "DEMO_LOCAL", currency = "EUR", lowValueMinor = null, averageValueMinor = null, trendValueMinor = value, marketValueMinor = value, fetchedAtEpochMillis = date, effectiveAtEpochMillis = date)
-        } })
         dao.putMetadata(AppMetadataEntity(SEED_KEY, "1"))
     }
 
@@ -71,7 +68,7 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
         name.contains("Mew", true) -> 0xFFCE77B7; else -> 0xFF6C78A8
     }
 
-    private data class SeedCard(val id: String, val name: String, val setId: String, val setName: String, val number: String, val language: CardLanguage, val quantity: Int, val condition: String, val priceMinor: Long) {
+    private data class SeedCard(val id: String, val name: String, val setId: String, val setName: String, val number: String, val language: CardLanguage, val quantity: Int, val condition: String) {
         fun catalog(now: Long) = CatalogCardEntity(id, "POKEMON", setId, setName, name, number, language.name, "Normal", "Standard", now)
         fun entry(now: Long) = CollectionEntryEntity(cardId = id, quantity = quantity, condition = condition, acquisitionPriceMinor = null, acquisitionCurrency = null, acquisitionDateEpochDay = null, notes = "", frontPhotoUri = null, backPhotoUri = null, createdAtEpochMillis = now, updatedAtEpochMillis = now)
     }

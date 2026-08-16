@@ -5,7 +5,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "catalog_cards", indices = [Index(value = ["tcg", "setId", "collectorNumber", "language", "finish", "variant"], unique = true)])
+@Entity(tableName = "catalog_cards", indices = [Index(value = ["tcg", "setId", "collectorNumber", "language", "finish", "variant"]), Index(value = ["externalSource", "externalProductId"], unique = true)])
 data class CatalogCardEntity(
     @PrimaryKey val id: String,
     val tcg: String,
@@ -17,6 +17,8 @@ data class CatalogCardEntity(
     val finish: String,
     val variant: String,
     val createdAtEpochMillis: Long,
+    val externalSource: String? = null,
+    val externalProductId: Long? = null,
 )
 
 @Entity(
@@ -53,6 +55,12 @@ data class RawPriceSnapshotEntity(
     val averageValueMinor: Long?,
     val trendValueMinor: Long?,
     val marketValueMinor: Long?,
+    val average1DayValueMinor: Long? = null,
+    val average7DayValueMinor: Long? = null,
+    val average30DayValueMinor: Long? = null,
+    val holoAverageValueMinor: Long? = null,
+    val holoLowValueMinor: Long? = null,
+    val holoTrendValueMinor: Long? = null,
     val fetchedAtEpochMillis: Long,
     val effectiveAtEpochMillis: Long,
 )
@@ -110,6 +118,18 @@ data class GradingAnalysisEntity(
 
 @Entity(tableName = "app_metadata")
 data class AppMetadataEntity(@PrimaryKey val key: String, val value: String)
+
+@Entity(tableName = "catalog_sync_state")
+data class CatalogSyncStateEntity(
+    @PrimaryKey val source: String,
+    val status: String,
+    val lastAttemptAtEpochMillis: Long?,
+    val lastSuccessAtEpochMillis: Long?,
+    val dataCreatedAt: String?,
+    val catalogProductCount: Int,
+    val priceRecordCount: Int,
+    val errorMessage: String?,
+)
 
 data class CollectionProjection(
     val entryId: Long,

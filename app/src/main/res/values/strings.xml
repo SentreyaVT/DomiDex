@@ -84,5 +84,17 @@
     <string name="submission_check_outcome">Empfehlung: einsenden, Grenzfall oder unbewertet behalten – mit Konfidenz und nachvollziehbarer Begründung</string>
     <string name="analysis_later">Analyse folgt in einer späteren Ausbaustufe</string>
     <string name="grading_boundary">Die spätere Analyse nutzt geführte Aufnahmen von Vorderseite, Rückseite und schrägen Blickwinkeln und erläutert Befunde zu Zentrierung, Ecken, Kanten und Oberfläche. Die Checkliste funktioniert bereits; Fotoanalyse und PSA-Notenspanne noch nicht.</string>
-    <string name="demo_data_note">Die Beispielwerte werden lokal gespeichert und sind keine Live-Preise. Ein späterer Import verwendet erlaubte tägliche Cardmarket-Produktkataloge und Preisdateien – keine ausgelesenen Live-Angebote.</string>
+    <string name="demo_data_note">Die Beispielkarten werden lokal gespeichert und sind nicht automatisch Cardmarket-Produkten zugeordnet. Ohne eindeutige Zuordnung zeigt CardVault keinen Marktpreis und rät nicht.</string>
+    <string name="sync_title">Cardmarket-Daten</string>
+    <string name="sync_running">Aktualisierung läuft …</string>
+    <string name="sync_error">Aktualisierung fehlgeschlagen</string>
+    <string name="sync_stale">Daten veraltet – Aktualisierung eingeplant</string>
+    <string name="sync_current">Katalog und Preise aktuell</string>
+    <string name="sync_never">Noch nicht aktualisiert</string>
+    <string name="sync_refresh">Aktualisieren</string>
+    <string name="sync_last_success">Letzter Erfolg: %1$s · Datenstand: %2$s</string>
+    <string name="sync_counts">%1$d Produkte · %2$d Preisdatensätze</string>
+    <string name="sync_failure_retention">Letzte bekannte Preise bleiben offline erhalten. Fehler: %1$s</string>
+    <string name="sync_value_policy">Portfoliowert: offizieller Cardmarket-Trendpreis in EUR. Nicht zugeordnete Karten bleiben ohne Marktpreis.</string>
+    <string name="unknown">unbekannt</string>
 </resources>

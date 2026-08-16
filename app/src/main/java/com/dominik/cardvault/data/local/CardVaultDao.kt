@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -30,8 +31,23 @@ interface CardVaultDao {
     @Query("SELECT * FROM raw_price_snapshots ORDER BY effectiveAtEpochMillis")
     fun observeRawPriceHistory(): Flow<List<RawPriceSnapshotEntity>>
 
+    @Query("SELECT * FROM catalog_sync_state WHERE source = :source")
+    fun observeSyncState(source: String): Flow<CatalogSyncStateEntity?>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertCatalogCards(cards: List<CatalogCardEntity>)
+
+    @Upsert
+    suspend fun upsertCatalogCards(cards: List<CatalogCardEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertRawPricesIgnoringDuplicates(prices: List<RawPriceSnapshotEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putSyncState(state: CatalogSyncStateEntity)
+
+    @Query("SELECT * FROM catalog_sync_state WHERE source = :source")
+    suspend fun syncState(source: String): CatalogSyncStateEntity?
 
     @Insert
     suspend fun insertCollectionEntries(entries: List<CollectionEntryEntity>): List<Long>

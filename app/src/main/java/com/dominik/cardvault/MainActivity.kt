@@ -7,6 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
 import com.dominik.cardvault.data.RoomCollectionRepository
 import com.dominik.cardvault.data.local.CardVaultDatabase
+import com.dominik.cardvault.data.sync.CardmarketSyncScheduler
 import com.dominik.cardvault.ui.CardVaultApp
 import com.dominik.cardvault.ui.theme.CardVaultTheme
 import kotlinx.coroutines.launch
@@ -16,10 +17,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val repository = RoomCollectionRepository(CardVaultDatabase.get(applicationContext))
+        val syncScheduler = CardmarketSyncScheduler(applicationContext)
         lifecycleScope.launch { repository.seedIfNeeded() }
+        syncScheduler.schedule()
         setContent {
             CardVaultTheme {
-                CardVaultApp(repository)
+                CardVaultApp(repository, syncScheduler::refresh)
             }
         }
     }
