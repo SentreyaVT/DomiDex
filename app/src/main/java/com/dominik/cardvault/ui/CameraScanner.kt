@@ -46,17 +46,20 @@ private data class FrameQuality(val level: QualityLevel, val guidance: QualityGu
 internal enum class QualityLevel { RED, YELLOW, GREEN }
 internal enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS, FIND_CARD, MOVE_CLOSER, MOVE_AWAY, ALIGN_PARALLEL, READY }
 
-@Composable fun LiveCameraScanner(modifier: Modifier = Modifier) {
+@Composable fun LiveCameraScanner(modifier: Modifier = Modifier, onCaptureSaved: (File) -> Unit = {}) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val haptics = LocalHapticFeedback.current
     val confirmationSound = remember { MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) } }
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
+    val captureTimeoutHandler = remember { Handler(Looper.getMainLooper()) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     var quality by remember { mutableStateOf(FrameQuality(QualityLevel.RED, QualityGuidance.HOLD_STILL, 0f, 0f, 0f, 0f, 0f)) }
     var captureMessage by remember { mutableStateOf<Int?>(null) }
     var autoCaptureEnabled by rememberSaveable { mutableStateOf(true) }
+    var detailsExpanded by rememberSaveable { mutableStateOf(false) }
     var captureInProgress by remember { mutableStateOf(false) }
+    var activeCaptureId by remember { mutableLongStateOf(0L) }
     var latestCapture by remember { mutableStateOf<File?>(null) }
     val autoCaptureGate = remember { AutoCaptureGate() }
     val controller = remember {
@@ -70,65 +73,93 @@ internal enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS,
         controller.bindToLifecycle(lifecycleOwner)
         onDispose { controller.clearImageAnalysisAnalyzer(); controller.unbind(); analysisExecutor.shutdown() }
     }
-    DisposableEffect(confirmationSound) { onDispose { confirmationSound.release() } }
+    DisposableEffect(confirmationSound) { onDispose { confirmationSound.release(); captureTimeoutHandler.removeCallbacksAndMessages(null) } }
     fun capture(auto: Boolean) {
         if (captureInProgress) return
         captureInProgress = true; captureMessage = null; autoCaptureGate.disarm()
+        val captureId = System.nanoTime()
+        activeCaptureId = captureId
         val file = File(context.cacheDir, "cardvault-test-capture-${System.currentTimeMillis()}.jpg")
+        captureTimeoutHandler.postDelayed({
+            if (activeCaptureId == captureId && captureInProgress) {
+                activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; file.delete()
+            }
+        }, 12_000L)
         controller.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), mainExecutor, object : ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                if (activeCaptureId != captureId) { file.delete(); return }
+                activeCaptureId = 0L
                 latestCapture = file; captureInProgress = false
                 captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 confirmationSound.play(MediaActionSound.SHUTTER_CLICK)
+                onCaptureSaved(file)
             }
-            override fun onError(exception: ImageCaptureException) { captureInProgress = false; captureMessage = R.string.capture_failed }
+            override fun onError(exception: ImageCaptureException) {
+                if (activeCaptureId != captureId) return
+                activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; file.delete()
+            }
         })
     }
     LaunchedEffect(quality, autoCaptureEnabled, captureInProgress) {
         if (autoCaptureEnabled && !captureInProgress && autoCaptureGate.onFrame(quality.level, quality.guidance)) capture(true)
     }
-    Box(modifier.background(VaultNight, CardVaultShapes.feature).border(1.dp, VaultOutline, CardVaultShapes.feature)) {
-        AndroidView(factory = { PreviewView(it).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; this.controller = controller } }, modifier = Modifier.fillMaxSize())
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .08f)))
-        captureMessage?.let { message ->
-            Surface(
-                modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
-                color = if (message == R.string.capture_failed) MaterialTheme.colorScheme.errorContainer else VaultPositive.copy(alpha = .96f),
-                contentColor = if (message == R.string.capture_failed) MaterialTheme.colorScheme.onErrorContainer else VaultNight,
-                shape = CardVaultShapes.card,
-                shadowElevation = 8.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+    Column(modifier.background(VaultNight, CardVaultShapes.feature).border(1.dp, VaultOutline, CardVaultShapes.feature)) {
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            AndroidView(factory = { PreviewView(it).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; this.controller = controller } }, modifier = Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .08f)))
+            captureMessage?.let { message ->
+                Surface(
+                    modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
+                    color = if (message == R.string.capture_failed) MaterialTheme.colorScheme.errorContainer else VaultPositive.copy(alpha = .96f),
+                    contentColor = if (message == R.string.capture_failed) MaterialTheme.colorScheme.onErrorContainer else VaultNight,
+                    shape = CardVaultShapes.card,
+                    shadowElevation = 8.dp
                 ) {
-                    Text(stringResource(message), modifier = Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    if (latestCapture != null) TextButton(onClick = { latestCapture?.delete(); latestCapture = null; captureMessage = R.string.capture_undone }) { Text(stringResource(R.string.action_undo)) }
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(stringResource(message), modifier = Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        if (latestCapture != null) TextButton(onClick = { latestCapture?.delete(); latestCapture = null; captureMessage = R.string.capture_undone }) { Text(stringResource(R.string.action_undo)) }
+                    }
+                }
+            }
+            Box(
+                Modifier.align(Alignment.Center).fillMaxWidth(.82f).aspectRatio(63f / 88f)
+                    .border(3.dp, quality.level.color, RoundedCornerShape(18.dp))
+            )
+            Surface(
+                modifier = Modifier.align(Alignment.BottomCenter).padding(10.dp),
+                color = VaultNight.copy(alpha = .86f),
+                shape = RoundedCornerShape(50)
+            ) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.size(9.dp).background(quality.level.color, RoundedCornerShape(50)))
+                    Text(stringResource(quality.guidance.stringResource), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
-        Box(
-            Modifier.align(Alignment.Center).fillMaxWidth(.82f).aspectRatio(63f / 88f)
-                .border(3.dp, quality.level.color, RoundedCornerShape(18.dp))
-        )
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(VaultNight.copy(alpha = .88f)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxWidth().background(VaultNight).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.size(10.dp).background(quality.level.color, RoundedCornerShape(50)))
                 Text(stringResource(when (quality.level) { QualityLevel.RED -> R.string.capture_quality_red; QualityLevel.YELLOW -> R.string.capture_quality_yellow; QualityLevel.GREEN -> R.string.capture_quality_green }), color = Color.White, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
-                Text(stringResource(if (quality.level == QualityLevel.GREEN) R.string.capture_quality_ready else R.string.capture_quality_not_ready), color = VaultTextMuted, fontSize = 11.sp)
+                TextButton(onClick = { detailsExpanded = !detailsExpanded }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text(stringResource(if (detailsExpanded) R.string.capture_hide_details else R.string.capture_show_details), fontSize = 11.sp)
+                }
             }
-            Text(stringResource(quality.guidance.stringResource), color = Color.White, fontSize = 13.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QualityMetric(stringResource(R.string.capture_metric_light), quality.exposure, Modifier.weight(1f))
-                QualityMetric(stringResource(R.string.capture_metric_focus), quality.sharpness, Modifier.weight(1f))
-                QualityMetric(stringResource(R.string.capture_metric_stability), quality.stability, Modifier.weight(1f))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QualityMetric(stringResource(R.string.capture_metric_coverage), quality.coverage, Modifier.weight(1f))
-                QualityMetric(stringResource(R.string.capture_metric_perspective), quality.perspective, Modifier.weight(1f))
+            if (detailsExpanded) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    QualityMetric(stringResource(R.string.capture_metric_light), quality.exposure, Modifier.weight(1f))
+                    QualityMetric(stringResource(R.string.capture_metric_focus), quality.sharpness, Modifier.weight(1f))
+                    QualityMetric(stringResource(R.string.capture_metric_stability), quality.stability, Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    QualityMetric(stringResource(R.string.capture_metric_coverage), quality.coverage, Modifier.weight(1f))
+                    QualityMetric(stringResource(R.string.capture_metric_perspective), quality.perspective, Modifier.weight(1f))
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(stringResource(R.string.auto_capture_title), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold); Text(stringResource(R.string.auto_capture_hint), color = VaultTextMuted, fontSize = 10.sp) }; Switch(checked = autoCaptureEnabled, onCheckedChange = { autoCaptureEnabled = it }) }
             Button(onClick = { capture(false) }, enabled = !captureInProgress, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card) { Text(stringResource(if (captureInProgress) R.string.capture_in_progress else R.string.capture_test_photo)) }

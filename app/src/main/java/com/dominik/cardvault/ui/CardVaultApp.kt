@@ -68,7 +68,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     }) { padding -> Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(VaultNight, Color(0xFF121024), VaultNight))).padding(padding)) {
         when (destination) {
             Destination.DASHBOARD -> DashboardScreen(portfolio, syncStatus, refreshCatalog) { destination = Destination.SCANNER }
-            Destination.SCANNER -> ScannerScreen()
+            Destination.SCANNER -> ScannerScreen(repository)
             Destination.COLLECTION -> CollectionScreen(portfolio.cards, repository)
             Destination.GRADING -> GradingScreen()
         }
@@ -270,26 +270,85 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
 private fun parsePrice(value: String): Double? = if (value.isBlank()) null else value.replace(',', '.').toDoubleOrNull()?.takeIf { it >= 0 } ?: Double.NEGATIVE_INFINITY
 private fun parseDate(value: String): Long? = if (value.isBlank()) null else runCatching { LocalDate.parse(value).toEpochDay() }.getOrNull() ?: Long.MIN_VALUE
 
-@Composable private fun ScannerScreen() {
+@Composable private fun ScannerScreen(repository: CollectionRepository) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var granted by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     var denied by remember { mutableStateOf(false) }
+    var analysisRunning by remember { mutableStateOf(false) }
+    var analysis by remember { mutableStateOf<CardTextAnalysis?>(null) }
+    var analysisFailed by remember { mutableStateOf(false) }
+    var candidates by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
+    var candidatesLoading by remember { mutableStateOf(false) }
+    var selectedCandidate by remember { mutableStateOf<CatalogSearchResult?>(null) }
+    val textAnalyzer = remember(context) { CardTextAnalyzer(context) }
+    DisposableEffect(textAnalyzer) { onDispose { textAnalyzer.close() } }
+    LaunchedEffect(analysis) {
+        val current = analysis ?: return@LaunchedEffect
+        candidatesLoading = true
+        val found = linkedMapOf<Long, CatalogSearchResult>()
+        runCatching {
+            current.searchQueries.forEach { query ->
+                if (found.size < 8) repository.searchCatalog(query, 8).forEach { found.putIfAbsent(it.productId, it) }
+            }
+        }
+        candidates = found.values.take(8)
+        candidatesLoading = false
+    }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it; denied = !it }
-    Column(Modifier.fillMaxSize().padding(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
-        ScreenHeader(stringResource(R.string.scanner_eyebrow), stringResource(R.string.scanner_title), stringResource(R.string.scanner_subtitle))
-        Box(Modifier.fillMaxWidth().weight(1f).background(Brush.linearGradient(listOf(Color(0xFF111326), Color(0xFF221B35))), CardVaultShapes.feature).border(1.dp, VaultOutline.copy(alpha = .75f), CardVaultShapes.feature), contentAlignment = Alignment.Center) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
+        item { ScreenHeader(stringResource(R.string.scanner_eyebrow), stringResource(R.string.scanner_title), stringResource(R.string.scanner_subtitle)) }
+        item { Box(Modifier.fillMaxWidth().height(620.dp).background(Brush.linearGradient(listOf(Color(0xFF111326), Color(0xFF221B35))), CardVaultShapes.feature).border(1.dp, VaultOutline.copy(alpha = .75f), CardVaultShapes.feature), contentAlignment = Alignment.Center) {
             if (granted) {
-                LiveCameraScanner(Modifier.fillMaxSize())
+                LiveCameraScanner(Modifier.fillMaxSize()) { file ->
+                    analysisRunning = true; analysis = null; analysisFailed = false; candidates = emptyList()
+                    textAnalyzer.analyze(file) { result ->
+                        analysisRunning = false
+                        result.onSuccess { analysis = it }.onFailure { analysisFailed = true }
+                    }
+                }
             } else Column(Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(stringResource(R.string.camera_permission_title), color = Color.White, fontWeight = FontWeight.Bold)
                 Text(stringResource(R.string.camera_permission_body), color = Color(0xFFB9C9C5))
                 Button({ launcher.launch(Manifest.permission.CAMERA) }) { Text(stringResource(if (denied) R.string.camera_permission_retry else R.string.camera_permission_allow)) }
             }
-        }
-        AssistChip(onClick = {}, label = { Text(stringResource(R.string.scanner_quality_active)) }, enabled = false)
-        Text(stringResource(R.string.scanner_boundary), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        } }
+        if (analysisRunning) item { AnalysisStatusCard(R.string.scanner_analysis_running) }
+        if (analysisFailed) item { AnalysisStatusCard(R.string.scanner_analysis_failed, error = true) }
+        analysis?.let { result -> item { ScannerAnalysisCard(result, candidates, candidatesLoading) { selectedCandidate = it } } }
+        item { AssistChip(onClick = {}, label = { Text(stringResource(R.string.scanner_quality_active)) }, enabled = false) }
+        item { Text(stringResource(R.string.scanner_boundary), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
+    }
+    selectedCandidate?.let { candidate ->
+        ManualCardDialog(initialCatalog = candidate, onDismiss = { selectedCandidate = null }, onSave = { input -> scope.launch { repository.addManualCard(input) }; selectedCandidate = null })
     }
 }
+
+@Composable private fun AnalysisStatusCard(@StringRes message: Int, error: Boolean = false) = OutlinedCard(
+    modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card,
+    colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised),
+    border = BorderStroke(1.dp, if (error) MaterialTheme.colorScheme.error else VaultOutline),
+) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    if (!error) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+    Text(stringResource(message), color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+} }
+
+@Composable private fun ScannerAnalysisCard(result: CardTextAnalysis, candidates: List<CatalogSearchResult>, candidatesLoading: Boolean, onSelect: (CatalogSearchResult) -> Unit) = OutlinedCard(
+    modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card,
+    colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), border = BorderStroke(1.dp, MewPlum.copy(alpha = .55f)),
+) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(stringResource(R.string.scanner_analysis_title), fontWeight = FontWeight.Bold)
+    Text(stringResource(R.string.scanner_analysis_local), color = VaultPositive, fontSize = 12.sp)
+    result.likelyScript?.let { script -> Text(stringResource(R.string.scanner_script_suggestion, stringResource(when (script) { CardScript.LATIN -> R.string.scanner_script_latin; CardScript.JAPANESE -> R.string.scanner_script_japanese; CardScript.CHINESE -> R.string.scanner_script_chinese })), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
+    result.collectorNumber?.let { Text(stringResource(R.string.scanner_number_found, it), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
+    if (candidatesLoading) Text(stringResource(R.string.scanner_candidates_searching), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+    else if (candidates.isEmpty()) Text(stringResource(R.string.scanner_no_candidates), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+    else {
+        Text(stringResource(R.string.scanner_candidates_title), color = MewRoseSoft, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        candidates.take(5).forEach { candidate -> CatalogResultRow(candidate) { onSelect(candidate) } }
+        Text(stringResource(R.string.scanner_candidates_boundary), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+    }
+} }
 
 private data class GradeCategory(@param:StringRes val name: Int, @param:StringRes val prompt: Int)
 @Composable private fun GradingScreen() {
