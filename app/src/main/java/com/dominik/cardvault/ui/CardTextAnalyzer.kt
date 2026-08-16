@@ -24,20 +24,25 @@ internal object CardTextParser {
     private val noisePattern = Regex("(?i)^(?:hp|kp|stage|basic|basis|trainer|energy|energie|pokemon)\\s*\\d*$")
 
     fun parse(textByScript: Map<CardScript, String>): CardTextAnalysis {
-        val lines = textByScript.values.asSequence()
+        val latinScore = textByScript[CardScript.LATIN].orEmpty().count { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.LATIN }
+        val japaneseScore = textByScript[CardScript.JAPANESE].orEmpty().count { it in '\u3040'..'\u30ff' }
+        val chineseScore = textByScript[CardScript.CHINESE].orEmpty().count { it in '\u3400'..'\u9fff' }
+        val likelyScript = when {
+            japaneseScore >= 3 && japaneseScore >= latinScore / 2 -> CardScript.JAPANESE
+            chineseScore >= 3 && chineseScore >= latinScore / 2 -> CardScript.CHINESE
+            latinScore >= 3 -> CardScript.LATIN
+            japaneseScore >= 3 -> CardScript.JAPANESE
+            chineseScore >= 3 -> CardScript.CHINESE
+            else -> null
+        }
+        val selectedTexts = likelyScript?.let { listOf(textByScript[it].orEmpty()) } ?: textByScript.values
+        val lines = selectedTexts.asSequence()
             .flatMap { it.lineSequence() }
             .map { it.trim().replace(Regex("\\s+"), " ") }
             .filter { it.length in 2..80 }
             .distinct()
             .toList()
-        val combined = lines.joinToString(" ")
         val collectorNumber = lines.asSequence().mapNotNull { collectorNumberPattern.find(it)?.value }.firstOrNull()?.replace(" ", "")
-        val likelyScript = when {
-            combined.any { it in '\u3040'..'\u30ff' } -> CardScript.JAPANESE
-            combined.any { it in '\u3400'..'\u9fff' } -> CardScript.CHINESE
-            combined.any(Char::isLetter) -> CardScript.LATIN
-            else -> null
-        }
         val queries = lines.asSequence()
             .map { it.substringBefore("  ").trim(' ', '·', '-', '•') }
             .filter { it.length in 3..36 && it.any(Char::isLetter) && !noisePattern.matches(it) }

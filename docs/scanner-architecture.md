@@ -13,6 +13,8 @@ Automatic capture is enabled by default and fires exactly once when quality reac
 
 After capture, bundled ML Kit v2 models read Latin, Japanese, and Chinese text locally. The parser extracts useful name lines and collector-number patterns, then queries the already-imported Cardmarket catalog for possible products. These are explicitly presented as candidates requiring confirmation. Script detection is not claimed as confirmed language, and OCR does not claim finish, printing, or exact identity. The models are bundled so first use does not depend on a model download.
 
+The current Cardmarket product download uses English product names. A German printed name such as "Igamaro" therefore cannot yet be safely matched to its English catalog identity "Chespin" without a separate multilingual identity mapping. Until that mapping exists, manual catalog selection is the reliable path and the scanner must return no candidate rather than guess.
+
 The detailed quality metrics are outside the preview and collapsed by default. Only the card frame, traffic-light color, and one concise instruction remain over the live image.
 
 The future continuous workflow will identify the captured card, show only plausible language/finish/printing variants, preselect only when confidence supports it, confirm with one tap, increment repeated copies, and then continue without leaving the scanner. Holo and reverse-holo always remain manually overridable.

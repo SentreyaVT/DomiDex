@@ -20,4 +20,15 @@ class CardTextParserTest {
         assertEquals(CardScript.JAPANESE, result.likelyScript)
         assertEquals("025/165", result.collectorNumber)
     }
+
+    @Test fun latinCardWinsOverSmallJapaneseModelHallucination() {
+        val result = CardTextParser.parse(mapOf(
+            CardScript.LATIN to "Igamaro\nVerprügler\n004/182",
+            CardScript.JAPANESE to "Igamaro の",
+            CardScript.CHINESE to "Igamaro",
+        ))
+
+        assertEquals(CardScript.LATIN, result.likelyScript)
+        assertTrue("Igamaro" in result.searchQueries)
+    }
 }
