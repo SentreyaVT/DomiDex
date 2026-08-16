@@ -106,7 +106,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
                     Text(euro(portfolio.totalValue), fontSize = 30.sp, fontWeight = FontWeight.Black, color = VaultText, maxLines = 1)
                     Text(stringResource(R.string.portfolio_change, portfolio.changePercent), color = VaultPositive, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                 }
-                Image(painter = painterResource(R.drawable.mew_hero), contentDescription = stringResource(R.string.mew_hero_description), modifier = Modifier.size(CardVaultSpacing.heroArt))
+                Image(painter = painterResource(R.drawable.brand_dashboard_hero), contentDescription = stringResource(R.string.brand_dashboard_hero_description), modifier = Modifier.size(CardVaultSpacing.heroArt))
             }
         }
     }

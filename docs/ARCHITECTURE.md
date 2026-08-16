@@ -18,3 +18,9 @@ Continuous scanning should resolve a catalog identity, then show only plausible 
 Capture quality and recognition confidence are separate signals. Capture guidance uses a red/yellow/green state derived from sharpness, motion stability, exposure, glare, card coverage, perspective, and visibility of all edges/corners. Green means capture-ready, not recognized. Auto-capture occurs only after a short stable-green interval. Concise German hints include “Näher herangehen”, “Ruhig halten”, “Spiegelung reduzieren”, and “Alle Ecken zeigen”.
 
 Every owned-card detail exposes a `Grading` entry point. The future guided flow captures front, back, and required angled/lighting views, stores rerunnable results against that exact entry, and clearly presents only a photo-based pre-screening range—not a guaranteed PSA grade.
+
+## Private branding and public-release boundary
+
+App behavior and persisted data do not depend on the private Mew hero. UI code references the generic `brand_dashboard_hero` and `brand_dashboard_hero_description` resources, currently mapped to the private asset in `branding.xml`. Before any public build, introduce explicit private/public product flavors, move the Mew bitmap into the private source set, and override both generic brand resources in the public source set with original or properly licensed art. Do not ship the private asset merely hidden or unused in a public artifact.
+
+A future Google Play release may use a one-time purchase, but no publishing is currently authorized. Before commercial release, separately verify ownership/licensing of all branding, Cardmarket and other catalog/price-data commercial terms, privacy disclosures, Google Play policy and billing requirements, data-source attribution, and regional pricing/tax obligations. A passing technical build is not legal or policy clearance.
