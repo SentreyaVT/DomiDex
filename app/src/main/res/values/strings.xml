@@ -87,6 +87,12 @@
     <string name="capture_test_photo">Testfoto aufnehmen</string>
     <string name="capture_saved">Testfoto wurde nur im lokalen App-Cache gespeichert. Noch keine Erkennung.</string>
     <string name="capture_failed">Testfoto konnte nicht aufgenommen werden.</string>
+    <string name="capture_saved_automatically">Automatisch bei stabilem Grün aufgenommen. Noch keine Erkennung.</string>
+    <string name="capture_in_progress">Aufnahme läuft …</string>
+    <string name="auto_capture_title">Automatische Testaufnahme</string>
+    <string name="auto_capture_hint">Einmal bei stabilem Grün; erneut erst nachdem die Karte entfernt wurde.</string>
+    <string name="action_undo">Rückgängig</string>
+    <string name="capture_undone">Letzte lokale Testaufnahme wurde verworfen.</string>
     <string name="grading_eyebrow">Vorabprüfung</string>
     <string name="grading_title">Grading-Check</string>
     <string name="grading_subtitle">Geführte Sichtprüfung vor einem professionellen Grading.</string>

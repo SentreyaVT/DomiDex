@@ -1,5 +1,6 @@
 package com.dominik.cardvault.ui
 
+import android.media.MediaActionSound
 import android.os.Handler
 import android.os.Looper
 import androidx.camera.core.ImageAnalysis
@@ -15,16 +16,19 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.core.content.ContextCompat
 import com.dominik.cardvault.R
 import com.dominik.cardvault.ui.theme.*
@@ -39,16 +43,22 @@ import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
 
 private data class FrameQuality(val level: QualityLevel, val guidance: QualityGuidance, val exposure: Float, val sharpness: Float, val stability: Float, val coverage: Float, val perspective: Float)
-private enum class QualityLevel { RED, YELLOW, GREEN }
-private enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS, FIND_CARD, MOVE_CLOSER, MOVE_AWAY, ALIGN_PARALLEL, READY }
+internal enum class QualityLevel { RED, YELLOW, GREEN }
+internal enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS, FIND_CARD, MOVE_CLOSER, MOVE_AWAY, ALIGN_PARALLEL, READY }
 
 @Composable fun LiveCameraScanner(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val haptics = LocalHapticFeedback.current
+    val confirmationSound = remember { MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) } }
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     var quality by remember { mutableStateOf(FrameQuality(QualityLevel.RED, QualityGuidance.HOLD_STILL, 0f, 0f, 0f, 0f, 0f)) }
     var captureMessage by remember { mutableStateOf<Int?>(null) }
+    var autoCaptureEnabled by rememberSaveable { mutableStateOf(true) }
+    var captureInProgress by remember { mutableStateOf(false) }
+    var latestCapture by remember { mutableStateOf<File?>(null) }
+    val autoCaptureGate = remember { AutoCaptureGate() }
     val controller = remember {
         LifecycleCameraController(context).apply {
             setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
@@ -60,9 +70,45 @@ private enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS, 
         controller.bindToLifecycle(lifecycleOwner)
         onDispose { controller.clearImageAnalysisAnalyzer(); controller.unbind(); analysisExecutor.shutdown() }
     }
+    DisposableEffect(confirmationSound) { onDispose { confirmationSound.release() } }
+    fun capture(auto: Boolean) {
+        if (captureInProgress) return
+        captureInProgress = true; captureMessage = null; autoCaptureGate.disarm()
+        val file = File(context.cacheDir, "cardvault-test-capture-${System.currentTimeMillis()}.jpg")
+        controller.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), mainExecutor, object : ImageCapture.OnImageSavedCallback {
+            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                latestCapture = file; captureInProgress = false
+                captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                confirmationSound.play(MediaActionSound.SHUTTER_CLICK)
+            }
+            override fun onError(exception: ImageCaptureException) { captureInProgress = false; captureMessage = R.string.capture_failed }
+        })
+    }
+    LaunchedEffect(quality, autoCaptureEnabled, captureInProgress) {
+        if (autoCaptureEnabled && !captureInProgress && autoCaptureGate.onFrame(quality.level, quality.guidance)) capture(true)
+    }
     Box(modifier.background(VaultNight, CardVaultShapes.feature).border(1.dp, VaultOutline, CardVaultShapes.feature)) {
         AndroidView(factory = { PreviewView(it).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; this.controller = controller } }, modifier = Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .08f)))
+        captureMessage?.let { message ->
+            Surface(
+                modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
+                color = if (message == R.string.capture_failed) MaterialTheme.colorScheme.errorContainer else VaultPositive.copy(alpha = .96f),
+                contentColor = if (message == R.string.capture_failed) MaterialTheme.colorScheme.onErrorContainer else VaultNight,
+                shape = CardVaultShapes.card,
+                shadowElevation = 8.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(stringResource(message), modifier = Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    if (latestCapture != null) TextButton(onClick = { latestCapture?.delete(); latestCapture = null; captureMessage = R.string.capture_undone }) { Text(stringResource(R.string.action_undo)) }
+                }
+            }
+        }
         Box(
             Modifier.align(Alignment.Center).fillMaxWidth(.82f).aspectRatio(63f / 88f)
                 .border(3.dp, quality.level.color, RoundedCornerShape(18.dp))
@@ -84,17 +130,24 @@ private enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS, 
                 QualityMetric(stringResource(R.string.capture_metric_coverage), quality.coverage, Modifier.weight(1f))
                 QualityMetric(stringResource(R.string.capture_metric_perspective), quality.perspective, Modifier.weight(1f))
             }
-            Button(onClick = {
-                captureMessage = null
-                val file = File(context.cacheDir, "cardvault-test-capture-${System.currentTimeMillis()}.jpg")
-                controller.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), mainExecutor, object : ImageCapture.OnImageSavedCallback {
-                    override fun onImageSaved(output: ImageCapture.OutputFileResults) { captureMessage = R.string.capture_saved }
-                    override fun onError(exception: ImageCaptureException) { captureMessage = R.string.capture_failed }
-                })
-            }, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card) { Text(stringResource(R.string.capture_test_photo)) }
-            captureMessage?.let { Text(stringResource(it), color = if (it == R.string.capture_saved) VaultPositive else MaterialTheme.colorScheme.error, fontSize = 12.sp) }
+            Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(stringResource(R.string.auto_capture_title), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold); Text(stringResource(R.string.auto_capture_hint), color = VaultTextMuted, fontSize = 10.sp) }; Switch(checked = autoCaptureEnabled, onCheckedChange = { autoCaptureEnabled = it }) }
+            Button(onClick = { capture(false) }, enabled = !captureInProgress, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card) { Text(stringResource(if (captureInProgress) R.string.capture_in_progress else R.string.capture_test_photo)) }
         }
     }
+}
+
+internal class AutoCaptureGate(private val missingFramesToRearm: Int = 3) {
+    private var armed = true
+    private var missingFrames = 0
+    fun onFrame(level: QualityLevel, guidance: QualityGuidance): Boolean {
+        if (!armed) {
+            missingFrames = if (guidance == QualityGuidance.FIND_CARD) missingFrames + 1 else 0
+            if (missingFrames >= missingFramesToRearm) { armed = true; missingFrames = 0 }
+        }
+        if (armed && level == QualityLevel.GREEN) { armed = false; return true }
+        return false
+    }
+    fun disarm() { armed = false; missingFrames = 0 }
 }
 
 @Composable private fun QualityMetric(label: String, value: Float, modifier: Modifier) = Column(modifier) {
