@@ -7,6 +7,9 @@
     <string name="dashboard_eyebrow">CardVault</string>
     <string name="dashboard_title">Deine Sammlung</string>
     <string name="dashboard_subtitle">Privat, offline orientiert und immer unter deiner Kontrolle.</string>
+    <string name="mew_hero_description">Mew schwebt über dem CardVault-Portfolio</string>
+    <string name="portfolio_private_badge">Privater Tresor</string>
+    <string name="portfolio_history">Wertentwicklung</string>
     <string name="portfolio_estimated_value">Geschätzter Portfoliowert</string>
     <string name="portfolio_change">▲ %1$.1f%% · Beispieldaten für 6 Monate</string>
     <string name="stat_cards">Karten</string>
@@ -16,7 +19,14 @@
     <string name="recent_cards">Zuletzt hinzugefügt</string>
     <string name="collection_eyebrow">Bibliothek</string>
     <string name="collection_title">Sammlung</string>
-    <string name="collection_summary">%1$d Karten in %2$d Einträgen</string>
+    <plurals name="collection_cards_count">
+        <item quantity="one">%d Karte</item>
+        <item quantity="other">%d Karten</item>
+    </plurals>
+    <plurals name="collection_entries_count">
+        <item quantity="one">%d Eintrag</item>
+        <item quantity="other">%d Einträge</item>
+    </plurals>
     <string name="collection_search">Karten oder Sets durchsuchen</string>
     <string name="collection_empty">Keine passende Karte gefunden.</string>
     <string name="card_metadata">%1$s · %2$s · ×%3$d</string>
