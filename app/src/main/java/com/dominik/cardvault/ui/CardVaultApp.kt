@@ -279,15 +279,14 @@ private fun parseDate(value: String): Long? = if (value.isBlank()) null else run
         ScreenHeader(stringResource(R.string.scanner_eyebrow), stringResource(R.string.scanner_title), stringResource(R.string.scanner_subtitle))
         Box(Modifier.fillMaxWidth().weight(1f).background(Brush.linearGradient(listOf(Color(0xFF111326), Color(0xFF221B35))), CardVaultShapes.feature).border(1.dp, VaultOutline.copy(alpha = .75f), CardVaultShapes.feature), contentAlignment = Alignment.Center) {
             if (granted) {
-                Box(Modifier.fillMaxSize().padding(34.dp).border(2.dp, MewIce, RoundedCornerShape(18.dp)))
-                Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(stringResource(R.string.camera_ready), color = Color.White, fontWeight = FontWeight.Bold); Text(stringResource(R.string.camera_preview_boundary), color = Color(0xFFB9C9C5), fontSize = 13.sp) }
+                LiveCameraScanner(Modifier.fillMaxSize())
             } else Column(Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(stringResource(R.string.camera_permission_title), color = Color.White, fontWeight = FontWeight.Bold)
                 Text(stringResource(R.string.camera_permission_body), color = Color(0xFFB9C9C5))
                 Button({ launcher.launch(Manifest.permission.CAMERA) }) { Text(stringResource(if (denied) R.string.camera_permission_retry else R.string.camera_permission_allow)) }
             }
         }
-        AssistChip(onClick = {}, label = { Text(stringResource(R.string.scanner_stability_planned)) }, enabled = false)
+        AssistChip(onClick = {}, label = { Text(stringResource(R.string.scanner_quality_active)) }, enabled = false)
         Text(stringResource(R.string.scanner_boundary), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }
 }
