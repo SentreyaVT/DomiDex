@@ -128,6 +128,9 @@
     <string name="submission_check_outcome">Empfehlung: einsenden, Grenzfall oder unbewertet behalten – mit Konfidenz und nachvollziehbarer Begründung</string>
     <string name="analysis_later">Analyse folgt in einer späteren Ausbaustufe</string>
     <string name="grading_boundary">Die spätere Analyse nutzt geführte Aufnahmen von Vorderseite, Rückseite und schrägen Blickwinkeln und erläutert Befunde zu Zentrierung, Ecken, Kanten und Oberfläche. Die Checkliste funktioniert bereits; Fotoanalyse und PSA-Notenspanne noch nicht.</string>
+    <string name="grading_latest_capture">Letzte automatische Aufnahme</string>
+    <string name="grading_latest_capture_description">Automatisch aufgenommenes Kartenfoto für die Grading-Vorbereitung</string>
+    <string name="grading_capture_not_analyzed">Das Foto steht für die geführte Vorprüfung bereit. Es wurde noch keine Zustands- oder PSA-Note berechnet.</string>
     <string name="demo_data_note">Die Beispielkarten werden lokal gespeichert und sind nicht automatisch Cardmarket-Produkten zugeordnet. Ohne eindeutige Zuordnung zeigt CardVault keinen Marktpreis und rät nicht.</string>
     <string name="sync_title">Cardmarket-Daten</string>
     <string name="sync_running">Aktualisierung läuft …</string>
@@ -139,7 +142,7 @@
     <string name="sync_last_success">Letzter Erfolg: %1$s · Datenstand: %2$s</string>
     <string name="sync_counts">%1$d Produkte · %2$d Preisdatensätze</string>
     <string name="sync_failure_retention">Letzte bekannte Preise bleiben offline erhalten. Fehler: %1$s</string>
-    <string name="sync_value_policy">Portfoliowert: offizieller Cardmarket-Trendpreis in EUR. Nicht zugeordnete Karten bleiben ohne Marktpreis.</string>
+    <string name="sync_value_policy">Portfoliowert: täglicher Cardmarket-Trendpreis in EUR; bei bestätigtem Holo-Finish der Holo-Trend, sofern vorhanden. Das ist kein Live-Angebotspreis. Nicht zugeordnete Karten bleiben ohne Marktpreis.</string>
     <string name="unknown">unbekannt</string>
     <string name="catalog_link_action">Mit offiziellem Katalog verknüpfen</string>
     <string name="catalog_change_action">Katalogzuordnung ändern</string>
@@ -164,4 +167,15 @@
     <string name="catalog_add_linked_boundary">Das offizielle Produkt ist vorausgewählt. Ergänze Kartennummer und Sprache und bestätige Holo beziehungsweise Reverse-Holo selbst; der öffentliche Download liefert diese Merkmale nicht immer eindeutig.</string>
     <string name="add_outcome_created">✓ Karte wurde lokal gespeichert.</string>
     <string name="add_outcome_incremented">✓ Vorhandener identischer Katalogtreffer: Anzahl wurde erhöht.</string>
+    <string name="catalog_choose_set">1. Set auswählen</string>
+    <string name="catalog_choose_set_hint">Wähle zuerst das Set. Danach kannst du alle Karten dieses Sets mit Bildern durchsuchen.</string>
+    <string name="catalog_set_search">Set oder Serie suchen</string>
+    <string name="catalog_choose_card_hint">2. Karte anhand von Bild, Name oder Nummer auswählen.</string>
+    <string name="catalog_card_search">Kartenname oder Nummer im Set</string>
+    <string name="catalog_choose_product">3. Preisprodukt bestätigen</string>
+    <string name="catalog_confirm_price_identity">Wähle den exakten Cardmarket-Druck. Erst diese Bestätigung verbindet einen Preis; CardVault rät nicht.</string>
+    <string name="catalog_no_price_match">Für diese englische Katalogidentität wurde kein eindeutiges Cardmarket-Produkt gefunden. Du kannst sie weiterhin ohne Preis erfassen.</string>
+    <string name="catalog_visual_error">Der bebilderte Katalog ist gerade nicht erreichbar. Deine lokale Sammlung und vorhandenen Preise bleiben erhalten.</string>
+    <string name="catalog_card_image_description">Kartenbild von %1$s, Nummer %2$s</string>
+    <string name="action_back">Zurück</string>
 </resources>

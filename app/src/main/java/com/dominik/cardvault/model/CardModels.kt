@@ -11,7 +11,12 @@ data class CollectionCard(
     val externalProductId: Long? = null,
 )
 
-data class CatalogSearchResult(val productId: Long, val name: String, val expansionId: String, val trendPriceEur: Double?, val currency: String?)
+data class CatalogSearchResult(
+    val productId: Long, val name: String, val expansionId: String,
+    val trendPriceEur: Double?, val currency: String?,
+    val visualSetName: String? = null, val collectorNumber: String? = null,
+    val imageUrl: String? = null,
+)
 
 enum class CardLanguage(val label: String) {
     GERMAN("Deutsch"), ENGLISH("Englisch"), JAPANESE("Japanisch"), CHINESE("Chinesisch");

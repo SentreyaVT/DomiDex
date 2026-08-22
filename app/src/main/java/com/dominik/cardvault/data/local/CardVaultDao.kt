@@ -15,7 +15,10 @@ interface CardVaultDao {
         SELECT e.id AS entryId, c.id AS cardId, c.name, c.setName, c.collectorNumber,
                c.language, c.finish, c.variant, e.quantity, e.condition,
                e.acquisitionPriceMinor, e.acquisitionCurrency, e.acquisitionDateEpochDay,
-               e.notes, p.marketValueMinor, p.currency AS priceCurrency,
+               e.notes,
+               CASE WHEN LOWER(c.finish) = 'holo' THEN COALESCE(p.holoTrendValueMinor, p.marketValueMinor)
+                    ELSE p.marketValueMinor END AS marketValueMinor,
+               p.currency AS priceCurrency,
                p.effectiveAtEpochMillis AS priceUpdatedAtEpochMillis,
                e.externalProductSource, e.externalProductId,
                COALESCE(linked.id, c.id) AS priceCardId

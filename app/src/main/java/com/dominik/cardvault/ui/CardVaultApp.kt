@@ -41,7 +41,11 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.dominik.cardvault.R
 import com.dominik.cardvault.model.*
+import com.dominik.cardvault.data.catalog.PokemonSet
+import com.dominik.cardvault.data.catalog.PokemonVisualCard
+import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
 import com.dominik.cardvault.ui.theme.*
+import coil3.compose.AsyncImage
 import java.text.NumberFormat
 import java.util.Locale
 import java.time.LocalDate
@@ -187,17 +191,54 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
 )
 
 @Composable private fun CatalogProductPicker(repository: CollectionRepository, onDismiss: () -> Unit, onSelected: (CatalogSearchResult) -> Unit) {
-    var query by rememberSaveable { mutableStateOf("") }; var results by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }; var loading by remember { mutableStateOf(false) }
-    LaunchedEffect(query) { if (query.trim().length < 2) { results = emptyList(); loading = false; return@LaunchedEffect }; loading = true; delay(250); results = repository.searchCatalog(query); loading = false }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(R.string.add_from_catalog)) }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(stringResource(R.string.catalog_add_search_hint), color = VaultTextMuted, fontSize = 12.sp)
-        OutlinedTextField(query, { query = it }, label = { Text(stringResource(R.string.catalog_search_label)) }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field)
+    val visualCatalog = remember { PokemonVisualCatalog() }
+    var query by rememberSaveable { mutableStateOf("") }
+    var sets by remember { mutableStateOf<List<PokemonSet>>(emptyList()) }
+    var selectedSet by remember { mutableStateOf<PokemonSet?>(null) }
+    var cards by remember { mutableStateOf<List<PokemonVisualCard>>(emptyList()) }
+    var selectedCard by remember { mutableStateOf<PokemonVisualCard?>(null) }
+    var products by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }; var error by remember { mutableStateOf(false) }
+    LaunchedEffect(selectedSet) {
+        loading = true; error = false; query = ""
+        runCatching { if (selectedSet == null) sets = visualCatalog.sets() else cards = visualCatalog.cards(selectedSet!!) }
+            .onFailure { error = true }
+        loading = false
+    }
+    LaunchedEffect(selectedCard) {
+        val card = selectedCard ?: return@LaunchedEffect
+        loading = true
+        products = repository.searchCatalog(card.name, 40).map { it.copy(visualSetName = card.set.name, collectorNumber = card.number, imageUrl = card.largeImageUrl) }
+        loading = false
+    }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(when { selectedCard != null -> stringResource(R.string.catalog_choose_product); selectedSet != null -> selectedSet!!.name; else -> stringResource(R.string.catalog_choose_set) }) }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(stringResource(when { selectedCard != null -> R.string.catalog_confirm_price_identity; selectedSet != null -> R.string.catalog_choose_card_hint; else -> R.string.catalog_choose_set_hint }), color = VaultTextMuted, fontSize = 12.sp)
+        if (selectedCard == null) OutlinedTextField(query, { query = it }, label = { Text(stringResource(if (selectedSet == null) R.string.catalog_set_search else R.string.catalog_card_search)) }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field)
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!loading && results.isEmpty()) item { Text(stringResource(if (query.length < 2) R.string.catalog_search_prompt else R.string.catalog_search_empty), color = VaultTextMuted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 18.dp)) }
-            items(results, key = { it.productId }) { result -> CatalogResultRow(result) { onSelected(result) } }
+        if (error) Text(stringResource(R.string.catalog_visual_error), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            when {
+                selectedCard != null -> {
+                    item { VisualCardRow(selectedCard!!) {} }
+                    if (!loading && products.isEmpty()) item { Text(stringResource(R.string.catalog_no_price_match), color = VaultTextMuted, fontSize = 12.sp) }
+                    items(products, key = { it.productId }) { result -> CatalogResultRow(result) { onSelected(result) } }
+                }
+                selectedSet != null -> items(cards.filter { query.isBlank() || it.name.contains(query, true) || it.number.contains(query, true) }, key = { it.id }) { card -> VisualCardRow(card) { selectedCard = card } }
+                else -> items(sets.filter { query.isBlank() || it.name.contains(query, true) || it.series.contains(query, true) }, key = { it.id }) { set ->
+                    OutlinedCard(onClick = { selectedSet = set }, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(model = set.logoUrl, contentDescription = null, modifier = Modifier.size(64.dp, 40.dp)); Column(Modifier.weight(1f).padding(start = 10.dp)) { Text(set.name, fontWeight = FontWeight.Bold); Text("${set.series} · ${set.printedTotal} Karten · ${set.releaseDate}", color = VaultTextMuted, fontSize = 11.sp) }
+                    } }
+                }
+            }
         }
-    } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
+    } }, confirmButton = {}, dismissButton = { Row { if (selectedCard != null || selectedSet != null) TextButton(onClick = { if (selectedCard != null) { selectedCard = null; products = emptyList() } else selectedSet = null }) { Text(stringResource(R.string.action_back)) }; TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } } })
+}
+
+@Composable private fun VisualCardRow(card: PokemonVisualCard, onClick: () -> Unit) = OutlinedCard(onClick = onClick, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), modifier = Modifier.fillMaxWidth()) {
+    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        AsyncImage(model = card.smallImageUrl, contentDescription = stringResource(R.string.catalog_card_image_description, card.name, card.number), modifier = Modifier.size(72.dp, 101.dp))
+        Column(Modifier.weight(1f)) { Text(card.name, fontWeight = FontWeight.Bold); Text("#${card.number} · ${card.rarity ?: stringResource(R.string.unknown)}", color = VaultTextMuted, fontSize = 12.sp); Text(card.set.name, color = MewIce, fontSize = 11.sp) }
+    }
 }
 
 @Composable private fun CatalogResultRow(result: CatalogSearchResult, onClick: () -> Unit) = OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), shape = CardVaultShapes.card) {
@@ -208,7 +249,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
 }
 
 @Composable private fun ManualCardDialog(initialCatalog: CatalogSearchResult? = null, onDismiss: () -> Unit, onSave: (ManualCardInput) -> Unit) {
-    var name by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.name ?: "") }; var set by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.let { "Cardmarket-Erweiterung ${it.expansionId}" } ?: "") }; var number by rememberSaveable(initialCatalog?.productId) { mutableStateOf("") }
+    var name by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.name ?: "") }; var set by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.visualSetName ?: initialCatalog?.let { "Cardmarket-Erweiterung ${it.expansionId}" } ?: "") }; var number by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.collectorNumber ?: "") }
     var language by rememberSaveable { mutableStateOf(CardLanguage.GERMAN) }; var finish by rememberSaveable { mutableStateOf("Normal") }; var variant by rememberSaveable { mutableStateOf("Standard") }
     var quantity by rememberSaveable { mutableStateOf("1") }; var condition by rememberSaveable { mutableStateOf("Nahezu neuwertig") }; var notes by rememberSaveable { mutableStateOf("") }
     var price by rememberSaveable { mutableStateOf("") }; var date by rememberSaveable { mutableStateOf("") }
@@ -354,9 +395,18 @@ private data class GradeCategory(@param:StringRes val name: Int, @param:StringRe
 @Composable private fun GradingScreen() {
     val categories = remember { listOf(GradeCategory(R.string.grading_centering, R.string.grading_centering_prompt), GradeCategory(R.string.grading_corners, R.string.grading_corners_prompt), GradeCategory(R.string.grading_edges, R.string.grading_edges_prompt), GradeCategory(R.string.grading_surface, R.string.grading_surface_prompt)) }
     var completed by rememberSaveable { mutableStateOf(setOf<Int>()) }
+    val latestCapture = LatestCardCapture.path
     LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { ScreenHeader(stringResource(R.string.grading_eyebrow), stringResource(R.string.grading_title), stringResource(R.string.grading_subtitle)) }
         item { ElevatedCard(shape = CardVaultShapes.card, colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) { Text(stringResource(R.string.grading_disclaimer), Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onPrimaryContainer) } }
+        latestCapture?.let { path -> item {
+            OutlinedCard(shape = CardVaultShapes.card, colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised)) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    AsyncImage(model = java.io.File(path), contentDescription = stringResource(R.string.grading_latest_capture_description), modifier = Modifier.size(76.dp, 106.dp))
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { Text(stringResource(R.string.grading_latest_capture), fontWeight = FontWeight.Bold); Text(stringResource(R.string.grading_capture_not_analyzed), color = VaultTextMuted, fontSize = 12.sp) }
+                }
+            }
+        } }
         item { Text(stringResource(R.string.photo_checklist), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         items(categories) { category -> val checked = category.name in completed; OutlinedCard(Modifier.fillMaxWidth().clickable { completed = if (checked) completed - category.name else completed + category.name }, shape = CardVaultShapes.card, colors = CardDefaults.outlinedCardColors(containerColor = if (checked) MewPlumDeep.copy(alpha = .52f) else VaultNightRaised), border = BorderStroke(1.dp, if (checked) MewPlum.copy(alpha = .70f) else VaultOutline)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Checkbox(checked, { completed = if (it) completed + category.name else completed - category.name }, colors = CheckboxDefaults.colors(checkedColor = MewRose, checkmarkColor = MaterialTheme.colorScheme.onPrimary)); Column(Modifier.weight(1f)) { Text(stringResource(category.name), fontWeight = FontWeight.Bold); Text(stringResource(category.prompt), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }; Text(stringResource(if (checked) R.string.grading_ready else R.string.grading_add_photos), color = if (checked) VaultPositive else MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold) } } }
         item { LinearProgressIndicator(progress = { completed.size / categories.size.toFloat() }, modifier = Modifier.fillMaxWidth()) }

@@ -71,6 +71,8 @@ dependencies {
     implementation(libs.mlkit.text.latin)
     implementation(libs.mlkit.text.japanese)
     implementation(libs.mlkit.text.chinese)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
     ksp(libs.androidx.room.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -12,6 +12,7 @@ import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -20,6 +21,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -42,7 +44,11 @@ import org.opencv.android.OpenCVLoader
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
 
-private data class FrameQuality(val level: QualityLevel, val guidance: QualityGuidance, val exposure: Float, val sharpness: Float, val stability: Float, val coverage: Float, val perspective: Float)
+internal object LatestCardCapture {
+    var path by mutableStateOf<String?>(null)
+}
+
+private data class FrameQuality(val level: QualityLevel, val guidance: QualityGuidance, val exposure: Float, val sharpness: Float, val stability: Float, val coverage: Float, val perspective: Float, val corners: List<Pair<Float, Float>> = emptyList())
 internal enum class QualityLevel { RED, YELLOW, GREEN }
 internal enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS, FIND_CARD, MOVE_CLOSER, MOVE_AWAY, ALIGN_PARALLEL, READY }
 
@@ -90,6 +96,7 @@ internal enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS,
                 if (activeCaptureId != captureId) { file.delete(); return }
                 activeCaptureId = 0L
                 latestCapture = file; captureInProgress = false
+                LatestCardCapture.path = file.absolutePath
                 captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 confirmationSound.play(MediaActionSound.SHUTTER_CLICK)
@@ -126,10 +133,18 @@ internal enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS,
                     }
                 }
             }
-            Box(
-                Modifier.align(Alignment.Center).fillMaxWidth(.82f).aspectRatio(63f / 88f)
-                    .border(3.dp, quality.level.color, RoundedCornerShape(18.dp))
-            )
+            Canvas(Modifier.matchParentSize()) {
+                if (quality.corners.size == 4) {
+                    val path = Path()
+                    quality.corners.forEachIndexed { index, point ->
+                        val x = point.first * size.width; val y = point.second * size.height
+                        if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                    }
+                    path.close(); drawPath(path, quality.level.color, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 7f))
+                } else {
+                    drawRoundRect(quality.level.color, topLeft = androidx.compose.ui.geometry.Offset(size.width * .09f, size.height * .08f), size = androidx.compose.ui.geometry.Size(size.width * .82f, size.height * .82f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(18.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6f))
+                }
+            }
             Surface(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(10.dp),
                 color = VaultNight.copy(alpha = .86f),
@@ -225,16 +240,16 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             val sharpnessScore = (detail / (samples.size - 20) / 28.0).toFloat().coerceIn(0f, 1f)
             val stabilityScore = (1f - motion / 32f).coerceIn(0f, 1f)
             val frame = detector.detect(buffer, width, height, plane.rowStride, plane.pixelStride)
-            val baseReady = mean in 55.0..210.0 && clippedBright <= .12f && clippedDark <= .35f && stabilityScore >= .58f && sharpnessScore >= .28f && frame.found && frame.coverage in .26f..1f && frame.perspective >= .68f
+            val baseReady = mean in 52.0..215.0 && clippedBright <= .14f && clippedDark <= .38f && stabilityScore >= .52f && sharpnessScore >= .22f && frame.found && frame.coverage in .23f..1f && frame.perspective >= .64f
             stableReadyFrames = if (baseReady) stableReadyFrames + 1 else 0
-            val guidance = when { mean < 55 || clippedDark > .35f -> QualityGuidance.MORE_LIGHT; mean > 210 || clippedBright > .12f -> QualityGuidance.LESS_GLARE; stabilityScore < .58f -> QualityGuidance.HOLD_STILL; sharpnessScore < .28f -> QualityGuidance.FOCUS; !frame.found -> QualityGuidance.FIND_CARD; frame.coverage < .26f -> QualityGuidance.MOVE_CLOSER; frame.coverage > .85f -> QualityGuidance.MOVE_AWAY; frame.perspective < .68f -> QualityGuidance.ALIGN_PARALLEL; stableReadyFrames >= 6 -> QualityGuidance.READY; else -> QualityGuidance.HOLD_STILL }
+            val guidance = when { mean < 52 || clippedDark > .38f -> QualityGuidance.MORE_LIGHT; mean > 215 || clippedBright > .14f -> QualityGuidance.LESS_GLARE; stabilityScore < .52f -> QualityGuidance.HOLD_STILL; sharpnessScore < .22f -> QualityGuidance.FOCUS; !frame.found -> QualityGuidance.FIND_CARD; frame.coverage < .23f -> QualityGuidance.MOVE_CLOSER; frame.coverage > .88f -> QualityGuidance.MOVE_AWAY; frame.perspective < .64f -> QualityGuidance.ALIGN_PARALLEL; stableReadyFrames >= 4 -> QualityGuidance.READY; else -> QualityGuidance.HOLD_STILL }
             val level = when { guidance == QualityGuidance.READY -> QualityLevel.GREEN; guidance in setOf(QualityGuidance.FIND_CARD, QualityGuidance.MOVE_CLOSER, QualityGuidance.MOVE_AWAY, QualityGuidance.ALIGN_PARALLEL) || baseReady -> QualityLevel.YELLOW; else -> QualityLevel.RED }
-            mainHandler.post { onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f))) }
+            mainHandler.post { onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), frame.corners)) }
         } finally { image.close() }
     }
 }
 
-internal data class CardFrame(val found: Boolean, val coverage: Float, val perspective: Float)
+internal data class CardFrame(val found: Boolean, val coverage: Float, val perspective: Float, val corners: List<Pair<Float, Float>> = emptyList())
 
 internal class CardFrameDetector {
     private val available = runCatching { OpenCVLoader.initLocal() }.getOrDefault(false)
@@ -262,7 +277,10 @@ internal class CardFrameDetector {
                     val aspectScore = (1.0 - abs(aspect - 63.0 / 88.0) / .35).coerceIn(0.0, 1.0).toFloat()
                     val margin = points.all { it.x > width * .015 && it.x < width * .985 && it.y > height * .015 && it.y < height * .985 }
                     val perspective = min(opposite, aspectScore) * if (margin) 1f else .5f
-                    best = CardFrame(true, (area / (imageArea * .62)).toFloat(), perspective); bestArea = area
+                    val visualCorners = points.sortedWith(compareBy<Point> { it.y }.thenBy { it.x }).let { sorted ->
+                        val top = sorted.take(2).sortedBy { it.x }; val bottom = sorted.takeLast(2).sortedByDescending { it.x }; top + bottom
+                    }.map { (1f - (it.y / height).toFloat()).coerceIn(0f, 1f) to (it.x / width).toFloat().coerceIn(0f, 1f) }
+                    best = CardFrame(true, (area / (imageArea * .62)).toFloat(), perspective, visualCorners); bestArea = area
                 }
                 curve.release(); approx.release()
             }

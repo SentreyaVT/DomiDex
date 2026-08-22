@@ -16,3 +16,7 @@ Portfolio valuation uses the raw `trend` field in EUR, without fallback to anoth
 WorkManager schedules a network-constrained daily update. Startup requests work only when the last successful import is at least 24 hours old; manual refresh uses unique work to avoid duplicate concurrent imports. Regular tests use local fixtures. The opt-in live smoke test runs only with JVM property `cardvault.liveSmoke=true`.
 
 The source adapter and external identity fields remain TCG-neutral. A future public release must independently re-check Cardmarket's then-current commercial data terms; no publishing is part of this phase.
+
+## Visual set browser
+
+Cardmarket's public product download deliberately remains the price identity source, but it does not contain card images or consistently structured collector numbers. The set-first browser therefore reads the openly published English JSON/image metadata from the Pokémon TCG API project's upstream data repository. This adapter is visual identity assistance only: selecting an image never silently assigns a Cardmarket price. The user must confirm the exact Cardmarket product before a price is linked. If the visual source is offline, the local collection and last Cardmarket prices continue to work.
