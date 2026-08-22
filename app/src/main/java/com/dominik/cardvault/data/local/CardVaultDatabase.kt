@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [CatalogCardEntity::class, CollectionEntryEntity::class, RawPriceSnapshotEntity::class, GradedMarketRecordEntity::class, GradingAnalysisEntity::class, AppMetadataEntity::class, CatalogSyncStateEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class CardVaultDatabase : RoomDatabase() {
@@ -21,7 +21,7 @@ abstract class CardVaultDatabase : RoomDatabase() {
         fun get(context: Context): CardVaultDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, CardVaultDatabase::class.java, "cardvault.db")
                 // Every future schema version must provide explicit migrations. Never silently erase collections.
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build().also { instance = it }
         }
 
@@ -49,6 +49,12 @@ abstract class CardVaultDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE collection_entries ADD COLUMN externalProductSource TEXT")
                 db.execSQL("ALTER TABLE collection_entries ADD COLUMN externalProductId INTEGER")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_collection_entries_externalProductSource_externalProductId ON collection_entries(externalProductSource, externalProductId)")
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE catalog_cards ADD COLUMN imageUrl TEXT")
             }
         }
     }

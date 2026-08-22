@@ -1,16 +1,21 @@
 package com.dominik.cardvault.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -27,9 +32,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +64,9 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
 }
 
 @Composable fun CardVaultApp(repository: CollectionRepository, refreshCatalog: () -> Unit = {}) {
+    val context = LocalContext.current
+    val preferences = remember(context) { context.getSharedPreferences("cardvault_ui", Context.MODE_PRIVATE) }
+    var focusChoice by rememberSaveable { mutableStateOf(preferences.getString("dashboard_focus", "auto") ?: "auto") }
     var destination by rememberSaveable { mutableStateOf(Destination.DASHBOARD) }
     val portfolio by repository.portfolio.collectAsState(initial = PortfolioSummary.Empty)
     val syncStatus by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
@@ -71,7 +80,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
         ) } }
     }) { padding -> Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(VaultNight, Color(0xFF121024), VaultNight))).padding(padding)) {
         when (destination) {
-            Destination.DASHBOARD -> DashboardScreen(portfolio, syncStatus, refreshCatalog) { destination = Destination.SCANNER }
+            Destination.DASHBOARD -> DashboardScreen(portfolio, syncStatus, refreshCatalog, focusChoice, { choice -> focusChoice = choice; preferences.edit().putString("dashboard_focus", choice).apply() }) { destination = Destination.SCANNER }
             Destination.SCANNER -> ScannerScreen(repository)
             Destination.COLLECTION -> CollectionScreen(portfolio.cards, repository)
             Destination.GRADING -> GradingScreen()
@@ -81,13 +90,13 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
 
 @Composable private fun ScreenHeader(eyebrow: String, title: String, subtitle: String) = Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
     Text(eyebrow.uppercase(), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 1.5.sp)
-    Text(title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+    Text(title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold, color = VaultText)
     Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-@Composable private fun DashboardScreen(portfolio: PortfolioSummary, syncStatus: CatalogSyncStatus, refreshCatalog: () -> Unit, openScanner: () -> Unit) = LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
+@Composable private fun DashboardScreen(portfolio: PortfolioSummary, syncStatus: CatalogSyncStatus, refreshCatalog: () -> Unit, focusChoice: String, onFocusChoice: (String) -> Unit, openScanner: () -> Unit) = LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
     item { ScreenHeader(stringResource(R.string.dashboard_eyebrow), stringResource(R.string.dashboard_title), stringResource(R.string.dashboard_subtitle)) }
-    item { PortfolioHero(portfolio) }
+    item { PortfolioHero(portfolio, focusChoice, onFocusChoice) }
     item { CatalogSyncCard(syncStatus, refreshCatalog) }
     item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { StatCard(stringResource(R.string.stat_cards), portfolio.totalCards.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_unique), portfolio.cards.size.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_languages), portfolio.cards.map { it.language }.distinct().size.toString(), Modifier.weight(1f)) } }
     item { ElevatedCard(shape = CardVaultShapes.card, colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) { Column(Modifier.padding(16.dp)) { Text(stringResource(R.string.portfolio_history), color = VaultTextMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); ValueHistoryChart(portfolio.history, Modifier.fillMaxWidth().height(92.dp)) } } }
@@ -111,7 +120,11 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     }
 }
 
-@Composable private fun PortfolioHero(portfolio: PortfolioSummary) {
+@Composable private fun PortfolioHero(portfolio: PortfolioSummary, focusChoice: String, onFocusChoice: (String) -> Unit) {
+    var choosingFocus by remember { mutableStateOf(false) }
+    val automatic = portfolio.cards.maxByOrNull { it.currentValueEur }
+    val manual = focusChoice.removePrefix("entry:").toLongOrNull()?.let { id -> portfolio.cards.firstOrNull { it.entryId == id } }
+    val focusCard = if (focusChoice == "auto") automatic else manual ?: automatic
     ElevatedCard(
         shape = CardVaultShapes.feature,
         colors = CardDefaults.elevatedCardColors(containerColor = Color.Transparent),
@@ -122,17 +135,58 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
                 drawCircle(MewIce.copy(alpha = .10f), radius = size.minDimension * .52f, center = Offset(size.width * .84f, size.height * .20f))
                 drawCircle(MewRose.copy(alpha = .08f), radius = size.minDimension * .34f, center = Offset(size.width * .60f, size.height * .92f))
             }
-            Row(Modifier.fillMaxSize().padding(start = 20.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxSize().padding(start = 20.dp, end = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Surface(color = MewRose.copy(alpha = .16f), shape = CardVaultShapes.field) { Text(stringResource(R.string.portfolio_private_badge), Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = Color(0xFFFFD8E5), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
                     Text(stringResource(R.string.portfolio_estimated_value), color = VaultTextMuted, fontSize = 13.sp)
                     Text(euro(portfolio.totalValue), fontSize = 30.sp, fontWeight = FontWeight.Black, color = VaultText, maxLines = 1)
                     Text(stringResource(R.string.portfolio_change, portfolio.changePercent), color = VaultPositive, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                    TextButton(onClick = { choosingFocus = true }, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)) { Text(stringResource(if (focusChoice == "auto") R.string.focus_automatic else R.string.focus_manual), fontSize = 11.sp) }
                 }
-                Image(painter = painterResource(R.drawable.brand_dashboard_hero), contentDescription = stringResource(R.string.brand_dashboard_hero_description), modifier = Modifier.size(CardVaultSpacing.heroArt))
+                InteractiveFocusCard(focusCard, Modifier.size(116.dp, 164.dp))
             }
         }
     }
+    if (choosingFocus) AlertDialog(
+        onDismissRequest = { choosingFocus = false }, title = { Text(stringResource(R.string.focus_choose_title)) },
+        text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item { OutlinedCard(onClick = { onFocusChoice("auto"); choosingFocus = false }, modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text(stringResource(R.string.focus_automatic), fontWeight = FontWeight.Bold); Text(stringResource(R.string.focus_automatic_hint), color = VaultTextMuted, fontSize = 11.sp) } } }
+            items(portfolio.cards, key = { it.entryId }) { card -> OutlinedCard(onClick = { onFocusChoice("entry:${card.entryId}"); choosingFocus = false }, modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { if (card.imageUrl != null) AsyncImage(card.imageUrl, null, Modifier.size(36.dp, 50.dp)) else NeutralCardFace(Modifier.size(36.dp, 50.dp)); Column { Text(card.name, fontWeight = FontWeight.Bold); Text("${card.set} · ${card.number}", color = VaultTextMuted, fontSize = 11.sp) } } } }
+        } }, confirmButton = {}, dismissButton = { TextButton(onClick = { choosingFocus = false }) { Text(stringResource(R.string.action_cancel)) } }
+    )
+}
+
+@Composable private fun InteractiveFocusCard(card: CollectionCard?, modifier: Modifier = Modifier, shineEnabled: Boolean = true) {
+    val context = LocalContext.current
+    var sensorX by remember { mutableFloatStateOf(0f) }; var sensorY by remember { mutableFloatStateOf(0f) }
+    var dragX by remember { mutableFloatStateOf(0f) }; var dragY by remember { mutableFloatStateOf(0f) }
+    DisposableEffect(context) {
+        val manager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val sensor = manager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        val listener = object : SensorEventListener {
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+            override fun onSensorChanged(event: SensorEvent) {
+                val matrix = FloatArray(9); val orientation = FloatArray(3)
+                SensorManager.getRotationMatrixFromVector(matrix, event.values); SensorManager.getOrientation(matrix, orientation)
+                sensorX = (orientation[1] * 9f).coerceIn(-7f, 7f); sensorY = (-orientation[2] * 9f).coerceIn(-7f, 7f)
+            }
+        }
+        if (sensor != null) manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
+        onDispose { manager.unregisterListener(listener) }
+    }
+    Box(modifier.graphicsLayer { rotationX = sensorX + dragY; rotationY = sensorY + dragX; cameraDistance = 14 * density }
+        .pointerInput(Unit) { detectDragGestures(onDragEnd = { dragX = 0f; dragY = 0f }) { change, amount -> change.consume(); dragX = (dragX + amount.x / 8f).coerceIn(-12f, 12f); dragY = (dragY - amount.y / 8f).coerceIn(-12f, 12f) } }
+        .background(VaultNightRaised, CardVaultShapes.card).border(1.dp, MewIce.copy(alpha = .65f), CardVaultShapes.card)) {
+        if (card?.imageUrl != null) AsyncImage(card.imageUrl, stringResource(R.string.focus_card_description, card.name), Modifier.fillMaxSize()) else NeutralCardFace(Modifier.fillMaxSize())
+        if (shineEnabled) Canvas(Modifier.matchParentSize().clearAndSetSemantics { }) { drawRect(Brush.linearGradient(listOf(Color.Transparent, MewIce.copy(alpha = .18f), MewRose.copy(alpha = .10f), Color.Transparent)), alpha = .7f) }
+    }
+}
+
+@Composable private fun NeutralCardFace(modifier: Modifier = Modifier) = Canvas(modifier.background(Brush.linearGradient(listOf(Color(0xFF1B2437), Color(0xFF352B4B))), CardVaultShapes.card).padding(10.dp)) {
+    drawRoundRect(VaultOutline, style = Stroke(2f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(12f))
+    val center = Offset(size.width / 2, size.height * .42f); val r = size.minDimension * .16f
+    val gem = Path().apply { moveTo(center.x, center.y - r); lineTo(center.x + r, center.y); lineTo(center.x, center.y + r); lineTo(center.x - r, center.y); close() }
+    drawPath(gem, MewIce.copy(alpha = .72f), style = Stroke(4f)); drawLine(VaultOutline, Offset(size.width * .2f, size.height * .72f), Offset(size.width * .8f, size.height * .72f), 3f); drawLine(VaultOutline.copy(alpha = .6f), Offset(size.width * .28f, size.height * .8f), Offset(size.width * .72f, size.height * .8f), 3f)
 }
 
 @Composable private fun StatCard(label: String, value: String, modifier: Modifier) = OutlinedCard(modifier, shape = CardVaultShapes.card, colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised)) { Column(Modifier.padding(CardVaultSpacing.card)) { Text(value, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MewIce); Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
@@ -154,6 +208,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     var catalogDraft by remember { mutableStateOf<CatalogSearchResult?>(null) }
     var addOutcome by remember { mutableStateOf<AddCardOutcome?>(null) }
     var editing by remember { mutableStateOf<CollectionCard?>(null) }
+    var viewing by remember { mutableStateOf<CollectionCard?>(null) }
     var deleting by remember { mutableStateOf<CollectionCard?>(null) }
     var linking by remember { mutableStateOf<CollectionCard?>(null) }
     val scope = rememberCoroutineScope()
@@ -164,18 +219,32 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     addOutcome?.let { outcome -> item { Text(stringResource(if (outcome == AddCardOutcome.QUANTITY_INCREMENTED) R.string.add_outcome_incremented else R.string.add_outcome_created), color = VaultPositive, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } }
     item { OutlinedTextField(query, { query = it }, label = { Text(stringResource(R.string.collection_search)) }, singleLine = true, shape = CardVaultShapes.field, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MewRose, cursorColor = MewRose, focusedLabelColor = MewRose, unfocusedContainerColor = VaultNightRaised, focusedContainerColor = VaultNightRaised), modifier = Modifier.fillMaxWidth()) }
     if (filtered.isEmpty()) item { Text(stringResource(R.string.collection_empty), modifier = Modifier.padding(vertical = 30.dp)) }
-    items(filtered, key = { it.entryId }) { card -> CardRow(card) { editing = card } }; item { DataNote() }
+    items(filtered, key = { it.entryId }) { card -> CardRow(card) { viewing = card } }; item { DataNote() }
     }
     if (choosingAddMode) AddModeDialog(onDismiss = { choosingAddMode = false }, onCatalog = { choosingAddMode = false; choosingCatalogCard = true }, onManual = { choosingAddMode = false; catalogDraft = null; adding = true })
     if (choosingCatalogCard) CatalogProductPicker(repository, onDismiss = { choosingCatalogCard = false }, onSelected = { catalogDraft = it; choosingCatalogCard = false; adding = true })
     if (adding) ManualCardDialog(initialCatalog = catalogDraft, onDismiss = { adding = false; catalogDraft = null }, onSave = { input -> scope.launch { addOutcome = repository.addManualCard(input) }; adding = false; catalogDraft = null })
+    viewing?.let { card -> CardPreviewDialog(card, onDismiss = { viewing = null }, onEdit = { viewing = null; editing = card }) }
     editing?.let { card -> EditEntryDialog(card, onDismiss = { editing = null }, onDelete = { editing = null; deleting = card }, onLink = { editing = null; linking = card }, onSave = { update -> scope.launch { repository.updateEntry(card.entryId, update) }; editing = null }) }
     linking?.let { card -> CatalogLinkDialog(card, repository, onDismiss = { linking = null }, onLinked = { productId -> scope.launch { repository.linkCatalogProduct(card.entryId, productId) }; linking = null }) }
     deleting?.let { card -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text(stringResource(R.string.delete_entry_title)) }, text = { Text(stringResource(R.string.delete_entry_body, card.name)) }, confirmButton = { TextButton(onClick = { scope.launch { repository.deleteEntry(card.entryId) }; deleting = null }) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.action_cancel)) } }) }
 }
 
+@Composable private fun CardPreviewDialog(card: CollectionCard, onDismiss: () -> Unit, onEdit: () -> Unit) {
+    var shine by rememberSaveable(card.entryId) { mutableStateOf(false) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(card.name) }, text = { Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        InteractiveFocusCard(card, Modifier.size(210.dp, 297.dp), shineEnabled = shine)
+        Text("${card.set} · ${card.number}", fontWeight = FontWeight.Bold)
+        Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(stringResource(R.string.card_preview_shine), fontWeight = FontWeight.SemiBold); Text(stringResource(R.string.card_preview_shine_hint), color = VaultTextMuted, fontSize = 10.sp) }; Switch(shine, { shine = it }) }
+    } }, confirmButton = { TextButton(onClick = onEdit) { Text(stringResource(R.string.card_preview_edit)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
+}
+
 @Composable private fun CardRow(card: CollectionCard, onClick: (() -> Unit)? = null) = ElevatedCard(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier), shape = CardVaultShapes.card, colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) { Row(Modifier.padding(CardVaultSpacing.card), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CardVaultSpacing.card)) {
-    Box(Modifier.size(48.dp, 66.dp).background(Color(card.accent), CardVaultShapes.thumbnail), contentAlignment = Alignment.Center) { Text(card.name.take(1), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black) }
+    Box(Modifier.size(54.dp, 75.dp).background(Color(card.accent), CardVaultShapes.thumbnail), contentAlignment = Alignment.Center) {
+        if (card.imageUrl != null) AsyncImage(model = card.imageUrl, contentDescription = stringResource(R.string.collection_card_image_description, card.name, card.number), modifier = Modifier.fillMaxSize())
+        else Text(card.name.take(1), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black)
+    }
     Column(Modifier.weight(1f)) { Text(card.name, fontWeight = FontWeight.Bold); Text("${card.set} · ${card.number}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.card_metadata, card.language.label, card.condition, card.quantity), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp); if (card.externalProductId != null) Text(stringResource(R.string.catalog_linked_badge), color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
     Column(horizontalAlignment = Alignment.End) { Text(if (card.priceUpdatedAtEpochMillis == null) stringResource(R.string.no_market_price) else euro(card.currentValueEur * card.quantity), fontWeight = FontWeight.Bold, fontSize = if (card.priceUpdatedAtEpochMillis == null) 11.sp else 14.sp); if (card.priceUpdatedAtEpochMillis != null) Text((if (card.changePercent >= 0) "+" else "") + "%.1f%%".format(Locale.US, card.changePercent), color = if (card.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error, fontSize = 12.sp) }
 } }
@@ -216,6 +285,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
         if (selectedCard == null) OutlinedTextField(query, { query = it }, label = { Text(stringResource(if (selectedSet == null) R.string.catalog_set_search else R.string.catalog_card_search)) }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field)
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (error) Text(stringResource(R.string.catalog_visual_error), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        if (!loading && !error && selectedSet == null) Text(stringResource(R.string.catalog_set_count, sets.size), color = VaultPositive, fontSize = 11.sp)
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when {
                 selectedCard != null -> {
@@ -263,7 +333,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
             item { FormField(quantity, { quantity = it.filter(Char::isDigit) }, R.string.field_quantity, KeyboardType.Number) }; item { FormField(condition, { condition = it }, R.string.field_condition) }
             item { FormField(price, { price = it }, R.string.field_acquisition_price, KeyboardType.Decimal) }; item { FormField(date, { date = it }, R.string.field_acquisition_date) }; item { FormField(notes, { notes = it }, R.string.field_notes, singleLine = false) }
         }
-    }, confirmButton = { TextButton(enabled = valid, onClick = { onSave(ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, initialCatalog?.productId)) }) { Text(stringResource(R.string.action_save)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
+    }, confirmButton = { TextButton(enabled = valid, onClick = { onSave(ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, initialCatalog?.productId, initialCatalog?.imageUrl)) }) { Text(stringResource(R.string.action_save)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
 }
 
 @Composable private fun EditEntryDialog(card: CollectionCard, onDismiss: () -> Unit, onDelete: () -> Unit, onLink: () -> Unit, onSave: (CollectionEntryUpdate) -> Unit) {

@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Private-build indirection. A future public flavor must override these resources
-         with original or licensed artwork before any store release. -->
-    <item name="brand_dashboard_hero" type="drawable">@drawable/mew_hero</item>
-    <item name="brand_dashboard_hero_description" type="string">@string/mew_hero_description</item>
-</resources>

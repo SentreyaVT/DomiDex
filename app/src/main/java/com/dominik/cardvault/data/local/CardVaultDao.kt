@@ -21,7 +21,7 @@ interface CardVaultDao {
                p.currency AS priceCurrency,
                p.effectiveAtEpochMillis AS priceUpdatedAtEpochMillis,
                e.externalProductSource, e.externalProductId,
-               COALESCE(linked.id, c.id) AS priceCardId
+               COALESCE(linked.id, c.id) AS priceCardId, c.imageUrl
         FROM collection_entries e
         JOIN catalog_cards c ON c.id = e.cardId
         LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource

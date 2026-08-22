@@ -7,7 +7,15 @@
     <string name="dashboard_eyebrow">CardVault</string>
     <string name="dashboard_title">Deine Sammlung</string>
     <string name="dashboard_subtitle">Privat, offline orientiert und immer unter deiner Kontrolle.</string>
-    <string name="mew_hero_description">Mew schwebt über dem CardVault-Portfolio</string>
+    <string name="focus_choose_title">Fokuskarte auswählen</string>
+    <string name="focus_automatic">Fokus: automatisch wertvollste Karte</string>
+    <string name="focus_manual">Fokus: manuell ausgewählte Karte</string>
+    <string name="focus_automatic_hint">CardVault zeigt automatisch den derzeit wertvollsten eindeutig bepreisten Sammlungseintrag.</string>
+    <string name="focus_card_description">Interaktive Fokuskarte: %1$s</string>
+    <string name="card_preview_variant">%1$s · tatsächliches Finish: %2$s · Variante: %3$s</string>
+    <string name="card_preview_shine">Glanzvorschau</string>
+    <string name="card_preview_shine_hint">Nur ein visueller Vergleichseffekt. Er ändert oder erkennt die echte Druckvariante nicht.</string>
+    <string name="card_preview_edit">Eintrag bearbeiten</string>
     <string name="portfolio_private_badge">Privater Tresor</string>
     <string name="portfolio_history">Wertentwicklung</string>
     <string name="portfolio_estimated_value">Geschätzter Portfoliowert</string>
@@ -29,6 +37,7 @@
     </plurals>
     <string name="collection_search">Karten oder Sets durchsuchen</string>
     <string name="collection_empty">Keine passende Karte gefunden.</string>
+    <string name="collection_card_image_description">Kartenbild von %1$s, Nummer %2$s</string>
     <string name="manual_add">Karte manuell hinzufügen</string>
     <string name="manual_add_title">Eigene Karte hinzufügen</string>
     <string name="manual_add_boundary">Manuelle Eingabe, bis Scan und Katalogauswahl verfügbar sind.</string>
@@ -176,6 +185,7 @@
     <string name="catalog_confirm_price_identity">Wähle den exakten Cardmarket-Druck. Erst diese Bestätigung verbindet einen Preis; CardVault rät nicht.</string>
     <string name="catalog_no_price_match">Für diese englische Katalogidentität wurde kein eindeutiges Cardmarket-Produkt gefunden. Du kannst sie weiterhin ohne Preis erfassen.</string>
     <string name="catalog_visual_error">Der bebilderte Katalog ist gerade nicht erreichbar. Deine lokale Sammlung und vorhandenen Preise bleiben erhalten.</string>
+    <string name="catalog_set_count">%1$d englische Referenzsets geladen – einschließlich historischer Sets ab 1999. Andere Sprachmärkte können in dieser Bildquelle fehlen.</string>
     <string name="catalog_card_image_description">Kartenbild von %1$s, Nummer %2$s</string>
     <string name="action_back">Zurück</string>
 </resources>

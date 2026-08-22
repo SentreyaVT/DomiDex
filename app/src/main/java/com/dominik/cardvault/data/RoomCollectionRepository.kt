@@ -27,7 +27,7 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
             CollectionCard(row.entryId, row.cardId, row.name, row.setName, row.collectorNumber,
                 CardLanguage.fromStorage(row.language), row.finish, row.variant, row.condition, row.quantity,
                 (latest ?: 0L) / 100.0, change, row.priceUpdatedAtEpochMillis, row.notes,
-                row.acquisitionPriceMinor?.div(100.0), row.acquisitionDateEpochDay, accentFor(row.name))
+                row.acquisitionPriceMinor?.div(100.0), row.acquisitionDateEpochDay, accentFor(row.name), imageUrl = row.imageUrl)
                 .copy(externalProductId = row.externalProductId)
         }
         PortfolioSummary(cards, buildHistory(rows, prices))
@@ -60,7 +60,7 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
             }
         }
         val cardId = "manual-${UUID.randomUUID()}"
-        dao.insertCatalogCard(CatalogCardEntity(cardId, "POKEMON", "manual", input.setName.trim(), input.name.trim(), input.collectorNumber.trim(), input.language.name, normalizedFinish, normalizedVariant, now))
+        dao.insertCatalogCard(CatalogCardEntity(cardId, "POKEMON", "manual", input.setName.trim(), input.name.trim(), input.collectorNumber.trim(), input.language.name, normalizedFinish, normalizedVariant, now, imageUrl = input.imageUrl))
         dao.insertCollectionEntry(CollectionEntryEntity(cardId = cardId, quantity = input.quantity.coerceAtLeast(1), condition = normalizedCondition, acquisitionPriceMinor = input.acquisitionPriceEur?.times(100)?.roundToLong(), acquisitionCurrency = input.acquisitionPriceEur?.let { "EUR" }, acquisitionDateEpochDay = input.acquisitionDateEpochDay, notes = input.notes.trim(), frontPhotoUri = null, backPhotoUri = null, createdAtEpochMillis = now, updatedAtEpochMillis = now, externalProductSource = input.externalProductId?.let { com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }, externalProductId = input.externalProductId))
         AddCardOutcome.CREATED
     }

@@ -90,4 +90,16 @@ class CardVaultDatabaseTest {
             close()
         }
     }
+
+    @Test fun migrationThreeToFourPreservesCardsAndAddsNullableImage() {
+        val name = "migration-three-four"
+        migrationHelper.createDatabase(name, 3).apply {
+            execSQL("INSERT INTO catalog_cards (id,tcg,setId,setName,name,collectorNumber,language,finish,variant,createdAtEpochMillis,externalSource,externalProductId) VALUES ('kept','POKEMON','s','Set','Mew','1','GERMAN','Normal','Standard',1,NULL,NULL)")
+            close()
+        }
+        migrationHelper.runMigrationsAndValidate(name, 4, true, CardVaultDatabase.MIGRATION_3_4).apply {
+            query("SELECT name, imageUrl FROM catalog_cards WHERE id='kept'").use { assertTrue(it.moveToFirst()); assertEquals("Mew", it.getString(0)); assertTrue(it.isNull(1)) }
+            close()
+        }
+    }
 }

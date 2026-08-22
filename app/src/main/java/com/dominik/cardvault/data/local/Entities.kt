@@ -19,6 +19,7 @@ data class CatalogCardEntity(
     val createdAtEpochMillis: Long,
     val externalSource: String? = null,
     val externalProductId: Long? = null,
+    val imageUrl: String? = null,
 )
 
 @Entity(
@@ -154,6 +155,7 @@ data class CollectionProjection(
     val externalProductSource: String?,
     val externalProductId: Long?,
     val priceCardId: String,
+    val imageUrl: String?,
 )
 
 data class CatalogSearchProjection(
