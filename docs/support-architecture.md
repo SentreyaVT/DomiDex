@@ -17,6 +17,14 @@ Eine echte Inbox braucht einen externen, vom Betreiber kontrollierten Backend-Di
 
 Der Android-Client darf eine Adminrolle niemals aus einer E-Mail-Adresse oder lokalen Einstellung ableiten. Das Backend validiert das Google-ID-Token und liefert eine signierte/authoritative Rolle. Die konkrete Betreiber-E-Mail und Google-UID werden erst nach ausdrücklicher Nennung serverseitig zugeordnet.
 
+## Rollenbasierte Oberfläche
+
+- Abgemeldete und normale Nutzer erhalten ausschließlich die normale CardVault- und eigene Supportansicht. Betreiber-/Teamnavigation, globale Inbox und Fallverwaltung werden nicht dargestellt.
+- `SUPPORT_AGENT` darf nach serverseitig bestätigter Rolle Inbox und Fallverwaltung sehen, aber keine administrative Konfiguration.
+- `ADMIN` darf zusätzliche Verwaltungsbereiche sehen. Welche einzelne Aktion erlaubt ist, entscheidet trotzdem immer das Backend anhand des aktuellen Tokens.
+- Die UI-Fähigkeitsmatrix ist ausschließlich UX. Ausgeblendete Schaltflächen sind keine Sicherheitsgrenze. Direkte Requests, manipulierte Clients und abgelaufene Rollen werden durch Firebase-Regeln bzw. Backend-Autorisierung abgewiesen.
+- Es gibt keinen lokalen Adminschalter und keine Ableitung aus E-Mail, Anzeigename, Build-Variante oder Gerätezustand.
+
 ## Kleinster nächster Einrichtungsschritt
 
 Vor dem ersten Google-Login müssen in der Firebase-Konsole der Google-Anbieter aktiviert, die benötigten SHA-Fingerprints eingetragen und anschließend eine aktualisierte `google-services.json` heruntergeladen werden. Die Admin-Zuordnung erfolgt erst später serverseitig anhand einer ausdrücklich genannten Betreiberidentität; nie anhand einer lokalen E-Mail-Abfrage. Firestore-Regeln, Backend-Rollen und Push erfordern eine gesonderte Datenschutz-, Kosten- und Betriebsfreigabe. Geheimnisse gehören nicht in die App. Bis dahin bleibt die Inbox sichtbar als nicht konfiguriert und es wird keine Produktionsfunktion vorgetäuscht.

@@ -7,6 +7,7 @@ Diese Leitlinie bereitet spätere kostenpflichtige Funktionen vor. Sie aktiviert
 - Die Android-App ist niemals Autorität für `ADMIN`, `SUPPORT_AGENT` oder `PRO`.
 - Google-Anmeldung liefert eine Identität. Ein kontrolliertes Backend validiert das ID-Token und ermittelt Rollen und Entitlements serverseitig.
 - Betreiber- und Supportrollen werden anhand serverseitig gepflegter Identitäten vergeben, nicht anhand einer lokal verglichenen E-Mail-Adresse.
+- Rollen steuern eine getrennte Oberfläche: normale Nutzer sehen keine Teamfunktionen; Support-Agenten sehen Inbox/Fälle und Admins gegebenenfalls Verwaltung. Diese Unsichtbarkeit ist nur UX und ersetzt nie die serverseitige Prüfung jeder Aktion.
 - Bei fehlender oder abgelaufener Bestätigung bleiben geschützte Funktionen geschlossen; lokale Sammlungsdaten bleiben weiterhin lesbar und sicher.
 
 ## Datenzugriff
