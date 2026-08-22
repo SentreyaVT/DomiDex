@@ -1,8 +1,12 @@
 package com.dominik.cardvault.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -101,8 +105,32 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { StatCard(stringResource(R.string.stat_cards), portfolio.totalCards.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_unique), portfolio.cards.size.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_languages), portfolio.cards.map { it.language }.distinct().size.toString(), Modifier.weight(1f)) } }
     item { ElevatedCard(shape = CardVaultShapes.card, colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) { Column(Modifier.padding(16.dp)) { Text(stringResource(R.string.portfolio_history), color = VaultTextMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); ValueHistoryChart(portfolio.history, Modifier.fillMaxWidth().height(92.dp)) } } }
     item { Button(openScanner, Modifier.fillMaxWidth().height(CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card) { Text(stringResource(R.string.scan_card), fontWeight = FontWeight.Bold) } }
+    item { SupportInfoCard() }
     item { Text(stringResource(R.string.recent_cards), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
     items(portfolio.cards.take(3)) { CardRow(it) }; item { DataNote() }
+}
+
+@Composable private fun SupportInfoCard() {
+    val context = LocalContext.current
+    OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised), shape = CardVaultShapes.card) {
+        Column(Modifier.padding(CardVaultSpacing.card), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Text(stringResource(R.string.support_title), fontWeight = FontWeight.Bold)
+            Text(stringResource(if (AppSupportConfig.isConfigured) R.string.support_ready else R.string.support_not_configured), color = VaultTextMuted, fontSize = 11.sp)
+            OutlinedButton(onClick = { openSupportEmail(context) }, enabled = AppSupportConfig.isConfigured, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.support_contact)) }
+            OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.support_inbox)) }
+            Text(stringResource(R.string.support_inbox_not_configured), color = VaultTextMuted, fontSize = 10.sp)
+            Text(stringResource(R.string.support_privacy), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+        }
+    }
+}
+
+private fun openSupportEmail(context: Context) {
+    if (!AppSupportConfig.isConfigured) return
+    val uri = Uri.Builder().scheme("mailto").opaquePart(AppSupportConfig.email).build()
+    val intent = Intent(Intent.ACTION_SENDTO, uri)
+        .putExtra(Intent.EXTRA_SUBJECT, "CardVault – Supportanfrage")
+        .putExtra(Intent.EXTRA_TEXT, "Problembeschreibung:\n\n\nApp-Version: ${context.packageManager.getPackageInfo(context.packageName, 0).versionName}\n\nKeine Diagnose- oder Sammlungsdaten wurden automatisch angehängt.")
+    context.startActivity(intent)
 }
 
 @Composable private fun CatalogSyncCard(status: CatalogSyncStatus, refresh: () -> Unit) {
@@ -232,12 +260,39 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
 
 @Composable private fun CardPreviewDialog(card: CollectionCard, onDismiss: () -> Unit, onEdit: () -> Unit) {
     var shine by rememberSaveable(card.entryId) { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(card.name) }, text = { Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        InteractiveFocusCard(card, Modifier.size(210.dp, 297.dp), shineEnabled = shine)
-        Text("${card.set} · ${card.number}", fontWeight = FontWeight.Bold)
-        Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(stringResource(R.string.card_preview_shine), fontWeight = FontWeight.SemiBold); Text(stringResource(R.string.card_preview_shine_hint), color = VaultTextMuted, fontSize = 10.sp) }; Switch(shine, { shine = it }) }
+    val context = LocalContext.current
+    val priceDate = card.priceUpdatedAtEpochMillis?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, Locale.GERMANY).format(java.util.Date(it)) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(card.name) }, text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = 570.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { InteractiveFocusCard(card, Modifier.size(174.dp, 246.dp), shineEnabled = shine) }
+        item { Text("${card.set} · ${card.number}", fontWeight = FontWeight.Bold) }
+        item { Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
+        item { Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(stringResource(R.string.card_preview_shine), fontWeight = FontWeight.SemiBold); Text(stringResource(R.string.card_preview_shine_hint), color = VaultTextMuted, fontSize = 10.sp) }; Switch(shine, { shine = it }) } }
+        item { HorizontalDivider(color = VaultOutline) }
+        item { PriceSourcesSection(card, priceDate, context) }
     } }, confirmButton = { TextButton(onClick = onEdit) { Text(stringResource(R.string.card_preview_edit)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
+}
+
+@Composable private fun PriceSourcesSection(card: CollectionCard, priceDate: String?, context: Context) = Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(stringResource(R.string.price_sources_title), fontWeight = FontWeight.Bold, color = MewRoseSoft)
+    Text(if (priceDate == null) stringResource(R.string.raw_reference_unavailable) else stringResource(R.string.raw_reference_value, euro(card.currentValueEur), priceDate), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+    if (card.externalProductId != null) {
+        Button(onClick = { openOfficialPage(context, OfficialSourceLinks.cardmarketProduct(card.externalProductId)) }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.open_cardmarket_current)) }
+        Text(stringResource(R.string.cardmarket_external_exact_hint, card.externalProductId), color = VaultTextMuted, fontSize = 10.sp)
+    } else {
+        OutlinedButton(onClick = { openOfficialPage(context, OfficialSourceLinks.cardmarketSearch(card)) }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.open_cardmarket_search)) }
+        Text(stringResource(R.string.cardmarket_external_unlinked_hint), color = VaultTextMuted, fontSize = 10.sp)
+    }
+    OutlinedButton(onClick = {
+        val query = OfficialSourceLinks.psaSearchText(card)
+        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("PSA-Suchtext", query))
+        openOfficialPage(context, OfficialSourceLinks.PSA_AUCTION_PRICES)
+    }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.open_psa_research)) }
+    Text(stringResource(R.string.psa_research_hint, OfficialSourceLinks.psaSearchText(card)), color = VaultTextMuted, fontSize = 10.sp)
+    Text(stringResource(R.string.source_separation_explanation), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+}
+
+private fun openOfficialPage(context: Context, url: String) {
+    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
 @Composable private fun CardRow(card: CollectionCard, onClick: (() -> Unit)? = null) = ElevatedCard(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier), shape = CardVaultShapes.card, colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) { Row(Modifier.padding(CardVaultSpacing.card), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CardVaultSpacing.card)) {
@@ -282,6 +337,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(when { selectedCard != null -> stringResource(R.string.catalog_choose_product); selectedSet != null -> selectedSet!!.name; else -> stringResource(R.string.catalog_choose_set) }) }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource(when { selectedCard != null -> R.string.catalog_confirm_price_identity; selectedSet != null -> R.string.catalog_choose_card_hint; else -> R.string.catalog_choose_set_hint }), color = VaultTextMuted, fontSize = 12.sp)
+        if (selectedSet == null) Text(stringResource(R.string.catalog_coverage_boundary), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
         if (selectedCard == null) OutlinedTextField(query, { query = it }, label = { Text(stringResource(if (selectedSet == null) R.string.catalog_set_search else R.string.catalog_card_search)) }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field)
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (error) Text(stringResource(R.string.catalog_visual_error), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
@@ -293,7 +349,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
                     if (!loading && products.isEmpty()) item { Text(stringResource(R.string.catalog_no_price_match), color = VaultTextMuted, fontSize = 12.sp) }
                     items(products, key = { it.productId }) { result -> CatalogResultRow(result) { onSelected(result) } }
                 }
-                selectedSet != null -> items(cards.filter { query.isBlank() || it.name.contains(query, true) || it.number.contains(query, true) }, key = { it.id }) { card -> VisualCardRow(card) { selectedCard = card } }
+                selectedSet != null -> items(cards.filter { matchesCardInSelectedSet(it.name, it.number, query) }, key = { it.id }) { card -> VisualCardRow(card) { selectedCard = card } }
                 else -> items(sets.filter { query.isBlank() || it.name.contains(query, true) || it.series.contains(query, true) }, key = { it.id }) { set ->
                     OutlinedCard(onClick = { selectedSet = set }, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         AsyncImage(model = set.logoUrl, contentDescription = null, modifier = Modifier.size(64.dp, 40.dp)); Column(Modifier.weight(1f).padding(start = 10.dp)) { Text(set.name, fontWeight = FontWeight.Bold); Text("${set.series} · ${set.printedTotal} Karten · ${set.releaseDate}", color = VaultTextMuted, fontSize = 11.sp) }
@@ -327,7 +383,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(R.string.manual_add_title)) }, text = {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { Text(stringResource(if (initialCatalog == null) R.string.manual_add_boundary else R.string.catalog_add_linked_boundary), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
-            item { FormField(name, { name = it }, R.string.field_card_name) }; item { FormField(set, { set = it }, R.string.field_set_name) }; item { FormField(number, { number = it }, R.string.field_collector_number) }
+            item { FormField(name, { name = it }, R.string.field_card_name) }; item { FormField(set, { set = it }, R.string.field_set_name) }; item { FormField(number, { number = it }, R.string.field_card_number_printed); Text(stringResource(R.string.field_card_number_hint), color = VaultTextMuted, fontSize = 10.sp) }
             item { Text(stringResource(R.string.field_language), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf(CardLanguage.GERMAN, CardLanguage.ENGLISH).forEach { item -> FilterChip(selected = language == item, onClick = { language = item }, label = { Text(item.label, fontSize = 11.sp) }) } }; Text(stringResource(R.string.language_scope_de_en), color = VaultTextMuted, fontSize = 10.sp) }
             item { Text(stringResource(R.string.field_finish), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { items(listOf("Normal", "Holo", "Reverse-Holo", "Sondervariante")) { option -> FilterChip(selected = finish == option, onClick = { finish = option }, label = { Text(option, fontSize = 11.sp) }) } } }; item { FormField(variant, { variant = it }, R.string.field_variant) }
             item { FormField(quantity, { quantity = it.filter(Char::isDigit) }, R.string.field_quantity, KeyboardType.Number) }; item { FormField(condition, { condition = it }, R.string.field_condition) }
