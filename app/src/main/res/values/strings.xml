@@ -53,6 +53,7 @@
     <string name="field_acquisition_date">Kaufdatum JJJJ-MM-TT (optional)</string>
     <string name="field_notes">Notizen</string>
     <string name="field_language">Sprache</string>
+    <string name="language_scope_de_en">Aktuell für den Nutztest freigegeben: Deutsch und Englisch. Der englische Bildkatalog wird manuell mit Sprache und Variante bestätigt.</string>
     <string name="action_save">Speichern</string>
     <string name="action_cancel">Abbrechen</string>
     <string name="action_delete">Löschen</string>
@@ -173,7 +174,7 @@
     <string name="add_without_catalog">Ohne Katalogzuordnung eingeben</string>
     <string name="add_without_catalog_hint">Für noch nicht gefundene Karten. CardVault zeigt dann bewusst keinen Marktpreis.</string>
     <string name="catalog_add_search_hint">Suche zuerst nach dem Kartennamen. Kartennummer, Sprache und Holo-Variante bestätigst du im nächsten Schritt.</string>
-    <string name="catalog_add_linked_boundary">Das offizielle Produkt ist vorausgewählt. Ergänze Kartennummer und Sprache und bestätige Holo beziehungsweise Reverse-Holo selbst; der öffentliche Download liefert diese Merkmale nicht immer eindeutig.</string>
+    <string name="catalog_add_linked_boundary">Das Preisprodukt ist vorausgewählt. Bestätige Deutsch oder Englisch sowie Normal, Holo oder Reverse-Holo selbst. Eine automatische Übersetzung deutscher Kartennamen und die Druckvariante werden nicht geraten.</string>
     <string name="add_outcome_created">✓ Karte wurde lokal gespeichert.</string>
     <string name="add_outcome_incremented">✓ Vorhandener identischer Katalogtreffer: Anzahl wurde erhöht.</string>
     <string name="catalog_choose_set">1. Set auswählen</string>

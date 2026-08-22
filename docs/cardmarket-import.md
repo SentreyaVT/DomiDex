@@ -20,3 +20,7 @@ The source adapter and external identity fields remain TCG-neutral. A future pub
 ## Visual set browser
 
 Cardmarket's public product download deliberately remains the price identity source, but it does not contain card images or consistently structured collector numbers. The set-first browser therefore reads the openly published English JSON/image metadata from the Pokémon TCG API project's upstream data repository. This adapter is visual identity assistance only: selecting an image never silently assigns a Cardmarket price. The user must confirm the exact Cardmarket product before a price is linked. If the visual source is offline, the local collection and last Cardmarket prices continue to work.
+
+### Current acceptance scope
+
+The verified private-use route is limited to German and English collection entries. The visual reference catalog is English; a German card can be selected by set and artwork, after which the user explicitly confirms German language, collector number, finish, variant, and the exact Cardmarket price product. Automatic German-to-English name translation is not treated as authoritative. Japanese and Chinese OCR scaffolding remains experimental and is not part of this acceptance scope.
