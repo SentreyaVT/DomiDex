@@ -29,7 +29,7 @@ class PokemonVisualCatalog {
     private fun <T> read(url: String, block: (JsonReader) -> T): T {
         val connection = (java.net.URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 12_000; readTimeout = 20_000
-            setRequestProperty("User-Agent", "CardVault/1.0 private Android app")
+            setRequestProperty("User-Agent", "DomiDex/1.0 private Android app")
         }
         try {
             if (connection.responseCode !in 200..299) error("Katalogdienst: HTTP ${connection.responseCode}")

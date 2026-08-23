@@ -56,7 +56,7 @@ class CardmarketImporter(private val context: Context, private val database: Car
     private suspend fun download(address: String, name: String): File = withContext(Dispatchers.IO) {
         val target = File.createTempFile("cardvault-", name, context.cacheDir)
         val connection = URL(address).openConnection() as HttpURLConnection
-        connection.connectTimeout = 20_000; connection.readTimeout = 90_000; connection.setRequestProperty("User-Agent", "CardVault/1.0 private Android app")
+        connection.connectTimeout = 20_000; connection.readTimeout = 90_000; connection.setRequestProperty("User-Agent", "DomiDex/1.0 private Android app")
         try { require(connection.responseCode in 200..299) { "Download fehlgeschlagen (HTTP ${connection.responseCode})." }; connection.inputStream.use { input -> target.outputStream().use(input::copyTo) } } finally { connection.disconnect() }
         target
     }

@@ -155,6 +155,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised), shape = CardVaultShapes.card) {
         Column(Modifier.padding(CardVaultSpacing.card), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text(stringResource(R.string.support_title), fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.support_operator), color = MewRoseSoft, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             Text(stringResource(if (AppSupportConfig.isConfigured) R.string.support_ready else R.string.support_not_configured), color = VaultTextMuted, fontSize = 11.sp)
             OutlinedButton(onClick = { openSupportEmail(context) }, enabled = AppSupportConfig.isConfigured, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.support_contact)) }
             OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.support_inbox)) }
@@ -168,7 +169,7 @@ private fun openSupportEmail(context: Context) {
     if (!AppSupportConfig.isConfigured) return
     val uri = Uri.Builder().scheme("mailto").opaquePart(AppSupportConfig.email).build()
     val intent = Intent(Intent.ACTION_SENDTO, uri)
-        .putExtra(Intent.EXTRA_SUBJECT, "CardVault – Supportanfrage")
+        .putExtra(Intent.EXTRA_SUBJECT, "DomiDex – Supportanfrage")
         .putExtra(Intent.EXTRA_TEXT, "Problembeschreibung:\n\n\nApp-Version: ${context.packageManager.getPackageInfo(context.packageName, 0).versionName}\n\nKeine Diagnose- oder Sammlungsdaten wurden automatisch angehängt.")
     context.startActivity(intent)
 }
