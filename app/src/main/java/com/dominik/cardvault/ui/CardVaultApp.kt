@@ -50,6 +50,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.dominik.cardvault.R
+import com.dominik.cardvault.auth.FirebaseGoogleAuthGateway
+import com.dominik.cardvault.auth.GoogleAccountState
+import com.dominik.cardvault.auth.GoogleLoginResult
 import com.dominik.cardvault.model.*
 import com.dominik.cardvault.data.catalog.PokemonSet
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
@@ -106,8 +109,45 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
     item { ElevatedCard(shape = CardVaultShapes.card, colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) { Column(Modifier.padding(16.dp)) { Text(stringResource(R.string.portfolio_history), color = VaultTextMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); ValueHistoryChart(portfolio.history, Modifier.fillMaxWidth().height(92.dp)) } } }
     item { Button(openScanner, Modifier.fillMaxWidth().height(CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card) { Text(stringResource(R.string.scan_card), fontWeight = FontWeight.Bold) } }
     item { SupportInfoCard() }
+    item { GoogleAccountCard() }
     item { Text(stringResource(R.string.recent_cards), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
     items(portfolio.cards.take(3)) { CardRow(it) }; item { DataNote() }
+}
+
+@Composable private fun GoogleAccountCard() {
+    val context = LocalContext.current
+    val gateway = remember(context) { FirebaseGoogleAuthGateway(context) }
+    val scope = rememberCoroutineScope()
+    var account by remember { mutableStateOf(gateway.currentAccount()) }
+    var working by remember { mutableStateOf(false) }
+    var feedback by remember { mutableStateOf<Int?>(null) }
+    OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised), shape = CardVaultShapes.card) {
+        Column(Modifier.padding(CardVaultSpacing.card), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Text(stringResource(R.string.account_title), fontWeight = FontWeight.Bold)
+            Text(
+                if (account.isSignedIn) stringResource(R.string.account_signed_in, account.displayName ?: stringResource(R.string.account_name_hidden))
+                else stringResource(R.string.account_signed_out),
+                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp,
+            )
+            if (account.isSignedIn) {
+                OutlinedButton(onClick = { gateway.signOut(); account = GoogleAccountState(false, null); feedback = null }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.account_sign_out)) }
+            } else {
+                Button(onClick = {
+                    working = true; feedback = null
+                    scope.launch {
+                        when (val result = gateway.signIn()) {
+                            is GoogleLoginResult.Success -> account = result.account
+                            GoogleLoginResult.Cancelled -> feedback = R.string.account_login_cancelled
+                            is GoogleLoginResult.Failed -> feedback = R.string.account_login_failed
+                        }
+                        working = false
+                    }
+                }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text(stringResource(if (working) R.string.account_login_running else R.string.account_login_google)) }
+            }
+            feedback?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+            Text(stringResource(R.string.account_no_role), color = VaultTextMuted, fontSize = 10.sp)
+        }
+    }
 }
 
 @Composable private fun SupportInfoCard() {

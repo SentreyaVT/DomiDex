@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-Die App enthält eine bewusst deaktivierte E-Mail-Kontaktstelle und fachliche Verträge für eine spätere In-App-Support-Inbox. Die lokale Firebase-Konfigurationsdatei wurde für `com.dominik.cardvault` geprüft und bleibt von Git ausgeschlossen. Google-Services-Plugin, Firebase Authentication und Credential Manager sind als inaktive Build-Grundlage eingebunden. Es sind weder eine Betreiberadresse noch eine Google-UID oder Cloud-Geheimnisse im Quellcode eingebaut. Login, Firestore und Push sind nicht aktiviert; es findet durch CardVault keine Support-Hintergrundübertragung statt.
+Die App enthält eine bewusst deaktivierte E-Mail-Kontaktstelle und fachliche Verträge für eine spätere In-App-Support-Inbox. Die lokale Firebase-Konfigurationsdatei wurde für `com.dominik.cardvault` geprüft und bleibt von Git ausgeschlossen. Google-Services-Plugin, Firebase Authentication und Credential Manager sind eingebunden. Der Google-Login wird ausschließlich durch den sichtbaren Nutzer-Button gestartet und bestätigt zunächst nur die Identität; er vergibt keine Teamrechte. Es sind weder eine Betreiberadresse noch eine Google-UID oder Cloud-Geheimnisse im Quellcode eingebaut. Firestore und Push sind nicht aktiviert; es findet durch CardVault keine Support-Hintergrundübertragung statt.
 
 ## Produktionsanforderung
 
@@ -27,7 +27,7 @@ Der Android-Client darf eine Adminrolle niemals aus einer E-Mail-Adresse oder lo
 
 ## Kleinster nächster Einrichtungsschritt
 
-Vor dem ersten Google-Login müssen in der Firebase-Konsole der Google-Anbieter aktiviert, die benötigten SHA-Fingerprints eingetragen und anschließend eine aktualisierte `google-services.json` heruntergeladen werden. Die Admin-Zuordnung erfolgt erst später serverseitig anhand einer ausdrücklich genannten Betreiberidentität; nie anhand einer lokalen E-Mail-Abfrage. Firestore-Regeln, Backend-Rollen und Push erfordern eine gesonderte Datenschutz-, Kosten- und Betriebsfreigabe. Geheimnisse gehören nicht in die App. Bis dahin bleibt die Inbox sichtbar als nicht konfiguriert und es wird keine Produktionsfunktion vorgetäuscht.
+Der Google-Anbieter, der Debug-SHA-Fingerprint und der Web-Client wurden für den aktuellen lokalen Test konfiguriert. Eine spätere Release-Signatur benötigt ihren eigenen Fingerprint. Die Admin-Zuordnung erfolgt erst später serverseitig anhand einer ausdrücklich genannten Betreiberidentität; nie anhand einer lokalen E-Mail-Abfrage. Firestore-Regeln, Backend-Rollen und Push erfordern eine gesonderte Datenschutz-, Kosten- und Betriebsfreigabe. Geheimnisse gehören nicht in die App. Bis dahin bleibt die Inbox sichtbar als nicht konfiguriert und es wird keine Produktionsfunktion vorgetäuscht.
 
 ## Datenschutz
 

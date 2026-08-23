@@ -33,6 +33,16 @@
     <string name="support_ready">Kontakt zum CardVault-Support. Der Versand erfolgt erst nach deiner Bestätigung in deiner E-Mail-App.</string>
     <string name="support_not_configured">Die Kontaktstelle ist vorbereitet. Anzeigename und separates Supportpostfach werden erst nach ausdrücklicher Festlegung veröffentlicht.</string>
     <string name="support_privacy">Kein eigener Server: CardVault öffnet nur einen normalen E-Mail-Entwurf und überträgt keine Sammlung oder Diagnosedaten automatisch.</string>
+    <string name="account_title">Google-Konto</string>
+    <string name="account_signed_out">Nicht angemeldet. Die lokale Sammlung funktioniert weiterhin ohne Konto.</string>
+    <string name="account_signed_in">Angemeldet als %1$s</string>
+    <string name="account_name_hidden">Google-Nutzer</string>
+    <string name="account_login_google">Mit Google anmelden</string>
+    <string name="account_login_running">Anmeldung wird geöffnet …</string>
+    <string name="account_login_cancelled">Anmeldung wurde abgebrochen.</string>
+    <string name="account_login_failed">Anmeldung nicht möglich. Bitte Firebase-Anbieter und SHA-Konfiguration prüfen.</string>
+    <string name="account_sign_out">Abmelden</string>
+    <string name="account_no_role">Die Anmeldung bestätigt nur deine Identität. Sie vergibt keine Admin-, Support- oder Pro-Rechte. Teamfunktionen bleiben ohne serverseitig bestätigte Rolle verborgen.</string>
     <string name="portfolio_private_badge">Privater Tresor</string>
     <string name="portfolio_history">Wertentwicklung</string>
     <string name="portfolio_estimated_value">Geschätzter Portfoliowert</string>
