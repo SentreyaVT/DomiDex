@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.Build
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -86,6 +87,8 @@ import com.dominik.cardvault.data.content.ContentUpdateState
 import com.dominik.cardvault.discord.DiscordDevUpdatePayload
 import com.dominik.cardvault.discord.DiscordDevUpdatePublishResult
 import com.dominik.cardvault.discord.UnconfiguredDiscordDevUpdatePublisher
+import com.dominik.cardvault.updates.AndroidUpdateCheckResult
+import com.dominik.cardvault.updates.UnconfiguredAndroidUpdateGateway
 import com.dominik.cardvault.ui.theme.*
 import coil3.compose.AsyncImage
 import java.text.NumberFormat
@@ -258,6 +261,7 @@ private val relaxedTutorialSteps = listOf(
     val categories = listOf(
         "Konto" to if (accountActive) "Google-Anmeldung auf diesem Gerät aktiv" else "Optional · Sammlung bleibt lokal nutzbar",
         "App" to "Sprache, lokale Inhalte und Updates",
+        "Update" to "Aktuellste DomiDex-Version sicher prüfen",
         "Scanner" to "Kamera, Fotos und Erkennung verständlich erklärt",
         "Binder & Sync" to "Lokale Sammlung und Katalogstatus",
         "Preise" to "Cardmarket-Quelle und Aktualität",
@@ -301,6 +305,7 @@ private val relaxedTutorialSteps = listOf(
                 SettingsInfoBlock("Ruhig, auch ohne Netz", "DomiDex zeigt deine lokale Sammlung zuerst. Katalog-Inhalte können später aktualisiert werden und bleiben zwischengespeichert, wenn du offline bist.")
                 SettingsInfoBlock("Beta bedeutet ehrlich testen", "Neue Funktionen dürfen sich weiterentwickeln. Vor allem Preise, Katalogabdeckung, Kamera und Grading sind keine Garantien.")
             }
+            "Update" -> AndroidUpdateSettings(context)
             "Scanner" -> {
                 SettingsInfoBlock("Du bestimmst den Moment", "Kamera und Galerie werden erst geöffnet, wenn du Aufnahme oder Foto auswählen antippst. Eine Karte wird lokal auf Rahmen, Text, Set und Nummer geprüft.")
                 SettingsInfoBlock("Hilfe statt Raten", "Wenn Set oder Nummer nicht sicher lesbar sind, bietet DomiDex die manuelle Zuordnung an. Es wird keine beliebige Karte als Treffer ausgegeben.")
@@ -331,6 +336,56 @@ private val relaxedTutorialSteps = listOf(
         if (section == "Binder & Sync" || section == "Preise") item { Button(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) { Text(if (sync.state == "RUNNING") "Aktualisierung läuft …" else "Jetzt aktualisieren") } }
     } }, confirmButton = { TextButton(onClick = onDismiss) { Text("Fertig") } })
 }
+
+@Composable private fun AndroidUpdateSettings(context: Context) {
+    val scope = rememberCoroutineScope()
+    val gateway = remember { UnconfiguredAndroidUpdateGateway }
+    val installedVersion = remember(context) { installedDomiDexVersion(context) }
+    var checking by rememberSaveable { mutableStateOf(false) }
+    var statusText by rememberSaveable { mutableStateOf<String?>(null) }
+
+    SettingsInfoBlock(
+        "Installierte Version",
+        "DomiDex ${installedVersion.name} · Build ${installedVersion.code}"
+    )
+    SettingsInfoBlock(
+        "Sicher aktualisieren",
+        "DomiDex lädt Updates erst nach einer erfolgreichen, serverseitigen Berechtigungsprüfung. GitHub-Zugangsdaten werden niemals in der App gespeichert. Android zeigt vor einer Installation immer seine eigene Bestätigung an."
+    )
+    Button(
+        onClick = {
+            checking = true
+            statusText = null
+            scope.launch {
+                statusText = when (val result = gateway.checkForUpdate(installedVersion.code)) {
+                    AndroidUpdateCheckResult.UpToDate -> "DomiDex ist bereits auf dem neuesten Stand."
+                    is AndroidUpdateCheckResult.Available -> "Version ${result.release.versionName} ist verfügbar."
+                    is AndroidUpdateCheckResult.Unavailable -> result.reason
+                    is AndroidUpdateCheckResult.Failed -> result.safeMessage
+                }
+                checking = false
+            }
+        },
+        enabled = !checking,
+        modifier = Modifier.fillMaxWidth(),
+    ) { Text(if (checking) "Prüfung läuft …" else "Nach Update suchen") }
+    statusText?.let { message ->
+        OutlinedCard(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised),
+            border = BorderStroke(1.dp, VaultOutline),
+        ) { Text(message, modifier = Modifier.padding(14.dp), color = VaultTextMuted, fontSize = 12.sp) }
+    }
+}
+
+private data class InstalledDomiDexVersion(val name: String, val code: Long)
+
+@Suppress("DEPRECATION")
+private fun installedDomiDexVersion(context: Context): InstalledDomiDexVersion = runCatching {
+    val info = context.packageManager.getPackageInfo(context.packageName, 0)
+    val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else info.versionCode.toLong()
+    InstalledDomiDexVersion(info.versionName ?: "unbekannt", code)
+}.getOrElse { InstalledDomiDexVersion("unbekannt", 0) }
 
 /** A compact disclosure row keeps Settings usable; detailed guidance is opt-in. */
 @Composable private fun SettingsInfoBlock(title: String, body: String) {
