@@ -28,6 +28,13 @@ android {
             if (providers.gradleProperty("unsignedDebug").isPresent) signingConfig = null
         }
         release {
+            // Private tester releases target current physical Android phones.
+            // Keeping emulator/x86 native libraries out of this artifact cuts
+            // the download substantially; debug builds still support the AVD.
+            signingConfig = signingConfigs.getByName("debug")
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
             optimization {
                 enable = false
             }
