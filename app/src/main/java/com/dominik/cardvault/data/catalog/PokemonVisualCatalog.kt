@@ -9,7 +9,33 @@ import okio.source
 import java.net.HttpURLConnection
 import java.util.Locale
 
-data class PokemonSet(val id: String, val name: String, val series: String, val printedTotal: Int, val total: Int, val releaseDate: String, val logoUrl: String?, val ptcgoCode: String?)
+data class PokemonSet(
+    val id: String,
+    val name: String,
+    val series: String,
+    val printedTotal: Int,
+    val total: Int,
+    val releaseDate: String,
+    val logoUrl: String?,
+    val ptcgoCode: String?,
+    /** Cardmarket's stable expansion id when it has been source-verified. */
+    val cardmarketExpansionId: String? = CardmarketExpansionRegistry.idFor(id),
+)
+
+/**
+ * Cardmarket's public product/price downloads expose an expansion id but not
+ * the expansion name or collector number. Keep only verified bridges here;
+ * an unknown bridge deliberately remains unresolved instead of guessing.
+ */
+private object CardmarketExpansionRegistry {
+    private val byTcgDexId = mapOf(
+        // Cardmarket: Perfect Order / POR, source-verified against the public
+        // catalogue's Rowlet, Dartrix and Decidueye ex printings.
+        "me03" to "6443",
+    )
+
+    fun idFor(tcgDexId: String): String? = byTcgDexId[tcgDexId.lowercase(Locale.ROOT)]
+}
 
 /** A separately collectible printing of the same numbered card. */
 data class PokemonPrintVariant(val id: String, val finish: String, val variant: String)
@@ -143,7 +169,7 @@ class PokemonVisualCatalog {
     }
 
     private fun parseGermanSet(reader: JsonReader): PokemonSet? {
-        var id = ""; var name = ""; var total = 0; var official = 0; var logo: String? = null; var symbol: String? = null; var releaseDate = ""
+        var id = ""; var name = ""; var total = 0; var official = 0; var logo: String? = null; var symbol: String? = null; var releaseDate = ""; var abbreviation: String? = null
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
             "id" -> id = reader.nextString(); "name" -> name = reader.nextString()
             "logo" -> logo = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else assetImageUrl(reader.nextString())
@@ -152,11 +178,17 @@ class PokemonVisualCatalog {
             // picker with an empty icon.
             "symbol" -> symbol = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else assetImageUrl(reader.nextString())
             "releaseDate" -> releaseDate = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); "" } else reader.nextString()
+            "abbreviation" -> {
+                reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
+                    "official" -> abbreviation = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
+                    else -> reader.skipValue()
+                }; reader.endObject()
+            }
             "cardCount" -> { reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) { "total" -> total = reader.nextInt(); "official" -> official = reader.nextInt(); else -> reader.skipValue() }; reader.endObject() }
             else -> reader.skipValue()
         }
         reader.endObject()
-        return if (id.isBlank() || name.isBlank()) null else PokemonSet(id, name, "Deutsch · TCGdex", official, total.coerceAtLeast(official), releaseDate, logo ?: symbol, null)
+        return if (id.isBlank() || name.isBlank()) null else PokemonSet(id, name, "Deutsch · TCGdex", official, total.coerceAtLeast(official), releaseDate, logo ?: symbol, abbreviation)
     }
 
     private fun parseGermanSetCards(reader: JsonReader, set: PokemonSet): List<PokemonVisualCard> {

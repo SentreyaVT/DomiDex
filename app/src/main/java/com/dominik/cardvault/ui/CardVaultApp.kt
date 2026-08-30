@@ -2005,33 +2005,30 @@ private fun openOfficialPage(context: Context, url: String) {
     LaunchedEffect(selectedCard, catalogRevision) {
         val card = selectedCard ?: return@LaunchedEffect
         loading = true; error = false
-        // Show same-name Cardmarket trend prices immediately. Only a complete
-        // name+set+number match is auto-linked; every other printing remains
-        // an explicit collector choice and is never linked silently.
+        // Cardmarket stores the English card title plus attacks, but does not
+        // publish collector numbers in its compact catalogue. A source-verified
+        // expansion bridge plus the print order is therefore required here.
         runCatching {
             val priceSearchName = card.marketSearchName ?: card.name
-            val sameNameProducts = repository.searchCatalog(priceSearchName, 40)
-                .filter { product -> isSameNamePriceCandidate(priceSearchName, product) }
-                .distinctBy { it.productId }
-            val exactProducts = sameNameProducts.filter { product -> isExactVisualCatalogPriceMatch(card, product) }
-            exactProducts.ifEmpty { sameNameProducts }
+            val candidates = repository.searchCatalog(priceSearchName, 500)
+            visualCardmarketProducts(card, cards, candidates)
         }.onSuccess { products = it }
             .onFailure { products = emptyList(); error = true }
         loading = false
     }
     LaunchedEffect(cards, selectedSet, catalogRevision) {
         if (selectedSet == null || cards.isEmpty()) { setCardPrices = emptyMap(); return@LaunchedEffect }
-        // Cardmarket's public compact export can omit set/number fields. We still show
-        // the real available trend next to every visual card, but retain whether that
-        // price is exact so the later add step never silently links a wrong printing.
+        // Resolve one source-verified Cardmarket printing per visual card. We never
+        // use a similarly named product from another expansion as a fallback.
         setCardPrices = withContext(Dispatchers.IO) {
+            val candidatesByMarketName = cards
+                .map { it.marketSearchName ?: it.name }
+                .distinct()
+                .associateWith { name -> repository.searchCatalog(name, 500) }
             cards.associate { card ->
                 val searchName = card.marketSearchName ?: card.name
-                val matches = repository.searchCatalog(searchName, 40)
-                    .filter { product -> isSameNamePriceCandidate(searchName, product) }
-                val exact = matches.firstOrNull { product -> isExactVisualCatalogPriceMatch(card, product) && product.trendPriceEur != null }
-                val fallback = matches.firstOrNull { it.trendPriceEur != null }
-                card.id to VisualCardMarketPrice((exact ?: fallback)?.trendPriceEur, exact != null, matches.isNotEmpty())
+                val product = visualCardmarketProducts(card, cards, candidatesByMarketName[searchName].orEmpty()).firstOrNull()
+                card.id to VisualCardMarketPrice(product?.trendPriceEur, product != null, product != null)
             }
         }
     }
@@ -2059,12 +2056,20 @@ private fun openOfficialPage(context: Context, url: String) {
                 selectedCard != null -> {
                     item { VisualCardRow(selectedCard!!) {} }
                     val selected = selectedCard!!
-                    val exactProducts = products.filter { isExactVisualCatalogPriceMatch(selected, it) }
-                    val trendProduct = exactProducts.firstOrNull { it.trendPriceEur != null }
-                    val visibleTrendProduct = trendProduct ?: products.firstOrNull { it.trendPriceEur != null }
+                    val trendProduct = products.firstOrNull { it.trendPriceEur != null }
+                    val visibleTrendProduct = trendProduct
                     item {
                         Button(
-                            onClick = { onSelected(trendProduct ?: catalogResultForVisualCard(selected)) },
+                            onClick = {
+                                val selection = trendProduct?.copy(
+                                    name = selected.name,
+                                    visualSetName = selected.set.name,
+                                    collectorNumber = selected.number,
+                                    imageUrl = selected.largeImageUrl,
+                                    marketSearchName = selected.marketSearchName,
+                                ) ?: catalogResultForVisualCard(selected)
+                                onSelected(selection)
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             shape = CardVaultShapes.card,
                         ) {
@@ -2078,8 +2083,7 @@ private fun openOfficialPage(context: Context, url: String) {
                     item {
                         Text(
                             visibleTrendProduct?.trendPriceEur?.let {
-                                if (trendProduct != null) "Cardmarket-Trendpreis für den exakt passenden Druck: ${euro(it)}"
-                                else "Cardmarket-Trendpreis ab ${euro(it)} · Druck vor dem Hinzufügen prüfen"
+                                "Cardmarket-Trendpreis für den passenden Druck: ${euro(it)}"
                             }
                                 ?: when {
                                     loading -> "Cardmarket-Trendpreis wird geladen …"
@@ -2092,8 +2096,7 @@ private fun openOfficialPage(context: Context, url: String) {
                     }
                     if (!loading && products.isNotEmpty()) item {
                         Text(
-                            if (trendProduct != null) "Exakter Cardmarket-Druck gefunden"
-                            else "Cardmarket-Druck gefunden – vor Auswahl prüfen",
+                            "Passender Cardmarket-Druck gefunden",
                             color = MewIce,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -2158,6 +2161,38 @@ private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: Cat
     normalizeCardName(card.name) == normalizeCardName(product.name) &&
         normalizedCollectorNumber(card.number) == normalizedCollectorNumber(product.collectorNumber.orEmpty()) &&
         normalizeBinderMetadata(card.set.name) == normalizeBinderMetadata(product.visualSetName ?: product.expansionId)
+
+/**
+ * The Cardmarket public download names Pokémon products as e.g.
+ * "Rowlet [Find a Friend | Tackle]" and omits both set name and collector
+ * number. For a source-verified expansion bridge, Cardmarket's product ids are
+ * published in printed-card order; this makes same-name reprints deterministic
+ * without ever crossing into another expansion.
+ */
+private fun visualCardmarketProducts(
+    card: PokemonVisualCard,
+    cardsInSet: List<PokemonVisualCard>,
+    candidates: List<CatalogSearchResult>,
+): List<CatalogSearchResult> {
+    val expansionId = card.set.cardmarketExpansionId ?: return emptyList()
+    val searchName = card.marketSearchName ?: card.name
+    val samePrintingCandidates = candidates
+        .asSequence()
+        .filter { it.expansionId == expansionId && cardmarketBaseName(it.name) == normalizeCardName(searchName) }
+        .distinctBy { it.productId }
+        .sortedBy { it.productId }
+        .toList()
+    if (samePrintingCandidates.isEmpty()) return emptyList()
+
+    val sameNamePrintings = cardsInSet
+        .filter { normalizeCardName(it.marketSearchName ?: it.name) == normalizeCardName(searchName) }
+        .sortedWith(compareBy({ normalizedCollectorNumber(it.number).toIntOrNull() ?: Int.MAX_VALUE }, { it.number }))
+    val printedIndex = sameNamePrintings.indexOfFirst { it.id == card.id }
+    return samePrintingCandidates.getOrNull(printedIndex.coerceAtLeast(0))?.let(::listOf).orEmpty()
+}
+
+private fun cardmarketBaseName(value: String): String =
+    normalizeCardName(value.substringBefore('[').trim())
 
 @Composable private fun CatalogSetIcon(set: PokemonSet, modifier: Modifier = Modifier) = Box(
     modifier.background(VaultNightRaised, CardVaultShapes.thumbnail),
