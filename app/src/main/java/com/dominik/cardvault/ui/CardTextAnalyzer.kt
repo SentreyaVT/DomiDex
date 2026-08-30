@@ -109,10 +109,26 @@ internal object CardTextParser {
             .toList()
         // Prefer the dedicated lower-border ROI. Corrections are deliberately limited
         // to a number pair candidate and never leak into name matching.
-        val numberEvidence = CardNumberParser.find(preferredNumberText.orEmpty())
-            ?: lines.asSequence().mapNotNull(CardNumberParser::find).firstOrNull()
+        // Identity numbers are valid only from the normalized lower-border ROI.
+        // Do not fall back to arbitrary OCR lines: HP, damage, copyright years
+        // and artwork text otherwise become dangerous false positives.
+        // Direct parser callers (unit fixtures and legacy integrations) may not
+        // provide ROI values yet. The camera pipeline always supplies all three
+        // values (also as empty strings), so it never falls back to whole-card
+        // OCR in production.
+        val legacyStructuredText = lines.joinToString("\n")
+        val numberEvidence = CardNumberParser.find(
+            preferredNumberText ?: legacyStructuredText,
+        )
         val collectorNumber = numberEvidence?.value
-        val setIdentifier = ((preferredSetText?.lineSequence()?.toList().orEmpty()) + lines.asReversed()).asSequence().mapNotNull { line ->
+        // The set marker follows the same geometrical rule. It is read only from
+        // the lower identification band, never from names, attacks or rule text.
+        val lowerBorderLines = if (preferredSetText != null || preferredNumberText != null) {
+            preferredSetText.orEmpty().lineSequence().toList() + preferredNumberText.orEmpty().lineSequence().toList()
+        } else {
+            legacyStructuredText.lineSequence().toList()
+        }
+        val setIdentifier = lowerBorderLines.asSequence().mapNotNull { line ->
             // German cards may read "CRI DE", "DE CRI", or "CRI-DE". Treat DE
             // as the language marker in all three forms; no missing marker is an
             // error because the app's scan scope is German by design.
@@ -127,7 +143,11 @@ internal object CardTextParser {
                 ?: setIdentifierPattern.find(lowerBorder)?.value
                 ?: printedSetCodeBeforeNumber(lowerBorder)
         }.firstOrNull()?.replace(Regex("[- ]"), "")?.uppercase()
-        val queries = ((preferredNameText?.lineSequence()?.toList().orEmpty()) + lines).asSequence()
+        // Name lookup is intentionally restricted to the top name ROI. Attack
+        // names and rules text may look like Pokémon names but cannot identify a
+        // printing without the lower-border evidence above.
+        val nameSource = preferredNameText ?: legacyStructuredText
+        val queries = nameSource.lineSequence().asSequence()
             .map { it.substringBefore("  ").trim(' ', '·', '-', '•') }
             .filter { it.length in 3..36 && it.any(Char::isLetter) && !noisePattern.matches(it) && !rulesOrAttackPattern.matches(it) }
             // Border codes and country markers are metadata, not a card name.
@@ -143,7 +163,7 @@ internal object CardTextParser {
             likelyScript = likelyScript,
             searchQueries = queries,
             numberConfidence = numberEvidence?.confidence ?: 0f,
-            hasNameRoiEvidence = preferredNameText?.any(Char::isLetter) == true,
+            hasNameRoiEvidence = preferredNameText?.any(Char::isLetter) ?: queries.isNotEmpty(),
         )
     }
 

@@ -87,6 +87,10 @@ import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
 import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import com.dominik.cardvault.data.WachsendesChaosMasterSet
 import com.dominik.cardvault.data.content.ContentUpdateState
+import com.dominik.cardvault.data.feedback.ScanFeedback
+import com.dominik.cardvault.data.feedback.ScanFeedbackAnnotation
+import com.dominik.cardvault.data.feedback.ScanFeedbackAnnotationType
+import com.dominik.cardvault.data.feedback.ScanFeedbackStore
 import com.dominik.cardvault.discord.DiscordDevUpdatePayload
 import com.dominik.cardvault.discord.DiscordDevUpdatePublishResult
 import com.dominik.cardvault.discord.UnconfiguredDiscordDevUpdatePublisher
@@ -99,6 +103,13 @@ import java.text.Normalizer
 import java.util.Locale
 import java.time.LocalDate
 import java.io.File
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.UUID
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
@@ -502,17 +513,57 @@ private fun parseCollectionBackup(raw: String): List<ManualCardInput> {
     }
 }
 
+private data class BackupImportPayload(val entries: List<ManualCardInput>, val zipEntries: Map<String, ByteArray> = emptyMap())
+
+private fun writeDomiDexBackup(output: OutputStream, cards: List<CollectionCard>, feedbackStore: ScanFeedbackStore): Int {
+    ZipOutputStream(output.buffered()).use { zip ->
+        zip.putNextEntry(java.util.zip.ZipEntry("collection.json"))
+        zip.write(collectionBackupJson(cards).toByteArray(Charsets.UTF_8))
+        zip.closeEntry()
+        return feedbackStore.exportTo(zip)
+    }
+}
+
+private fun readDomiDexBackup(input: InputStream): BackupImportPayload {
+    val raw = input.readBytes()
+    require(raw.size <= 28 * 1024 * 1024) { "Die Backup-Datei ist zu groß." }
+    if (raw.size < 4 || raw[0] != 'P'.code.toByte() || raw[1] != 'K'.code.toByte()) {
+        return BackupImportPayload(parseCollectionBackup(raw.toString(Charsets.UTF_8)))
+    }
+    val files = linkedMapOf<String, ByteArray>()
+    ZipInputStream(ByteArrayInputStream(raw)).use { zip ->
+        var entry = zip.nextEntry
+        while (entry != null) {
+            require(!entry.isDirectory && entry.name.length <= 180 && !entry.name.contains("..")) { "Ungültiger Eintrag im Backup." }
+            val bytes = ByteArrayOutputStream().use { target -> zip.copyTo(target); target.toByteArray() }
+            require(bytes.size <= 14 * 1024 * 1024) { "Ein Backup-Eintrag ist zu groß." }
+            files.putIfAbsent(entry.name, bytes)
+            require(files.size <= 650) { "Das Backup enthält zu viele Dateien." }
+            zip.closeEntry(); entry = zip.nextEntry
+        }
+    }
+    val collection = files["collection.json"] ?: error("Die Sammlung fehlt im Backup.")
+    return BackupImportPayload(parseCollectionBackup(collection.toString(Charsets.UTF_8)), files)
+}
+
 @Composable private fun CollectionBackupDialog(repository: CollectionRepository, cards: List<CollectionCard>, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val feedbackStore = remember(context) { ScanFeedbackStore(context) }
     var status by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingImport by remember { mutableStateOf<List<ManualCardInput>?>(null) }
+    var pendingImport by remember { mutableStateOf<BackupImportPayload?>(null) }
     var working by remember { mutableStateOf(false) }
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             working = true
-            status = runCatching { withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(collectionBackupJson(cards)) } ?: error("Datei konnte nicht geöffnet werden.") }; "Backup gespeichert: ${cards.size} Sammlungseinträge." }.getOrElse { "Backup konnte nicht gespeichert werden." }
+            status = runCatching {
+                val feedbackCount = withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { writeDomiDexBackup(it, cards, feedbackStore) }
+                        ?: error("Datei konnte nicht geöffnet werden.")
+                }
+                "Backup gespeichert: ${cards.size} Sammlungseinträge · $feedbackCount lokale Scan-Feedbacks."
+            }.getOrElse { "Backup konnte nicht gespeichert werden." }
             working = false
         }
     }
@@ -520,7 +571,7 @@ private fun parseCollectionBackup(raw: String): List<ManualCardInput> {
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             working = true
-            val parsed = runCatching { withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { parseCollectionBackup(it.readText()) } ?: error("Datei konnte nicht geöffnet werden.") } }
+            val parsed = runCatching { withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use(::readDomiDexBackup) ?: error("Datei konnte nicht geöffnet werden.") } }
             parsed.onSuccess { pendingImport = it; status = null }.onFailure { status = it.message ?: "Backup konnte nicht gelesen werden." }
             working = false
         }
@@ -528,24 +579,28 @@ private fun parseCollectionBackup(raw: String): List<ManualCardInput> {
     AlertDialog(
         onDismissRequest = { if (!working) onDismiss() }, title = { Text("Sammlung & Backup") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            SettingsInfoBlock("Lokales DomiDex-Backup", "Exportiert werden Karten, Set, Nummer, Zustand, Anzahl, Notizen, Kaufdaten und vorhandene Cardmarket-Verknüpfungen als lesbare JSON-Datei. Preise, Login, Scanner-Fotos und Zugangsdaten werden nicht exportiert.")
+            SettingsInfoBlock("Lokales DomiDex-Backup", "Exportiert werden Karten, Set, Nummer, Zustand, Anzahl, Notizen, Kaufdaten und vorhandene Cardmarket-Verknüpfungen. Zugestimmtes lokales Scan-Feedback wird mit Bild, Markierungen und OCR-Korrekturen in einer ZIP-Datei ergänzt. Preise, Login und Zugangsdaten bleiben außen vor.")
             SettingsInfoBlock("Sicher speichern", "Wähle beim Export selbst einen Speicherort, zum Beispiel Dateien, Downloads oder einen privaten Cloud-Ordner. DomiDex lädt die Datei nicht hoch.")
             SettingsInfoBlock("Sicher importieren", "Ein Import ergänzt deine bestehende Sammlung und überschreibt nichts automatisch. Gleiche, exakt verknüpfte Einträge können als Menge zusammengeführt werden.")
-            Button(onClick = { exportLauncher.launch("DomiDex-Sammlung-${java.time.LocalDate.now()}.json") }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("Sammlung exportieren") }
-            OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/json", "text/plain")) }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("DomiDex-Backup importieren") }
+            Button(onClick = { exportLauncher.launch("DomiDex-Backup-${java.time.LocalDate.now()}.zip") }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("Sammlung & Scan-Feedback exportieren") }
+            OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/zip", "application/json", "text/json", "text/plain")) }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("DomiDex-Backup importieren") }
             if (working) LinearProgressIndicator(Modifier.fillMaxWidth())
             status?.let { Text(it, color = if (it.contains("nicht", true) || it.contains("konnte", true)) MaterialTheme.colorScheme.error else VaultPositive, fontSize = 12.sp) }
         } },
         confirmButton = { TextButton(onClick = onDismiss, enabled = !working) { Text("Fertig") } },
     )
-    pendingImport?.let { entries -> AlertDialog(
-        onDismissRequest = { pendingImport = null }, title = { Text("${entries.size} Einträge importieren?") },
-        text = { Text("Die Einträge werden zu deiner aktuellen Sammlung hinzugefügt. Es wird nichts gelöscht oder überschrieben.") },
+    pendingImport?.let { payload -> AlertDialog(
+        onDismissRequest = { pendingImport = null }, title = { Text("${payload.entries.size} Einträge importieren?") },
+        text = { Text("Die Einträge werden zu deiner aktuellen Sammlung hinzugefügt. Lokale Scan-Feedbacks werden nur ergänzt, wenn ihre ID noch nicht vorhanden ist. Es wird nichts gelöscht oder überschrieben.") },
         confirmButton = { TextButton(onClick = {
             pendingImport = null; scope.launch {
                 working = true
-                val outcome = runCatching { withContext(Dispatchers.IO) { entries.forEach { repository.addManualCard(it) }; entries.size } }
-                status = outcome.fold({ "$it Einträge wurden importiert." }, { "Import konnte nicht vollständig abgeschlossen werden." })
+                val outcome = runCatching { withContext(Dispatchers.IO) {
+                    payload.entries.forEach { repository.addManualCard(it) }
+                    val feedback = feedbackStore.importFromZip(payload.zipEntries)
+                    payload.entries.size to feedback
+                } }
+                status = outcome.fold({ "${it.first} Einträge und ${it.second} Scan-Feedbacks wurden importiert." }, { "Import konnte nicht vollständig abgeschlossen werden." })
                 working = false
             }
         }) { Text("Jetzt importieren") } },
@@ -2697,13 +2752,22 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
         },
         onDecline = {
             feedbackConsentPending = false
+            latestScanFile?.delete()
+            latestScanFile = null
+            manualEvidence = true
+        },
+        onManualSearch = {
+            feedbackConsentPending = false
+            latestScanFile?.delete()
+            latestScanFile = null
             manualEvidence = true
         },
     )
     feedbackEditorPath?.let { path -> ScanFeedbackEditorDialog(
         imageFile = File(path),
-        onDismiss = { feedbackEditorPath = null; manualEvidence = true },
-        onConfirmed = { feedbackEditorPath = null; manualEvidence = true },
+        analysis = analysis,
+        onDismiss = { File(path).delete(); feedbackEditorPath = null; manualEvidence = true },
+        onConfirmed = { File(path).delete(); feedbackEditorPath = null; manualEvidence = true },
     ) }
 }
 
@@ -2729,29 +2793,45 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
 /** A set choice carries its official total, so manual entry never asks for the redundant suffix. */
 private data class ScannerSetChoice(val name: String, val code: String, val printedTotal: Int)
 
-private data class ScanFeedbackMark(val category: String = "Kartenname", val negative: Boolean = false, val left: Float = .2f, val top: Float = .2f, val width: Float = .5f, val height: Float = .14f)
-
-@Composable private fun ScanFeedbackConsentDialog(onHelp: () -> Unit, onDecline: () -> Unit) = AlertDialog(
-    onDismissRequest = onDecline,
-    title = { Text("Karte nicht sicher erkannt") },
-    text = { Text("Möchtest du helfen, die Erkennung zu verbessern? Das Scanbild wird nur nach deiner ausdrücklichen Bestätigung lokal als Feedback gespeichert. Ohne Zustimmung wird nichts gespeichert oder übertragen.") },
-    confirmButton = { TextButton(onClick = onHelp) { Text("Ja, helfen") } },
-    dismissButton = { TextButton(onClick = onDecline) { Text("Nein") } },
+private data class ScanFeedbackMark(
+    val category: String = "Kartenname",
+    val negative: Boolean = false,
+    val left: Float = .2f,
+    val top: Float = .2f,
+    val width: Float = .5f,
+    val height: Float = .14f,
+    val detectedText: String = "",
+    val correctedText: String = "",
 )
 
-@Composable private fun ScanFeedbackEditorDialog(imageFile: File, onDismiss: () -> Unit, onConfirmed: () -> Unit) {
+@Composable private fun ScanFeedbackConsentDialog(onHelp: () -> Unit, onDecline: () -> Unit, onManualSearch: () -> Unit) = AlertDialog(
+    onDismissRequest = onDecline,
+    title = { Text("Karte nicht sicher erkannt") },
+    text = { Text("Karte konnte nicht sicher erkannt werden. Du kannst diesen Scan ausdrücklich lokal für Verbesserungen markieren, ihn verwerfen oder die Karte manuell suchen. Es findet kein automatischer Upload statt.") },
+    confirmButton = { TextButton(onClick = onHelp) { Text("Scan für Verbesserung speichern") } },
+    dismissButton = { Row { TextButton(onClick = onManualSearch) { Text("Manuell suchen") }; TextButton(onClick = onDecline) { Text("Nicht speichern") } } },
+)
+
+@Composable private fun ScanFeedbackEditorDialog(imageFile: File, analysis: CardTextAnalysis?, onDismiss: () -> Unit, onConfirmed: () -> Unit) {
     val context = LocalContext.current
-    var marks by remember(imageFile) { mutableStateOf(listOf(ScanFeedbackMark())) }
+    var marks by remember(imageFile) { mutableStateOf(listOf(
+        ScanFeedbackMark("Kartenname", left = .08f, top = .07f, width = .68f, height = .12f, detectedText = analysis?.roiEvidence?.firstOrNull { it.region == CardOcrRegion.NAME }?.normalizedValue.orEmpty()),
+        ScanFeedbackMark("HP", left = .73f, top = .07f, width = .18f, height = .12f),
+        ScanFeedbackMark("Artwork", left = .08f, top = .22f, width = .84f, height = .31f),
+        ScanFeedbackMark("Attacke 1", left = .08f, top = .56f, width = .84f, height = .13f),
+        ScanFeedbackMark("Kartennummer", left = .18f, top = .82f, width = .38f, height = .10f, detectedText = analysis?.collectorNumber.orEmpty()),
+        ScanFeedbackMark("Setkennung", left = .05f, top = .82f, width = .17f, height = .10f, detectedText = analysis?.setIdentifier.orEmpty()),
+    )) }
     var selected by remember(imageFile) { mutableIntStateOf(0) }
     var categoryOpen by remember { mutableStateOf(false) }
-    val categories = listOf("Kartenname", "Kartennummer", "Setkennung", "HP", "Pokémon/Charakter", "Typ", "Attacke", "Schadenswert", "Regeltext", "Seltenheit/Variante", "Copyright", "Artwork", "Anderes Merkmal", "NICHT Kartennummer / Falscherkennung")
+    val categories = listOf("Kartenname", "HP", "Kartentyp", "Artwork", "Attacke 1", "Schaden Attacke 1", "Attacke 2", "Schaden Attacke 2", "Regeltext", "Kartennummer", "Setkennung", "Seltenheit", "Variantensymbol", "Copyright/Hersteller", "Sonstiges")
     val active = marks.getOrNull(selected)
     fun updateActive(change: (ScanFeedbackMark) -> ScanFeedbackMark) { marks = marks.mapIndexed { index, mark -> if (index == selected) change(mark) else mark } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Scanner-Feedback markieren") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Markiere hilfreiche Bereiche. Gelb kennzeichnet ausdrücklich eine Falscherkennung.", color = VaultTextMuted, fontSize = 12.sp)
             Box(Modifier.fillMaxWidth().aspectRatio(.72f).clip(RoundedCornerShape(12.dp)).background(Color.Black).pointerInput(selected, marks) { detectDragGestures { change, drag -> change.consume(); active?.let { mark -> updateActive { it.copy(left = (mark.left + drag.x / size.width).coerceIn(0f, 1f - mark.width), top = (mark.top + drag.y / size.height).coerceIn(0f, 1f - mark.height)) } } } }) {
-                AsyncImage(model = imageFile, contentDescription = "Scanbild für Feedback", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                AsyncImage(model = imageFile, contentDescription = "Scanbild für Feedback", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
                 Canvas(Modifier.fillMaxSize()) { marks.forEachIndexed { index, mark -> val color = if (mark.negative) VaultGold else MewIce; val topLeft = Offset(mark.left * size.width, mark.top * size.height); val markSize = androidx.compose.ui.geometry.Size(mark.width * size.width, mark.height * size.height); drawRect(color, topLeft, markSize, style = Stroke(if (index == selected) 5f else 3f)); listOf(topLeft, Offset(topLeft.x + markSize.width, topLeft.y), Offset(topLeft.x, topLeft.y + markSize.height), Offset(topLeft.x + markSize.width, topLeft.y + markSize.height)).forEach { drawCircle(color, if (index == selected) 9f else 6f, it) } } }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = { marks = marks + ScanFeedbackMark(top = (.18f + marks.size * .08f).coerceAtMost(.75f)); selected = marks.lastIndex + 1 }) { Text("Bereich hinzufügen") }; TextButton(enabled = marks.size > 1, onClick = { marks = marks.filterIndexed { index, _ -> index != selected }; selected = (selected - 1).coerceAtLeast(0) }) { Text("Löschen", color = MaterialTheme.colorScheme.error) } }
@@ -2759,25 +2839,38 @@ private data class ScanFeedbackMark(val category: String = "Kartenname", val neg
                 Text("Bereich ${selected + 1} von ${marks.size} · Rahmen zum Verschieben ziehen", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 Box { OutlinedButton(onClick = { categoryOpen = true }, modifier = Modifier.fillMaxWidth()) { Text(mark.category, modifier = Modifier.weight(1f)); Text("⌄") }; DropdownMenu(expanded = categoryOpen, onDismissRequest = { categoryOpen = false }) { categories.forEach { category -> DropdownMenuItem(text = { Text(category) }, onClick = { updateActive { it.copy(category = category, negative = category.startsWith("NICHT")) }; categoryOpen = false }) } } }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(!mark.negative, { updateActive { it.copy(negative = false) } }, label = { Text("Positiv") }); FilterChip(mark.negative, { updateActive { it.copy(negative = true) } }, label = { Text("Falscherkennung") }) }
+                OutlinedTextField(mark.detectedText, { value -> updateActive { it.copy(detectedText = value) } }, label = { Text("Erkannter Text") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(mark.correctedText, { value -> updateActive { it.copy(correctedText = value) } }, label = { Text("Korrigierter Text") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 FeedbackSlider("Breite", mark.width) { value -> updateActive { it.copy(width = value.coerceIn(.06f, 1f - it.left)) } }
                 FeedbackSlider("Höhe", mark.height) { value -> updateActive { it.copy(height = value.coerceIn(.05f, 1f - it.top)) } }
             }
             if (marks.size > 1) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { marks.indices.forEach { index -> FilterChip(selected == index, { selected = index }, label = { Text("${index + 1}") }) } }
         }
-    }, confirmButton = { TextButton(enabled = marks.isNotEmpty(), onClick = { persistScanFeedback(context, imageFile, marks); onConfirmed() }) { Text("Feedback bestätigen") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } })
+    }, confirmButton = { TextButton(enabled = marks.isNotEmpty(), onClick = { runCatching { persistScanFeedback(context, imageFile, marks, analysis) }.onSuccess { onConfirmed() } }) { Text("Lokal speichern") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } })
 }
 
 @Composable private fun FeedbackSlider(label: String, value: Float, onValueChange: (Float) -> Unit) = Column { Text(label, color = VaultTextMuted, fontSize = 11.sp); Slider(value = value, onValueChange = onValueChange, valueRange = .05f..1f) }
 
-private fun persistScanFeedback(context: Context, imageFile: File, marks: List<ScanFeedbackMark>) {
-    val markData = JSONArray().apply { marks.forEach { mark -> put(JSONObject().put("category", mark.category).put("negative", mark.negative).put("left", mark.left).put("top", mark.top).put("width", mark.width).put("height", mark.height)) } }
-    // No backend is configured: this is consented, local-only metadata and never an automatic image upload.
-    val storedImage = runCatching {
-        val directory = File(context.filesDir, "scanner-feedback").apply { mkdirs() }
-        File(directory, "feedback-${System.currentTimeMillis()}.jpg").also { target -> imageFile.copyTo(target, overwrite = true) }
-    }.getOrNull()
-    val payload = JSONObject().put("createdAtEpochMillis", System.currentTimeMillis()).put("imageReference", storedImage?.name).put("imageStoredLocally", storedImage?.isFile == true).put("marks", markData).put("appVersion", "1.0.4")
-    context.getSharedPreferences("scanner_feedback", Context.MODE_PRIVATE).edit().putString("latest_feedback", payload.toString()).apply()
+private fun persistScanFeedback(context: Context, imageFile: File, marks: List<ScanFeedbackMark>, analysis: CardTextAnalysis?) {
+    val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+    val record = ScanFeedback(
+        id = UUID.randomUUID().toString(),
+        createdAtEpochMillis = System.currentTimeMillis(),
+        imageRelativePath = "",
+        originalPrediction = analysis?.searchQueries?.firstOrNull(),
+        originalConfidence = ScannerDebugState.snapshot.finalConfidence.takeIf { it > 0 },
+        originalOcrResults = analysis?.roiEvidence?.flatMap { it.rawValues }?.filter { it.isNotBlank() }.orEmpty(),
+        annotations = marks.map { mark -> ScanFeedbackAnnotation(
+            x = mark.left, y = mark.top, width = mark.width, height = mark.height,
+            label = mark.category.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]+"), "_").trim('_'),
+            type = if (mark.negative) ScanFeedbackAnnotationType.NEGATIVE else ScanFeedbackAnnotationType.POSITIVE,
+            detectedText = mark.detectedText.trim().takeIf { it.isNotBlank() },
+            correctedText = mark.correctedText.trim().takeIf { it.isNotBlank() },
+        ) },
+        appVersion = packageInfo.versionName ?: "unbekannt",
+        notes = null,
+    )
+    ScanFeedbackStore(context).save(imageFile, record)
 }
 
 @Composable private fun ManualScanEvidenceDialog(initialSetCode: String, initialNumber: String, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
