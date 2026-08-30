@@ -105,4 +105,25 @@ class CardTextParserTest {
         assertEquals("OBF", result.setIdentifier)
         assertEquals("298/697", result.collectorNumber)
     }
+
+    @Test fun ignoresLeadingHRegulationMarkAndUsesOnlyThreeLetterSetCode() {
+        val result = CardTextParser.parse(mapOf(CardScript.LATIN to "Tropius\nH PBL DE 001/084"))
+
+        assertEquals("PBL", result.setIdentifier)
+        assertEquals("001/084", result.collectorNumber)
+    }
+
+    @Test fun ignoresLeadingJRegulationMarkAndUsesOnlyThreeLetterSetCode() {
+        val result = CardTextParser.parse(mapOf(CardScript.LATIN to "Morpeko ex\nJ PBL 117/084"))
+
+        assertEquals("PBL", result.setIdentifier)
+        assertEquals("117/084", result.collectorNumber)
+    }
+
+    @Test fun neverTreatsAStandaloneRegulationMarkAsASetCode() {
+        val result = CardTextParser.parse(mapOf(CardScript.LATIN to "Tropius\nH DE 001/084"))
+
+        assertEquals(null, result.setIdentifier)
+        assertEquals("001/084", result.collectorNumber)
+    }
 }

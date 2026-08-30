@@ -133,6 +133,7 @@ private val relaxedTutorialSteps = listOf(
     var showTutorialPrompt by rememberSaveable { mutableStateOf(false) }
     var tutorialStep by rememberSaveable { mutableIntStateOf(-1) }
     val portfolio by repository.portfolio.collectAsState(initial = PortfolioSummary.Empty)
+    val binders by repository.binders.collectAsState(initial = emptyList())
     val syncStatus by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
     val contentUpdates by (contentUpdateState ?: remember { kotlinx.coroutines.flow.MutableStateFlow(ContentUpdateState()) }).collectAsState()
     Scaffold(containerColor = Color.Transparent, bottomBar = {
@@ -146,7 +147,7 @@ private val relaxedTutorialSteps = listOf(
             label = "domidex-destination",
         ) { shownDestination ->
             when (shownDestination) {
-                Destination.DASHBOARD -> DashboardScreen(portfolio, contentUpdates, focusChoice, { choice -> focusChoice = choice; preferences.edit().putString("dashboard_focus", choice).apply() }, openBinder = { destination = Destination.BINDER }, openScanner = { destination = Destination.SCANNER })
+                Destination.DASHBOARD -> DashboardScreen(portfolio, binders, contentUpdates, focusChoice, { choice -> focusChoice = choice; preferences.edit().putString("dashboard_focus", choice).apply() }, openBinder = { destination = Destination.BINDER }, openScanner = { destination = Destination.SCANNER })
                 Destination.SCANNER -> ScannerScreen(repository) { destination = Destination.DASHBOARD }
                 Destination.BINDER -> BinderScreen(portfolio.cards, repository)
                 Destination.GRADING -> GradingScreen()
@@ -1281,11 +1282,12 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
     Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-@Composable private fun DashboardScreen(portfolio: PortfolioSummary, contentUpdates: ContentUpdateState, focusChoice: String, onFocusChoice: (String) -> Unit, openBinder: () -> Unit, openScanner: () -> Unit) {
+@Composable private fun DashboardScreen(portfolio: PortfolioSummary, binders: List<BinderSummary>, contentUpdates: ContentUpdateState, focusChoice: String, onFocusChoice: (String) -> Unit, openBinder: () -> Unit, openScanner: () -> Unit) {
     val context = LocalContext.current
     LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
     item { ScreenHeader(stringResource(R.string.dashboard_eyebrow), stringResource(R.string.dashboard_title), stringResource(R.string.dashboard_subtitle)) }
     item { PortfolioHero(portfolio, focusChoice, onFocusChoice) }
+    item { CurrentBinderValueCard(binders, openBinder) }
     item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { StatCard(stringResource(R.string.stat_cards), portfolio.totalCards.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_unique), portfolio.cards.size.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_languages), portfolio.cards.map { it.language }.distinct().size.toString(), Modifier.weight(1f)) } }
     // Keep the official community entry within the initial Home viewport, while
     // the Binder remains the main visual action directly beneath it.
@@ -1297,6 +1299,38 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
         items(portfolio.cards.take(3)) { CardRow(it) }
     }
     item { Text(stringResource(R.string.catalog_growth_note, contentUpdates.revision), color = VaultTextMuted, fontSize = 10.sp, lineHeight = 14.sp) }
+    }
+}
+
+/** Shows only locally available Cardmarket data; missing prices are never estimated. */
+@Composable private fun CurrentBinderValueCard(binders: List<BinderSummary>, openBinder: () -> Unit) {
+    val bindersWithCards = binders.filter { it.ownedCards > 0 }
+    val pricedBinders = bindersWithCards.filter { it.lastPriceUpdatedAtEpochMillis != null }
+    val currentValue = pricedBinders.sumOf { it.marketValueEur }
+    OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised), shape = CardVaultShapes.card) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(CardVaultSpacing.card),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("AKTUELLER BINDERWERT", color = MewIce, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+                when {
+                    bindersWithCards.isEmpty() -> Text("Noch keine Karten im Binder", color = VaultTextMuted, fontSize = 13.sp)
+                    pricedBinders.isEmpty() -> Text("Preisguide wird noch synchronisiert", color = VaultTextMuted, fontSize = 13.sp)
+                    else -> Text(euro(currentValue), color = VaultText, fontSize = 25.sp, fontWeight = FontWeight.Black)
+                }
+                if (bindersWithCards.isNotEmpty()) {
+                    Text(
+                        if (pricedBinders.isEmpty()) "Sobald Cardmarket-Preise vorliegen, erscheint hier der echte Gesamtwert."
+                        else "Cardmarket-Preisguide: ${pricedBinders.size}/${bindersWithCards.size} Binder mit aktuellen Preisen",
+                        color = VaultTextMuted,
+                        fontSize = 10.sp,
+                    )
+                }
+            }
+            TextButton(onClick = openBinder) { Text("Binder") }
+        }
     }
 }
 

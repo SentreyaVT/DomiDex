@@ -42,7 +42,7 @@ interface CardVaultDao {
         SELECT b.id, b.name, b.heroAsset, COUNT(DISTINCT e.cardId) AS uniqueCards,
                COALESCE(SUM(e.quantity), 0) AS ownedCards,
                SUM(CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END * e.quantity) AS marketValueMinor,
-               MAX(p.effectiveAtEpochMillis) AS lastPriceUpdatedAtEpochMillis
+               MAX(CASE WHEN CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END IS NULL THEN NULL ELSE p.effectiveAtEpochMillis END) AS lastPriceUpdatedAtEpochMillis
         FROM binders b LEFT JOIN collection_entries e ON e.binderId = b.id
         LEFT JOIN catalog_cards c ON c.id = e.cardId
         LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource AND linked.externalProductId = e.externalProductId

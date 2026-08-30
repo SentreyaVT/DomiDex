@@ -64,15 +64,18 @@ internal object CardNumberParser {
 }
 
 internal object CardTextParser {
-    private val collectorNumberPattern = Regex("(?i)(?<![A-Z0-9])(?:[A-Z]{2,5}\\s+)?(\\d{1,4})\\s*/\\s*(\\d{1,4})")
+    private val collectorNumberPattern = Regex("(?i)(?<![A-Z0-9])(?:[A-Z]{3}\\s+)?(\\d{1,4})\\s*/\\s*(\\d{1,4})")
     private val noisePattern = Regex("(?i)^(?:hp|kp|stage|basic|basis|trainer|energy|energie|pokemon)\\s*\\d*$")
     private val rulesOrAttackPattern = Regex("(?i)^(?:ability|fähigkeit|attacke|schwäche|resistenz|rückzug|retreat|illus\\.?|regel|damage|schaden|draw|discard|heal|switch|search|choose|once during).*")
     private val setIdentifierPattern = Regex("(?i)(?<![A-Z0-9])(?:SV|SWSH|SM|XY|BW|DP|HS|EX|ME)\\s*[- ]?\\d{1,3}(?![A-Z0-9])")
-    private val borderSetCodePattern = Regex("(?i)(?<![A-Z0-9])([A-Z]{2,5})\\s+(?=\\d{1,4}\\s*/)")
-    // Some German lower borders have no space between the printed code and the
-    // number (for example "OBF098/197"). Keep this constrained to a number
-    // pair so title/attack text can never be mistaken for a set code.
-    private val compactBorderSetCodePattern = Regex("(?i)(?<![A-Z0-9])([A-Z]{2,5})[-_]?\\s*(?=[0-9OIlSBZg]{1,4}\\s*[/|])")
+    // The lower border may start with a one-letter regulation mark such as H or J.
+    // It is never a set identifier. The current printed set marker is exactly the
+    // following three contiguous letters (for example "H PBL DE 001/084").
+    private val threeLetterBorderSetCodePattern = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})(?![A-Z0-9])\\s*(?=[0-9OIlSBZg]{1,4}\\s*[/|])")
+    // Some German lower borders have no delimiter between the three-letter code and
+    // the number (for example "OBF098/197"). It remains tied to a number pair so
+    // title or attack text can never become a set marker.
+    private val compactThreeLetterBorderSetCodePattern = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})(?![A-Z0-9])[-_]?\\s*(?=[0-9OIlSBZg]{1,4}\\s*[/|])")
     // Language/market abbreviations often sit beside the lower-border set code.
     // They identify the card's language, never its expansion.
     // Scanner scope is deliberately German. "DE" can be printed with or without
@@ -117,9 +120,11 @@ internal object CardTextParser {
                 .replace(Regex("[-_]+\\s*"), " ")
                 .replace(Regex("\\s+"), " ")
                 .trim()
-            setIdentifierPattern.find(lowerBorder)?.value
-                ?: borderSetCodePattern.find(lowerBorder)?.groupValues?.get(1)
-                ?: compactBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1)
+            threeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1)
+                ?: compactThreeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1)
+                // Older cards can use an established alpha-numeric series marker
+                // such as SV3. This fallback still never accepts H/J as a set ID.
+                ?: setIdentifierPattern.find(lowerBorder)?.value
                 ?: printedSetCodeBeforeNumber(lowerBorder)
         }.firstOrNull()?.replace(Regex("[- ]"), "")?.uppercase()
         val queries = ((preferredNameText?.lineSequence()?.toList().orEmpty()) + lines).asSequence()
@@ -143,15 +148,16 @@ internal object CardTextParser {
     }
 
     /**
-     * Lower borders can include a one-letter regulation mark (H/I/…) and DE.
-     * Neither is a set ID. Keep the nearby 3–4 letter printed code instead.
+     * Lower borders can include a one-letter regulation mark (H/I/J/…) and DE.
+     * Neither is a set ID. Only a contiguous three-letter code immediately
+     * associated with the collector number is accepted.
      */
     private fun printedSetCodeBeforeNumber(line: String): String? {
         val tokens = line.uppercase().split(Regex("[^A-Z0-9/]+"))
         val numberIndex = tokens.indexOfFirst { Regex("\\d{1,4}/\\d{1,4}").matches(it) }
         if (numberIndex < 0) return null
         return tokens.take(numberIndex).takeLast(5).asReversed()
-            .firstOrNull { token -> token.length in 2..5 && token != "DE" && token !in setOf("HP", "KP") }
+            .firstOrNull { token -> token.length == 3 && token.all(Char::isLetter) && token != "DE" }
     }
 }
 
