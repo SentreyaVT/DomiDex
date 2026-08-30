@@ -2061,6 +2061,7 @@ private fun openOfficialPage(context: Context, url: String) {
                     val selected = selectedCard!!
                     val exactProducts = products.filter { isExactVisualCatalogPriceMatch(selected, it) }
                     val trendProduct = exactProducts.firstOrNull { it.trendPriceEur != null }
+                    val visibleTrendProduct = trendProduct ?: products.firstOrNull { it.trendPriceEur != null }
                     item {
                         Button(
                             onClick = { onSelected(trendProduct ?: catalogResultForVisualCard(selected)) },
@@ -2068,7 +2069,7 @@ private fun openOfficialPage(context: Context, url: String) {
                             shape = CardVaultShapes.card,
                         ) {
                             Text(
-                                trendProduct?.trendPriceEur?.let { "Zum Binder hinzufügen · ${euro(it)}" }
+                                visibleTrendProduct?.trendPriceEur?.let { "Zum Binder hinzufügen · ${euro(it)}" }
                                     ?: "Zum Binder hinzufügen",
                                 fontWeight = FontWeight.Bold,
                             )
@@ -2076,7 +2077,10 @@ private fun openOfficialPage(context: Context, url: String) {
                     }
                     item {
                         Text(
-                            trendProduct?.trendPriceEur?.let { "Cardmarket-Trendpreis für den exakt passenden Druck: ${euro(it)}" }
+                            visibleTrendProduct?.trendPriceEur?.let {
+                                if (trendProduct != null) "Cardmarket-Trendpreis für den exakt passenden Druck: ${euro(it)}"
+                                else "Cardmarket-Trendpreis ab ${euro(it)} · Druck vor dem Hinzufügen prüfen"
+                            }
                                 ?: "Der Cardmarket-Trendpreis wird geladen oder muss noch exakt verknüpft werden.",
                             color = VaultTextMuted,
                             fontSize = 11.sp,
