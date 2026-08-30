@@ -877,6 +877,28 @@ private fun isDebuggableBuild(context: Context): Boolean =
             // the background with only source-declared foil printings.  This
             // avoids inventing a Holo/Reverse slot for a card that has none.
             setReferences = downloadedCards.flatMap { reference -> reference.asBinderReferences() }
+            // Resolve an unmapped current set before the user can open a slot.
+            // These are local catalogue lookups, not additional network calls.
+            // That keeps Cardmarket pricing available from the first Binder
+            // preview instead of only after the full print-variant refresh.
+            val resolvedMarketExpansionId = withContext(Dispatchers.IO) {
+                set.cardmarketExpansionId ?: run {
+                    val names = downloadedCards.map { it.marketSearchName ?: it.name }.distinct()
+                    val candidatesByMarketName = buildMap {
+                        names.chunked(10).forEach { batch ->
+                            batch.map { name -> async { name to repository.searchCatalog(name, 500) } }
+                                .awaitAll()
+                                .forEach { (name, candidates) -> put(name, candidates) }
+                        }
+                    }
+                    resolveCardmarketExpansionId(downloadedCards, candidatesByMarketName)
+                }
+            }
+            if (resolvedMarketExpansionId != null) {
+                setReferences = downloadedCards.flatMap { reference ->
+                    reference.asBinderReferences(resolvedMarketExpansionId)
+                }
+            }
             // Detail endpoints provide the real printings. Fetch a small bounded
             // batch at a time; sequential requests made large German sets look like
             // one-slot binders for far too long, while an unbounded burst is unfair
@@ -895,7 +917,7 @@ private fun isDebuggableBuild(context: Context): Boolean =
                     )
                 } },
             )
-            detailedCards.flatMap { reference -> reference.asBinderReferences() }
+            detailedCards.flatMap { reference -> reference.asBinderReferences(resolvedMarketExpansionId) }
                 .also { setReferences = it }
         } catch (error: Exception) {
             // Preserve any explicit local catalogue fallback when offline. Never
@@ -1106,7 +1128,9 @@ private fun isWachsendesChaosSet(setName: String): Boolean = setName.equals("Wac
     setName.equals("Chaos Rising", ignoreCase = true)
 
 /** Every source-confirmed printing gets its own master-set slot. */
-private fun PokemonVisualCard.asBinderReferences(): List<CollectionCard> = printVariants.map { printing ->
+private fun PokemonVisualCard.asBinderReferences(
+    marketExpansionId: String? = set.cardmarketExpansionId,
+): List<CollectionCard> = printVariants.map { printing ->
     CollectionCard(
         entryId = 0,
         id = "$id-${printing.id}",
@@ -1128,7 +1152,7 @@ private fun PokemonVisualCard.asBinderReferences(): List<CollectionCard> = print
         imageUrl = largeImageUrl,
         rarity = rarity ?: "UNKNOWN",
         marketSearchName = marketSearchName,
-        marketExpansionId = set.cardmarketExpansionId,
+        marketExpansionId = marketExpansionId,
     )
 }
 
@@ -1638,8 +1662,17 @@ private enum class PriceHistoryRange(val label: String, val days: Long?) {
  * interpolated: one snapshot stays one actual point, and a single observation
  * remains an honest, non-chart state.
  */
-@Composable private fun CardPriceHistorySection(card: CollectionCard, history: List<CardPricePoint>) {
-    val current = history.lastOrNull()?.valueEur ?: card.currentValueEur.takeIf { card.priceUpdatedAtEpochMillis != null }
+@Composable private fun CardPriceHistorySection(
+    card: CollectionCard,
+    history: List<CardPricePoint>,
+    resolvedTrendPrice: Double? = null,
+) {
+    // A binder reference may have been saved before its own price snapshot was
+    // persisted. In that case show the verified Cardmarket product price that
+    // the preview just resolved, instead of presenting a misleading empty state.
+    val current = history.lastOrNull()?.valueEur
+        ?: card.currentValueEur.takeIf { card.priceUpdatedAtEpochMillis != null && it > 0.0 }
+        ?: resolvedTrendPrice
     val now = remember(history) { maxOf(System.currentTimeMillis(), history.lastOrNull()?.timestampEpochMillis ?: 0L) }
     val ranges = remember(history, now) {
         PriceHistoryRange.entries.filter { range ->
@@ -1800,19 +1833,24 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     val effect = remember(card.id, card.finish, card.variant) { CardEffectResolver.resolve(card) }
     val priceHistory by repository.priceHistory(card).collectAsState(initial = emptyList())
     var referenceTrendPrices by remember(card.id, card.marketExpansionId) { mutableStateOf<List<Double>>(emptyList()) }
-    LaunchedEffect(card.id, card.marketExpansionId, card.marketSearchName) {
-        if (card.priceUpdatedAtEpochMillis != null || card.marketExpansionId == null) return@LaunchedEffect
-        val matches = runCatching { repository.searchCatalog(card.marketSearchName ?: card.name, 60) }.getOrDefault(emptyList())
-            .filter { it.expansionId == card.marketExpansionId && isSameNamePriceCandidate(card.marketSearchName ?: card.name, it) }
-        referenceTrendPrices = matches.mapNotNull { it.trendPriceEur }.distinct().sorted()
+    LaunchedEffect(card.id, card.externalProductId, card.marketExpansionId, card.marketSearchName) {
+        val query = card.marketSearchName ?: card.name
+        val matches = runCatching { repository.searchCatalog(query, 100) }.getOrDefault(emptyList())
+        val linkedMatches = card.externalProductId?.let { productId -> matches.filter { it.productId == productId } }
+        val cardMatches = linkedMatches ?: card.marketExpansionId?.let { expansion ->
+            matches.filter { it.expansionId == expansion && isSameNamePriceCandidate(query, it) }
+        }.orEmpty()
+        referenceTrendPrices = cardMatches.mapNotNull { it.trendPriceEur }.distinct().sorted()
     }
+    val storedTrendPrice = card.currentValueEur.takeIf { card.priceUpdatedAtEpochMillis != null && it > 0.0 }
     val priceDate = card.priceUpdatedAtEpochMillis?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, Locale.GERMANY).format(java.util.Date(it)) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(card.name) }, text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = 570.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { InteractiveFocusCard(card, Modifier.size(174.dp, 246.dp), interactive = true) }
         item { Text("${card.set} · ${card.number}", fontWeight = FontWeight.Bold) }
-        when (referenceTrendPrices.size) {
-            1 -> item { Text("Cardmarket-Trendpreis: ${euro(referenceTrendPrices.first())}", color = MewIce, fontWeight = FontWeight.Bold) }
-            in 2..Int.MAX_VALUE -> item {
+        when {
+            storedTrendPrice != null -> item { Text("Cardmarket-Trendpreis: ${euro(storedTrendPrice)}", color = MewIce, fontWeight = FontWeight.Bold) }
+            referenceTrendPrices.size == 1 -> item { Text("Cardmarket-Trendpreis: ${euro(referenceTrendPrices.first())}", color = MewIce, fontWeight = FontWeight.Bold) }
+            referenceTrendPrices.size >= 2 -> item {
                 Text(
                     "Cardmarket-Trendpreise: ${euro(referenceTrendPrices.first())} – ${euro(referenceTrendPrices.last())}",
                     color = MewIce,
@@ -1824,7 +1862,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
         item { Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
         item { Text("Karteneffekt automatisch: ${effect.profile.label}", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
         item { HorizontalDivider(color = VaultOutline) }
-        item { CardPriceHistorySection(card, priceHistory) }
+        item { CardPriceHistorySection(card, priceHistory, storedTrendPrice ?: referenceTrendPrices.singleOrNull()) }
         item { PriceSourcesSection(card, priceDate, context) }
     } }, confirmButton = {
         Row {
