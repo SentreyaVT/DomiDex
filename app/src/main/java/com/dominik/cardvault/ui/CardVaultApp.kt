@@ -41,6 +41,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -58,6 +59,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -117,6 +119,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.StateFlow
 import com.google.firebase.auth.FirebaseAuth
 
@@ -2041,6 +2044,7 @@ private fun openOfficialPage(context: Context, url: String) {
     var selectedCard by remember { mutableStateOf<PokemonVisualCard?>(null) }
     var products by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
     var setCardPrices by remember { mutableStateOf<Map<String, VisualCardMarketPrice>>(emptyMap()) }
+    var resolvedCardmarketExpansionId by remember { mutableStateOf<String?>(null) }
     var searchByPokemon by rememberSaveable { mutableStateOf(false) }
     var showAllSets by rememberSaveable { mutableStateOf(false) }
     var setConfirmationHint by rememberSaveable { mutableStateOf(false) }
@@ -2052,12 +2056,12 @@ private fun openOfficialPage(context: Context, url: String) {
     // receives its real trend prices without requiring the user to type again.
     val catalogRevision = catalogSync.lastSuccessAtEpochMillis
     LaunchedEffect(selectedSet) {
-        loading = true; error = false; query = ""
+        loading = true; error = false; query = ""; resolvedCardmarketExpansionId = selectedSet?.cardmarketExpansionId
         runCatching { if (selectedSet == null) sets = visualCatalog.sets() else cards = visualCatalog.cards(selectedSet!!) }
             .onFailure { error = true }
         loading = false
     }
-    LaunchedEffect(selectedCard, catalogRevision) {
+    LaunchedEffect(selectedCard, catalogRevision, resolvedCardmarketExpansionId) {
         val card = selectedCard ?: return@LaunchedEffect
         loading = true; error = false
         // Cardmarket stores the English card title plus attacks, but does not
@@ -2066,7 +2070,7 @@ private fun openOfficialPage(context: Context, url: String) {
         runCatching {
             val priceSearchName = card.marketSearchName ?: card.name
             val candidates = repository.searchCatalog(priceSearchName, 500)
-            visualCardmarketProducts(card, cards, candidates)
+            visualCardmarketProducts(card, cards, candidates, resolvedCardmarketExpansionId)
         }.onSuccess { products = it }
             .onFailure { products = emptyList(); error = true }
         loading = false
@@ -2075,17 +2079,29 @@ private fun openOfficialPage(context: Context, url: String) {
         if (selectedSet == null || cards.isEmpty()) { setCardPrices = emptyMap(); return@LaunchedEffect }
         // Resolve one source-verified Cardmarket printing per visual card. We never
         // use a similarly named product from another expansion as a fallback.
-        setCardPrices = withContext(Dispatchers.IO) {
-            val candidatesByMarketName = cards
+        val resolved = withContext(Dispatchers.IO) {
+            // Resolve candidate titles in small parallel batches. A whole set
+            // otherwise waited for hundreds of individual local SQL lookups
+            // before its first Cardmarket prices appeared.
+            val names = cards
                 .map { it.marketSearchName ?: it.name }
                 .distinct()
-                .associateWith { name -> repository.searchCatalog(name, 500) }
-            cards.associate { card ->
+            val candidatesByMarketName = buildMap {
+                names.chunked(10).forEach { batch ->
+                    batch.map { name -> async { name to repository.searchCatalog(name, 500) } }
+                        .awaitAll()
+                        .forEach { (name, candidates) -> put(name, candidates) }
+                }
+            }
+            val expansionId = resolveCardmarketExpansionId(cards, candidatesByMarketName)
+            expansionId to cards.associate { card ->
                 val searchName = card.marketSearchName ?: card.name
-                val product = visualCardmarketProducts(card, cards, candidatesByMarketName[searchName].orEmpty()).firstOrNull()
+                val product = visualCardmarketProducts(card, cards, candidatesByMarketName[searchName].orEmpty(), expansionId).firstOrNull()
                 card.id to VisualCardMarketPrice(product?.trendPriceEur, product != null, product != null)
             }
         }
+        resolvedCardmarketExpansionId = resolved.first
+        setCardPrices = resolved.second
     }
     LaunchedEffect(query, searchByPokemon, selectedSet, catalogRevision) {
         if (selectedSet == null && searchByPokemon && query.trim().length >= 2) pokemonResults = repository.searchCatalog(query, 20) else if (selectedSet == null) pokemonResults = emptyList()
@@ -2228,12 +2244,13 @@ private fun visualCardmarketProducts(
     card: PokemonVisualCard,
     cardsInSet: List<PokemonVisualCard>,
     candidates: List<CatalogSearchResult>,
+    resolvedExpansionId: String? = null,
 ): List<CatalogSearchResult> {
-    val expansionId = card.set.cardmarketExpansionId ?: return emptyList()
+    val expansionId = resolvedExpansionId ?: card.set.cardmarketExpansionId ?: return emptyList()
     val searchName = card.marketSearchName ?: card.name
     val samePrintingCandidates = candidates
         .asSequence()
-        .filter { it.expansionId == expansionId && cardmarketBaseName(it.name) == normalizeCardName(searchName) }
+        .filter { it.expansionId == expansionId && cardmarketNameMatches(it.name, searchName) }
         .distinctBy { it.productId }
         .sortedBy { it.productId }
         .toList()
@@ -2246,8 +2263,42 @@ private fun visualCardmarketProducts(
     return samePrintingCandidates.getOrNull(printedIndex.coerceAtLeast(0))?.let(::listOf).orEmpty()
 }
 
+/**
+ * Cardmarket's public download carries numeric expansion ids but no expansion
+ * names. For sets without a maintained bridge, derive one only when several
+ * source-backed English card names agree on the same expansion and it clearly
+ * beats every other candidate. Ambiguous sets deliberately remain unpriced.
+ */
+internal fun resolveCardmarketExpansionId(
+    cards: List<PokemonVisualCard>,
+    candidatesByMarketName: Map<String, List<CatalogSearchResult>>,
+): String? {
+    cards.firstOrNull()?.set?.cardmarketExpansionId?.let { return it }
+    val matches = cards.asSequence().flatMap { card ->
+        val name = card.marketSearchName ?: card.name
+        candidatesByMarketName[name].orEmpty().asSequence()
+            .filter { cardmarketNameMatches(it.name, name) }
+            .mapNotNull { candidate -> candidate.expansionId?.let { expansion -> card.id to expansion } }
+    }.groupBy({ it.second }, { it.first }).mapValues { (_, ids) -> ids.distinct().size }
+    val ranked = matches.entries.sortedByDescending { it.value }
+    val best = ranked.firstOrNull() ?: return null
+    val requiredEvidence = minOf(12, maxOf(3, cards.size / 10))
+    val second = ranked.getOrNull(1)?.value ?: 0
+    return best.key.takeIf { best.value >= requiredEvidence && best.value >= second + 2 }
+}
+
 private fun cardmarketBaseName(value: String): String =
     normalizeCardName(value.substringBefore('[').trim())
+
+/** Allows Cardmarket's descriptive parenthesis/hyphen suffixes, never a broad name prefix. */
+private fun cardmarketNameMatches(cardmarketName: String, sourceName: String): Boolean {
+    val source = sourceName.trim()
+    val product = cardmarketName.substringBefore('[').trim()
+    return normalizeCardName(product) == normalizeCardName(source) ||
+        product.startsWith("$source (", ignoreCase = true) ||
+        product.startsWith("$source -", ignoreCase = true) ||
+        product.startsWith("$source:", ignoreCase = true)
+}
 
 @Composable private fun CatalogSetIcon(set: PokemonSet, modifier: Modifier = Modifier) = Box(
     modifier.background(VaultNightRaised, CardVaultShapes.thumbnail),
@@ -2804,6 +2855,8 @@ private data class ScanFeedbackMark(
     val correctedText: String = "",
 )
 
+private enum class ScanFeedbackDragMode { MOVE, RESIZE }
+
 @Composable private fun ScanFeedbackConsentDialog(onHelp: () -> Unit, onDecline: () -> Unit, onManualSearch: () -> Unit) = AlertDialog(
     onDismissRequest = onDecline,
     title = { Text("Karte nicht sicher erkannt") },
@@ -2824,15 +2877,96 @@ private data class ScanFeedbackMark(
     )) }
     var selected by remember(imageFile) { mutableIntStateOf(0) }
     var categoryOpen by remember { mutableStateOf(false) }
+    var editBoxes by remember(imageFile) { mutableStateOf(true) }
+    var zoom by remember(imageFile) { mutableFloatStateOf(1f) }
+    var pan by remember(imageFile) { mutableStateOf(Offset.Zero) }
     val categories = listOf("Kartenname", "HP", "Kartentyp", "Artwork", "Attacke 1", "Schaden Attacke 1", "Attacke 2", "Schaden Attacke 2", "Regeltext", "Kartennummer", "Setkennung", "Seltenheit", "Variantensymbol", "Copyright/Hersteller", "Sonstiges")
     val active = marks.getOrNull(selected)
+    val latestMarks = rememberUpdatedState(marks)
     fun updateActive(change: (ScanFeedbackMark) -> ScanFeedbackMark) { marks = marks.mapIndexed { index, mark -> if (index == selected) change(mark) else mark } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Scanner-Feedback markieren") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Markiere hilfreiche Bereiche. Gelb kennzeichnet ausdrücklich eine Falscherkennung.", color = VaultTextMuted, fontSize = 12.sp)
-            Box(Modifier.fillMaxWidth().aspectRatio(.72f).clip(RoundedCornerShape(12.dp)).background(Color.Black).pointerInput(selected, marks) { detectDragGestures { change, drag -> change.consume(); active?.let { mark -> updateActive { it.copy(left = (mark.left + drag.x / size.width).coerceIn(0f, 1f - mark.width), top = (mark.top + drag.y / size.height).coerceIn(0f, 1f - mark.height)) } } } }) {
+            Text("Tippe eine Zone an, ziehe sie im Rahmen und ziehe den pinken Griff unten rechts zum Vergrößern oder Verkleinern.", color = VaultTextMuted, fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                FeedbackLegendSwatch(MewIce, "Cyan · hilfreiche Information")
+                FeedbackLegendSwatch(VaultGold, "Gelb · Falscherkennung")
+                FeedbackLegendSwatch(MewRose, "Pink · Größen-Griff")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(editBoxes, { editBoxes = true }, label = { Text("Felder") })
+                FilterChip(!editBoxes, { editBoxes = false }, label = { Text("Ansicht · Zoom") })
+                TextButton(onClick = { zoom = 1f; pan = Offset.Zero }) { Text("Karte einpassen") }
+            }
+            Box(Modifier.fillMaxWidth().aspectRatio(.72f).clip(RoundedCornerShape(12.dp)).background(Color.Black).pointerInput(editBoxes, zoom) {
+                if (!editBoxes) detectTransformGestures { _, delta, scaleChange, _ ->
+                    val nextZoom = (zoom * scaleChange).coerceIn(1f, 4f)
+                    val maxX = size.width * (nextZoom - 1f)
+                    val maxY = size.height * (nextZoom - 1f)
+                    zoom = nextZoom
+                    pan = Offset((pan.x + delta.x).coerceIn(-maxX, maxX), (pan.y + delta.y).coerceIn(-maxY, maxY))
+                }
+            }.then(if (editBoxes) Modifier.pointerInput(imageFile, zoom, pan) {
+                var dragIndex = -1
+                var dragMode = ScanFeedbackDragMode.MOVE
+                val handleRadius = 38f
+                detectDragGestures(
+                    onDragStart = { down ->
+                        val current = latestMarks.value
+                        dragIndex = current.indices.reversed().firstOrNull { index ->
+                            val mark = current[index]
+                            val left = mark.left * size.width * zoom + pan.x
+                            val top = mark.top * size.height * zoom + pan.y
+                            val right = left + mark.width * size.width * zoom
+                            val bottom = top + mark.height * size.height * zoom
+                            down.x in (left - handleRadius)..(right + handleRadius) && down.y in (top - handleRadius)..(bottom + handleRadius)
+                        } ?: -1
+                        if (dragIndex >= 0) {
+                            selected = dragIndex
+                            val mark = current[dragIndex]
+                            val handleX = (mark.left + mark.width) * size.width * zoom + pan.x
+                            val handleY = (mark.top + mark.height) * size.height * zoom + pan.y
+                            dragMode = if ((down - Offset(handleX, handleY)).getDistance() <= handleRadius * 1.5f) ScanFeedbackDragMode.RESIZE else ScanFeedbackDragMode.MOVE
+                        }
+                    },
+                    onDrag = { change, drag ->
+                        val index = dragIndex
+                        if (index < 0) return@detectDragGestures
+                        change.consume()
+                        val current = latestMarks.value
+                        val mark = current.getOrNull(index) ?: return@detectDragGestures
+                        val horizontal = drag.x / (size.width * zoom).coerceAtLeast(1f)
+                        val vertical = drag.y / (size.height * zoom).coerceAtLeast(1f)
+                        val changed = when (dragMode) {
+                            ScanFeedbackDragMode.MOVE -> mark.copy(
+                                left = (mark.left + horizontal).coerceIn(0f, 1f - mark.width),
+                                top = (mark.top + vertical).coerceIn(0f, 1f - mark.height),
+                            )
+                            ScanFeedbackDragMode.RESIZE -> mark.copy(
+                                width = (mark.width + horizontal).coerceIn(.06f, 1f - mark.left),
+                                height = (mark.height + vertical).coerceIn(.05f, 1f - mark.top),
+                            )
+                        }
+                        marks = current.mapIndexed { itemIndex, item -> if (itemIndex == index) changed else item }
+                    },
+                    onDragEnd = { dragIndex = -1 },
+                    onDragCancel = { dragIndex = -1 },
+                )
+            } else Modifier)) {
+                Box(Modifier.fillMaxSize().graphicsLayer { transformOrigin = TransformOrigin(0f, 0f); scaleX = zoom; scaleY = zoom; translationX = pan.x; translationY = pan.y }) {
                 AsyncImage(model = imageFile, contentDescription = "Scanbild für Feedback", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-                Canvas(Modifier.fillMaxSize()) { marks.forEachIndexed { index, mark -> val color = if (mark.negative) VaultGold else MewIce; val topLeft = Offset(mark.left * size.width, mark.top * size.height); val markSize = androidx.compose.ui.geometry.Size(mark.width * size.width, mark.height * size.height); drawRect(color, topLeft, markSize, style = Stroke(if (index == selected) 5f else 3f)); listOf(topLeft, Offset(topLeft.x + markSize.width, topLeft.y), Offset(topLeft.x, topLeft.y + markSize.height), Offset(topLeft.x + markSize.width, topLeft.y + markSize.height)).forEach { drawCircle(color, if (index == selected) 9f else 6f, it) } } }
+                Canvas(Modifier.fillMaxSize()) {
+                    marks.forEachIndexed { index, mark ->
+                        val color = if (mark.negative) VaultGold else MewIce
+                        val topLeft = Offset(mark.left * size.width, mark.top * size.height)
+                        val markSize = androidx.compose.ui.geometry.Size(mark.width * size.width, mark.height * size.height)
+                        val bottomRight = Offset(topLeft.x + markSize.width, topLeft.y + markSize.height)
+                        drawRect(color.copy(alpha = if (index == selected) .18f else .10f), topLeft, markSize)
+                        drawRect(color, topLeft, markSize, style = Stroke(if (index == selected) 5f else 3f))
+                        listOf(topLeft, Offset(bottomRight.x, topLeft.y), Offset(topLeft.x, bottomRight.y)).forEach { drawCircle(color, if (index == selected) 8f else 5f, it) }
+                        drawCircle(if (index == selected) MewRose else color, if (index == selected) 13f else 6f, bottomRight)
+                    }
+                }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = { marks = marks + ScanFeedbackMark(top = (.18f + marks.size * .08f).coerceAtMost(.75f)); selected = marks.lastIndex + 1 }) { Text("Bereich hinzufügen") }; TextButton(enabled = marks.size > 1, onClick = { marks = marks.filterIndexed { index, _ -> index != selected }; selected = (selected - 1).coerceAtLeast(0) }) { Text("Löschen", color = MaterialTheme.colorScheme.error) } }
             active?.let { mark ->
@@ -2847,6 +2981,11 @@ private data class ScanFeedbackMark(
             if (marks.size > 1) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { marks.indices.forEach { index -> FilterChip(selected == index, { selected = index }, label = { Text("${index + 1}") }) } }
         }
     }, confirmButton = { TextButton(enabled = marks.isNotEmpty(), onClick = { runCatching { persistScanFeedback(context, imageFile, marks, analysis) }.onSuccess { onConfirmed() } }) { Text("Lokal speichern") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } })
+}
+
+@Composable private fun FeedbackLegendSwatch(color: Color, label: String) = Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Box(Modifier.size(9.dp).clip(RoundedCornerShape(50)).background(color))
+    Text(label, color = VaultTextMuted, fontSize = 10.sp)
 }
 
 @Composable private fun FeedbackSlider(label: String, value: Float, onValueChange: (Float) -> Unit) = Column { Text(label, color = VaultTextMuted, fontSize = 11.sp); Slider(value = value, onValueChange = onValueChange, valueRange = .05f..1f) }

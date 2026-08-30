@@ -6,8 +6,11 @@ import androidx.work.*
 import com.dominik.cardvault.data.local.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
 import okio.buffer
 import okio.source
 import java.io.File
@@ -30,8 +33,16 @@ class CardmarketImporter(private val context: Context, private val database: Car
     suspend fun import(): Result<Unit> = runCatching {
         val dao = database.cardVaultDao(); val now = System.currentTimeMillis(); val previous = dao.syncState(CardmarketSyncContract.SOURCE)
         dao.putSyncState((previous ?: emptyState()).copy(status = "RUNNING", lastAttemptAtEpochMillis = now, errorMessage = null))
-        val productFile = download(CardmarketSyncContract.PRODUCT_URL, "products.json")
-        val priceFile = download(CardmarketSyncContract.PRICE_URL, "prices.json")
+        // The public Cardmarket catalog and price guide are independent downloads.
+        // Fetch both concurrently so opening DomiDex or pressing "Jetzt
+        // aktualisieren" is gated by the slower file instead of their combined
+        // download time. Parsing and the single Room transaction remain ordered
+        // to retain an atomic, matching catalog/price snapshot.
+        val (productFile, priceFile) = coroutineScope {
+            val products = async(Dispatchers.IO) { download(CardmarketSyncContract.PRODUCT_URL, "products.json") }
+            val prices = async(Dispatchers.IO) { download(CardmarketSyncContract.PRICE_URL, "prices.json") }
+            products.await() to prices.await()
+        }
         try {
             val products = productFile.source().buffer().use(CardmarketParsers::products)
             val prices = priceFile.source().buffer().use(CardmarketParsers::prices)
@@ -99,7 +110,19 @@ class CardmarketSyncScheduler(private val context: Context) {
      */
     fun refresh() {
         CoroutineScope(Dispatchers.IO).launch {
-            CardmarketImporter(context.applicationContext, CardVaultDatabase.get(context)).import()
+            // Ignore a second tap while the large public files are already being
+            // fetched. Parallel duplicate imports compete for bandwidth and delay
+            // the one result that can actually update the UI.
+            if (!immediateRefreshMutex.tryLock()) return@launch
+            try {
+                CardmarketImporter(context.applicationContext, CardVaultDatabase.get(context)).import()
+            } finally {
+                immediateRefreshMutex.unlock()
+            }
         }
+    }
+
+    private companion object {
+        val immediateRefreshMutex = Mutex()
     }
 }
