@@ -2096,11 +2096,10 @@ private fun openOfficialPage(context: Context, url: String) {
                 }
                 selectedSet != null -> items(cards.filter { matchesCardInSelectedSet(it.name, it.number, query) }, key = { it.id }) { card -> VisualCardRow(card, setCardPrices[card.id]) { selectedCard = card } }
                 searchByPokemon -> items(pokemonResults, key = { it.productId }) { result -> CatalogResultRow(result) {
-                    // Marketplace search hits do not reliably carry an app catalog set identity.
-                    // Require the visual set step instead of silently creating a technical/random binder.
-                    searchByPokemon = false
-                    query = ""
-                    setConfirmationHint = true
+                    // A Cardmarket result already is a concrete priced product. Pass it through
+                    // the established add dialog so finish, condition and quantity stay explicit,
+                    // while the entry is created in its Cardmarket set binder with that price link.
+                    onSelected(result)
                 } }
                 else -> {
                     if (query.isBlank() && !showAllSets) item {
