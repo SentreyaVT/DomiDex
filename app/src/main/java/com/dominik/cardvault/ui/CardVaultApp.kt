@@ -115,6 +115,7 @@ private enum class Destination(@param:StringRes val label: Int, val glyph: Strin
 }
 
 private data class TutorialStep(val title: String, val body: String, val destination: Destination)
+private data class VisualCardMarketPrice(val trendPriceEur: Double?, val exact: Boolean, val hasCardmarketProduct: Boolean)
 
 private val relaxedTutorialSteps = listOf(
     TutorialStep("Dein Binder", "Hier siehst du deine Sets wie in einem echten Album. Dunkle Karten sind noch nicht in deiner Sammlung – antippen zeigt trotzdem ihre Details.", Destination.BINDER),
@@ -1984,6 +1985,7 @@ private fun openOfficialPage(context: Context, url: String) {
     var cards by remember { mutableStateOf<List<PokemonVisualCard>>(emptyList()) }
     var selectedCard by remember { mutableStateOf<PokemonVisualCard?>(null) }
     var products by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
+    var setCardPrices by remember { mutableStateOf<Map<String, VisualCardMarketPrice>>(emptyMap()) }
     var searchByPokemon by rememberSaveable { mutableStateOf(false) }
     var showAllSets by rememberSaveable { mutableStateOf(false) }
     var setConfirmationHint by rememberSaveable { mutableStateOf(false) }
@@ -2016,6 +2018,22 @@ private fun openOfficialPage(context: Context, url: String) {
         }.onSuccess { products = it }
             .onFailure { products = emptyList(); error = true }
         loading = false
+    }
+    LaunchedEffect(cards, selectedSet, catalogRevision) {
+        if (selectedSet == null || cards.isEmpty()) { setCardPrices = emptyMap(); return@LaunchedEffect }
+        // Cardmarket's public compact export can omit set/number fields. We still show
+        // the real available trend next to every visual card, but retain whether that
+        // price is exact so the later add step never silently links a wrong printing.
+        setCardPrices = withContext(Dispatchers.IO) {
+            cards.associate { card ->
+                val searchName = card.marketSearchName ?: card.name
+                val matches = repository.searchCatalog(searchName, 40)
+                    .filter { product -> isSameNamePriceCandidate(searchName, product) }
+                val exact = matches.firstOrNull { product -> isExactVisualCatalogPriceMatch(card, product) && product.trendPriceEur != null }
+                val fallback = matches.firstOrNull { it.trendPriceEur != null }
+                card.id to VisualCardMarketPrice((exact ?: fallback)?.trendPriceEur, exact != null, matches.isNotEmpty())
+            }
+        }
     }
     LaunchedEffect(query, searchByPokemon, selectedSet, catalogRevision) {
         if (selectedSet == null && searchByPokemon && query.trim().length >= 2) pokemonResults = repository.searchCatalog(query, 20) else if (selectedSet == null) pokemonResults = emptyList()
@@ -2076,7 +2094,7 @@ private fun openOfficialPage(context: Context, url: String) {
                         } }
                     }
                 }
-                selectedSet != null -> items(cards.filter { matchesCardInSelectedSet(it.name, it.number, query) }, key = { it.id }) { card -> VisualCardRow(card) { selectedCard = card } }
+                selectedSet != null -> items(cards.filter { matchesCardInSelectedSet(it.name, it.number, query) }, key = { it.id }) { card -> VisualCardRow(card, setCardPrices[card.id]) { selectedCard = card } }
                 searchByPokemon -> items(pokemonResults, key = { it.productId }) { result -> CatalogResultRow(result) {
                     // Marketplace search hits do not reliably carry an app catalog set identity.
                     // Require the visual set step instead of silently creating a technical/random binder.
@@ -2136,10 +2154,22 @@ private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: Cat
     }
 }
 
-@Composable private fun VisualCardRow(card: PokemonVisualCard, onClick: () -> Unit) = OutlinedCard(onClick = onClick, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), modifier = Modifier.fillMaxWidth()) {
+@Composable private fun VisualCardRow(card: PokemonVisualCard, marketPrice: VisualCardMarketPrice? = null, onClick: () -> Unit) = OutlinedCard(onClick = onClick, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), modifier = Modifier.fillMaxWidth()) {
     Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         AsyncImage(model = card.smallImageUrl, contentDescription = stringResource(R.string.catalog_card_image_description, card.name, card.number), modifier = Modifier.size(72.dp, 101.dp))
-        Column(Modifier.weight(1f)) { Text(card.name, fontWeight = FontWeight.Bold); Text("#${card.number} · ${card.rarity ?: stringResource(R.string.unknown)}", color = VaultTextMuted, fontSize = 12.sp); Text(card.set.name, color = MewIce, fontSize = 11.sp) }
+        Column(Modifier.weight(1f)) {
+            Text(card.name, fontWeight = FontWeight.Bold)
+            Text("#${card.number} · ${card.rarity ?: stringResource(R.string.unknown)}", color = VaultTextMuted, fontSize = 12.sp)
+            Text(card.set.name, color = MewIce, fontSize = 11.sp)
+            val priceLabel = when {
+                marketPrice == null -> "Cardmarket-Preis wird geladen …"
+                marketPrice.trendPriceEur != null && marketPrice.exact -> "Cardmarket-Trendpreis: ${euro(marketPrice.trendPriceEur)}"
+                marketPrice.trendPriceEur != null -> "Cardmarket-Trendpreis ab ${euro(marketPrice.trendPriceEur)} · Druck prüfen"
+                marketPrice.hasCardmarketProduct -> "Kein Cardmarket-Trendpreis verfügbar"
+                else -> "Kein passender Cardmarket-Preis verfügbar"
+            }
+            Text(priceLabel, color = if (marketPrice?.trendPriceEur != null) MewIce else VaultTextMuted, fontSize = 11.sp, fontWeight = if (marketPrice?.trendPriceEur != null) FontWeight.SemiBold else FontWeight.Normal)
+        }
     }
 }
 
