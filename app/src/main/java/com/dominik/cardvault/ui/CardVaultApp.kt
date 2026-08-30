@@ -1,6 +1,7 @@
 package com.dominik.cardvault.ui
 
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -75,8 +76,10 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.dominik.cardvault.R
 import com.dominik.cardvault.auth.FirebaseGoogleAuthGateway
+import com.dominik.cardvault.auth.FirebaseGitHubAuthGateway
 import com.dominik.cardvault.auth.GoogleAccountState
 import com.dominik.cardvault.auth.GoogleLoginResult
+import com.dominik.cardvault.auth.GitHubLoginResult
 import com.dominik.cardvault.model.*
 import com.dominik.cardvault.data.catalog.PokemonSet
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
@@ -340,9 +343,13 @@ private val relaxedTutorialSteps = listOf(
 @Composable private fun AndroidUpdateSettings(context: Context) {
     val scope = rememberCoroutineScope()
     val gateway = remember { UnconfiguredAndroidUpdateGateway }
+    val githubGateway = remember { FirebaseGitHubAuthGateway() }
     val installedVersion = remember(context) { installedDomiDexVersion(context) }
     var checking by rememberSaveable { mutableStateOf(false) }
     var statusText by rememberSaveable { mutableStateOf<String?>(null) }
+    var githubAccount by remember { mutableStateOf(githubGateway.currentAccount()) }
+    var githubWorking by rememberSaveable { mutableStateOf(false) }
+    val activity = context as? Activity
 
     SettingsInfoBlock(
         "Installierte Version",
@@ -352,6 +359,39 @@ private val relaxedTutorialSteps = listOf(
         "Sicher aktualisieren",
         "DomiDex lädt Updates erst nach einer erfolgreichen, serverseitigen Berechtigungsprüfung. GitHub-Zugangsdaten werden niemals in der App gespeichert. Android zeigt vor einer Installation immer seine eigene Bestätigung an."
     )
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised),
+        border = BorderStroke(1.dp, VaultOutline),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Text("GitHub-Zugang", color = MewRoseSoft, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text(
+                if (githubAccount.isSignedIn) "GitHub-Sitzung auf diesem Gerät aktiv${githubAccount.displayName?.let { ": $it" } ?: "."}"
+                else "Melde dich einmal mit deinem freigegebenen GitHub-Konto an.",
+                color = VaultTextMuted,
+                fontSize = 12.sp,
+            )
+            if (!githubAccount.isSignedIn) {
+                OutlinedButton(
+                    onClick = {
+                        val host = activity ?: return@OutlinedButton
+                        githubWorking = true
+                        scope.launch {
+                            statusText = when (val result = githubGateway.signIn(host)) {
+                                is GitHubLoginResult.Success -> { githubAccount = result.account; "GitHub-Sitzung ist auf diesem Gerät aktiv." }
+                                GitHubLoginResult.Cancelled -> "GitHub-Anmeldung wurde abgebrochen."
+                                is GitHubLoginResult.Failed -> result.safeMessage
+                            }
+                            githubWorking = false
+                        }
+                    },
+                    enabled = !githubWorking && activity != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(if (githubWorking) "GitHub wird verbunden …" else "Mit GitHub anmelden") }
+            }
+        }
+    }
     Button(
         onClick = {
             checking = true
