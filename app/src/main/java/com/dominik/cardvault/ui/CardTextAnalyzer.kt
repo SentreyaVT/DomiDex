@@ -2,12 +2,10 @@ package com.dominik.cardvault.ui
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import com.google.mlkit.vision.common.InputImage
@@ -32,6 +30,12 @@ internal data class CardTextAnalysis(
     val hasNameRoiEvidence: Boolean = false,
     /** Low-confidence lower-border colour evidence; never assigns a rarity on its own. */
     val raritySymbolEvidence: RaritySymbolEvidence = RaritySymbolEvidence(SymbolColor.UNKNOWN, null, 0f),
+    /** Module-1 result; failed frames intentionally never reach a candidate lookup. */
+    val imageQuality: CardImageQuality = CardImageQuality(),
+    /** Current-session OCR evidence by normalized ROI. It is not persisted or uploaded. */
+    val roiEvidence: List<CardOcrEvidence> = emptyList(),
+    /** Perspective-corrected image kept only for the current local artwork cross-check. */
+    val normalizedCard: Bitmap? = null,
 )
 
 /** Parses only lower-border-like number pairs; HP/KP and attack damage are excluded. */
@@ -80,6 +84,7 @@ internal object CardTextParser {
         textByScript: Map<CardScript, String>,
         preferredNameText: String? = null,
         preferredNumberText: String? = null,
+        preferredSetText: String? = null,
     ): CardTextAnalysis {
         val latinScore = textByScript[CardScript.LATIN].orEmpty().count { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.LATIN }
         val japaneseScore = textByScript[CardScript.JAPANESE].orEmpty().count { it in '\u3040'..'\u30ff' }
@@ -104,7 +109,7 @@ internal object CardTextParser {
         val numberEvidence = CardNumberParser.find(preferredNumberText.orEmpty())
             ?: lines.asSequence().mapNotNull(CardNumberParser::find).firstOrNull()
         val collectorNumber = numberEvidence?.value
-        val setIdentifier = lines.asReversed().asSequence().mapNotNull { line ->
+        val setIdentifier = ((preferredSetText?.lineSequence()?.toList().orEmpty()) + lines.asReversed()).asSequence().mapNotNull { line ->
             // German cards may read "CRI DE", "DE CRI", or "CRI-DE". Treat DE
             // as the language marker in all three forms; no missing marker is an
             // error because the app's scan scope is German by design.
@@ -150,8 +155,7 @@ internal object CardTextParser {
     }
 }
 
-internal class CardTextAnalyzer(context: Context) : AutoCloseable {
-    private val appContext = context.applicationContext
+internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) : AutoCloseable {
     // The live beta path is deliberately bounded to the on-device Latin recognizer.
     // Waiting for optional CJK modules could leave a captured card in an endless
     // "analysis running" state on offline/emulator devices. A German/English card
@@ -161,11 +165,18 @@ internal class CardTextAnalyzer(context: Context) : AutoCloseable {
     )
 
     fun analyze(file: File, onComplete: (Result<CardTextAnalysis>) -> Unit) {
-        val image = runCatching { InputImage.fromFilePath(appContext, Uri.fromFile(file)) }
-            .getOrElse { onComplete(Result.failure(it)); return }
-        // Keep the read order deterministic: the name area is deliberately first.
-        // ML Kit finishes requests asynchronously, so a plain append would otherwise
-        // occasionally make attack text win over the title line.
+        val normalized = CardImageNormalizer.normalize(file)
+        val bitmap = normalized.bitmap
+        if (bitmap == null) {
+            // Module 1 is a hard safety gate. A sleeve, binder pocket or arbitrary background
+            // must not flow into identity OCR and accidentally become a Binder card.
+            onComplete(Result.success(CardTextAnalysis(emptyList(), null, null, null, emptyList(), imageQuality = normalized.quality)))
+            return
+        }
+        val raritySymbolEvidence = CardRaritySymbolAnalyzer.analyze(bitmap)
+        val inputs = buildOcrInputs(bitmap)
+        // Keep the read order deterministic. Each region has explicit variants; full-card OCR is
+        // intentionally absent so attack text and KP never become primary identity evidence.
         val results = mutableMapOf<CardScript, MutableMap<Int, String>>()
         val failures = mutableListOf<Throwable>()
         val delivered = AtomicBoolean(false)
@@ -176,34 +187,27 @@ internal class CardTextAnalyzer(context: Context) : AutoCloseable {
                 onComplete(outcome)
             }
         }
-        val decoded = BitmapFactory.decodeFile(file.absolutePath)
-        val raritySymbolEvidence = decoded?.let(CardRaritySymbolAnalyzer::analyze)
-            ?: RaritySymbolEvidence(SymbolColor.UNKNOWN, null, 0f)
-        val roiInputs = decoded?.let { bitmap ->
-            // OCR is deliberately confined to two small regions first. This makes
-            // holo glare and attack text far less influential than full-card OCR.
-            val nameArea = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, (bitmap.height * 0.34f).toInt().coerceAtLeast(1))
-            val lowerStart = (bitmap.height * 0.58f).toInt().coerceIn(0, bitmap.height - 1)
-            val lowerArea = Bitmap.createBitmap(bitmap, 0, lowerStart, bitmap.width, bitmap.height - lowerStart)
-            listOf(
-                InputImage.fromBitmap(nameArea, 0),
-                InputImage.fromBitmap(enhanceForOcr(nameArea), 0),
-                InputImage.fromBitmap(lowerArea, 0),
-                InputImage.fromBitmap(enhanceForOcr(lowerArea), 0),
-            )
-        }
-        // Name ROI variants → complete image fallback → lower-border variants.
-        // This happens only after a capture, never in ImageAnalysis.
-        val images = if (roiInputs != null) listOf(roiInputs[0], roiInputs[1], image, roiInputs[2], roiInputs[3]) else listOf(image)
         fun parseSnapshot(snapshot: Map<CardScript, Map<Int, String>>): CardTextAnalysis {
             val texts = snapshot.mapValues { (_, readings) -> readings.toSortedMap().values.joinToString("\n") }
             val latin = snapshot[CardScript.LATIN].orEmpty()
-            val nameRoi = if (roiInputs != null) listOfNotNull(latin[0], latin[1]).joinToString("\n") else null
-            val lowerRoi = if (roiInputs != null) listOfNotNull(latin[3], latin[4]).joinToString("\n") else null
-            return CardTextParser.parse(texts, preferredNameText = nameRoi, preferredNumberText = lowerRoi)
-                .copy(raritySymbolEvidence = raritySymbolEvidence)
+            fun values(region: CardOcrRegion) = inputs.mapIndexedNotNull { index, input -> latin[index]?.takeIf { input.region == region } }
+            val names = values(CardOcrRegion.NAME)
+            val sets = values(CardOcrRegion.SET)
+            val numbers = values(CardOcrRegion.NUMBER)
+            val parsed = CardTextParser.parse(
+                texts,
+                preferredNameText = names.joinToString("\n"),
+                preferredNumberText = numbers.joinToString("\n"),
+                preferredSetText = sets.joinToString("\n"),
+            )
+            val evidence = listOf(
+                CardOcrEvidence(CardOcrRegion.NAME, names, parsed.searchQueries.firstOrNull(), if (parsed.hasNameRoiEvidence) .62f else 0f),
+                CardOcrEvidence(CardOcrRegion.SET, sets, parsed.setIdentifier, parsed.setIdentifier?.let { .80f } ?: 0f),
+                CardOcrEvidence(CardOcrRegion.NUMBER, numbers, parsed.collectorNumber, parsed.numberConfidence),
+            )
+            return parsed.copy(raritySymbolEvidence = raritySymbolEvidence, imageQuality = normalized.quality, roiEvidence = evidence, normalizedCard = bitmap)
         }
-        var remaining = recognizers.size * images.size
+        var remaining = recognizers.size * inputs.size
         val lock = Any()
         // Never leave a person waiting indefinitely for an OCR engine on a weak or
         // cold-start emulator. Partial text is still useful; no text cleanly opens
@@ -215,8 +219,8 @@ internal class CardTextAnalyzer(context: Context) : AutoCloseable {
             if (partial.isNotEmpty()) deliver(Result.success(parseSnapshot(partial)))
             else deliver(Result.failure(TimeoutException("Lokale Texterkennung hat kein Ergebnis geliefert.")))
         }, 9_000L)
-        recognizers.forEach { (script, recognizer) -> images.forEachIndexed { imageIndex, imageToRead ->
-            recognizer.process(imageToRead)
+        recognizers.forEach { (script, recognizer) -> inputs.forEachIndexed { imageIndex, input ->
+            recognizer.process(input.image)
                 .addOnSuccessListener { text ->
                     synchronized(lock) { results.getOrPut(script, ::mutableMapOf)[imageIndex] = text.text }
                 }
@@ -238,6 +242,24 @@ internal class CardTextAnalyzer(context: Context) : AutoCloseable {
     override fun close() = recognizers.values.forEach(TextRecognizer::close)
 }
 
+private data class OcrInput(val region: CardOcrRegion, val image: InputImage)
+
+private fun buildOcrInputs(bitmap: Bitmap): List<OcrInput> {
+    fun variants(region: CardOcrRegion, roi: CardRoi, inverted: Boolean = false): List<OcrInput> {
+        val crop = roi.crop(bitmap)
+        val enhanced = enhanceForOcr(crop)
+        val result = mutableListOf(
+            OcrInput(region, InputImage.fromBitmap(crop, 0)),
+            OcrInput(region, InputImage.fromBitmap(enhanced, 0)),
+        )
+        if (inverted) result += OcrInput(region, InputImage.fromBitmap(invertForOcr(enhanced), 0))
+        return result
+    }
+    return variants(CardOcrRegion.NAME, CardOcrRois.name) +
+        variants(CardOcrRegion.SET, CardOcrRois.set, inverted = true) +
+        variants(CardOcrRegion.NUMBER, CardOcrRois.number, inverted = true)
+}
+
 /** Small, allocation-bounded ROI enhancement for glare/low-contrast lower print. */
 private fun enhanceForOcr(source: Bitmap): Bitmap {
     val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
@@ -251,6 +273,18 @@ private fun enhanceForOcr(source: Bitmap): Bitmap {
             0f, 0f, 0f, 1f, 0f,
         )))
     }
+    Canvas(output).drawBitmap(source, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(matrix) })
+    return output
+}
+
+private fun invertForOcr(source: Bitmap): Bitmap {
+    val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    val matrix = ColorMatrix(floatArrayOf(
+        -1f, 0f, 0f, 0f, 255f,
+        0f, -1f, 0f, 0f, 255f,
+        0f, 0f, -1f, 0f, 255f,
+        0f, 0f, 0f, 1f, 0f,
+    ))
     Canvas(output).drawBitmap(source, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(matrix) })
     return output
 }

@@ -77,6 +77,11 @@ internal data class ScannerDebugSnapshot(
     val reason: String = "",
     val raritySymbolColor: SymbolColor = SymbolColor.UNKNOWN,
     val raritySymbolConfidence: Float = 0f,
+    val frameConfidence: Float = 0f,
+    val secondBestConfidence: Int = 0,
+    val decision: String = "",
+    val artworkConfidence: Float = 0f,
+    val artworkMatch: String = "",
 )
 /** Volatile diagnostic data only; no card, image, or account data is retained here. */
 internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugSnapshot()) }

@@ -25,6 +25,8 @@ data class PokemonVisualCard(
     // The source lists actual available printings. A missing variant payload is
     // intentionally treated as one normal printing, never as a guessed holo.
     val printVariants: List<PokemonPrintVariant> = listOf(PokemonPrintVariant("normal", "Normal", "Standard")),
+    /** Same source card in Cardmarket's commonly used English naming. */
+    val marketSearchName: String? = null,
 )
 
 /** Maps only source-declared collectible printings to separate binder slots. */
@@ -46,6 +48,7 @@ internal fun pokemonPrintVariantForSourceKey(key: String): PokemonPrintVariant? 
 class PokemonVisualCatalog {
     val isLicensedSourceConfigured: Boolean get() = true
     private val germanBaseUrl = "https://api.tcgdex.net/v2/de"
+    private val englishBaseUrl = "https://api.tcgdex.net/v2/en"
 
     suspend fun sets(query: String = ""): List<PokemonSet> = withContext(Dispatchers.IO) {
         val result = read("$germanBaseUrl/sets") { reader ->
@@ -59,7 +62,18 @@ class PokemonVisualCatalog {
         val result = read("$germanBaseUrl/sets/${set.id}") { reader ->
             parseGermanSetCards(reader, set)
         }
-        result.sortedWith(compareBy({ it.number.toIntOrNull() ?: Int.MAX_VALUE }, { it.number })).filter { query.isBlank() || it.name.contains(query, true) || it.number.contains(query, true) }
+        // Cardmarket's compact price catalogue commonly uses the English card
+        // name. TCGdex exposes the same card ids in both locales, so enrich the
+        // German UI card with that source-backed lookup name instead of guessing
+        // translations ourselves.
+        val englishNames = runCatching {
+            read("$englishBaseUrl/sets/${set.id}") { reader ->
+                parseGermanSetCards(reader, set).associate { it.id to it.name }
+            }
+        }.getOrDefault(emptyMap())
+        result.map { card -> card.copy(marketSearchName = englishNames[card.id]) }
+            .sortedWith(compareBy({ it.number.toIntOrNull() ?: Int.MAX_VALUE }, { it.number }))
+            .filter { query.isBlank() || it.name.contains(query, true) || it.number.contains(query, true) }
     }
 
     /**

@@ -89,6 +89,16 @@ class CardTextParserTest {
         assertTrue(result.numberConfidence >= .8f)
     }
 
+    @Test fun prefersDedicatedSetRoiOverUnrelatedNameRegionText() {
+        val result = CardTextParser.parse(
+            textByScript = mapOf(CardScript.LATIN to "Tropius\nFruchtiges Aroma\n001/084"),
+            preferredSetText = "PBL DE 001/084",
+            preferredNumberText = "001/084",
+        )
+        assertEquals("PBL", result.setIdentifier)
+        assertEquals("001/084", result.collectorNumber)
+    }
+
     @Test fun recognizesCompactGermanLowerBorderCodeAndFoilOcrDigits() {
         val result = CardTextParser.parse(mapOf(CardScript.LATIN to "Glurak ex\nOBF Z98/G97"))
 

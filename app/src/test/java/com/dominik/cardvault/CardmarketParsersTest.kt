@@ -1,6 +1,7 @@
 package com.dominik.cardvault
 
 import com.dominik.cardvault.data.sync.CardmarketParsers
+import com.dominik.cardvault.data.sync.guideValueMinor
 import okio.Buffer
 import org.junit.Assert.*
 import org.junit.Test
@@ -22,5 +23,14 @@ class CardmarketParsersTest {
         assertEquals(124L, price.average30Minor)
         assertNull(price.holoAverageMinor)
         assertEquals(393L, price.holoTrendMinor)
+    }
+
+    @Test fun priceGuideFallsBackOnlyWhenTrendIsUnavailable() {
+        val prices = CardmarketParsers.prices(Buffer().writeUtf8("""{"version":1,"priceGuides":[
+            {"idProduct":10,"idCategory":52,"avg":12.5,"low":8.0,"trend":null,"avg7":13.25,"avg30":14.0},
+            {"idProduct":11,"idCategory":52,"avg":12.5,"low":8.0,"trend":15.0,"avg7":13.25,"avg30":14.0}
+        ]}""")).records
+        assertEquals(1400L, prices.first().guideValueMinor())
+        assertEquals(1500L, prices.last().guideValueMinor())
     }
 }

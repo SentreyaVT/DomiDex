@@ -20,12 +20,14 @@ class CardTextAnalyzerInstrumentedTest {
     @Test fun bundledLatinModelReadsCardLikeNameAndNumberLocally() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val imageFile = File(context.cacheDir, "ocr-fixture.png")
-        val bitmap = Bitmap.createBitmap(1200, 600, Bitmap.Config.ARGB_8888)
+        val bitmap = Bitmap.createBitmap(900, 1_200, Bitmap.Config.ARGB_8888)
         Canvas(bitmap).apply {
-            drawColor(Color.WHITE)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 110f }
-            drawText("Pikachu ex", 70f, 220f, paint)
-            drawText("122/088", 70f, 430f, paint)
+            drawColor(Color.rgb(20, 22, 28))
+            drawRect(135f, 140f, 765f, 1_020f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(220, 235, 205) })
+            drawRect(135f, 140f, 765f, 1_020f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 18f })
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 64f }
+            drawText("Pikachu ex", 185f, 285f, paint)
+            drawText("PBL 122/088", 185f, 930f, paint)
         }
         FileOutputStream(imageFile).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         bitmap.recycle()

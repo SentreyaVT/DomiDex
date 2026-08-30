@@ -743,26 +743,12 @@ private fun isDebuggableBuild(context: Context): Boolean =
         }
     }
     if (choosingCatalog) CatalogProductPicker(repository, onDismiss = { choosingCatalog = false }, onSelected = { result ->
-        // The visual set chosen by the user is authoritative for the Binder.
-        // A Cardmarket expansion ID is pricing metadata, never a Binder name.
-        scope.launch {
-            repository.addManualCard(ManualCardInput(
-                name = result.name,
-                setName = result.visualSetName ?: "Ohne Setzuordnung",
-                collectorNumber = result.collectorNumber.orEmpty(),
-                language = CardLanguage.GERMAN,
-                finish = "Normal",
-                variant = "Standard",
-                quantity = 1,
-                condition = "Nicht geprüft",
-                notes = "",
-                acquisitionPriceEur = null,
-                acquisitionDateEpochDay = null,
-                externalProductId = result.productId.takeIf { it > 0 },
-                imageUrl = result.imageUrl,
-            ))
-        }
+        // Never shortcut a catalog tap into a fixed normal-card insertion. The existing dialog
+        // is the single entry point for finish, Holo effect, condition and the exact price link.
+        // The source-confirmed visual set stays authoritative for the Binder name.
+        catalogDraft = result
         choosingCatalog = false
+        adding = true
     })
     if (adding) ManualCardDialog(repository = repository, initialCatalog = catalogDraft, onDismiss = { adding = false; catalogDraft = null }, onSave = { input -> scope.launch { repository.addManualCard(input) }; adding = false; catalogDraft = null })
 }
@@ -1084,6 +1070,7 @@ private fun PokemonVisualCard.asBinderReferences(): List<CollectionCard> = print
         accent = 0xFF24263A,
         imageUrl = largeImageUrl,
         rarity = rarity ?: "UNKNOWN",
+        marketSearchName = marketSearchName,
     )
 }
 
@@ -1761,8 +1748,13 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
         loading = true
         val catalogMatches = runCatching { repository.searchCatalog(reference.name, 60) }
             .getOrDefault(emptyList())
-            .filter { product -> isExactBinderPriceMatch(reference, product) }
+            // Cardmarket's compact public catalogue can omit printed number and
+            // German set metadata. Keep same-name products selectable, but never
+            // choose one automatically unless the full exact match is present.
+            .filter { product -> isSameNamePriceCandidate(reference.marketSearchName ?: reference.name, product) }
             .distinctBy { it.productId }
+        val exactCatalogMatches = catalogMatches.filter { product -> isExactBinderPriceMatch(reference, product) }
+        val manualCatalogMatches = catalogMatches.filterNot { product -> isExactBinderPriceMatch(reference, product) }
         // An already owned card with a saved product identity is stronger
         // evidence than a fresh text search.  Reusing it for another copy is
         // safe and keeps the existing exact Cardmarket linkage intact.
@@ -1781,7 +1773,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                 variant = reference.variant,
             )
         }
-        candidates = listOfNotNull(knownLinkedProduct).plus(catalogMatches).distinctBy { it.productId }
+        candidates = listOfNotNull(knownLinkedProduct).plus(exactCatalogMatches).plus(manualCatalogMatches).distinctBy { it.productId }
         loading = false
     }
     fun addReference(product: CatalogSearchResult?) {
@@ -1821,11 +1813,12 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                 item {
                     Text(reference.name, fontWeight = FontWeight.Bold)
                     Text("${reference.set} · ${reference.number}", color = VaultTextMuted, fontSize = 12.sp)
-                    Text("Wähle nur das passende Cardmarket-Produkt. So wird kein Preis einer ähnlich benannten Karte übernommen.", color = VaultTextMuted, fontSize = 12.sp)
+                    Text("Exakte Treffer werden zuerst gezeigt. Weitere gleichnamige Cardmarket-Produkte können bewusst ausgewählt werden, wenn Set und Druck geprüft wurden.", color = VaultTextMuted, fontSize = 12.sp)
                 }
                 if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 if (!loading && candidates.isNotEmpty()) {
-                    val trendChoice = candidates.firstOrNull { it.trendPriceEur != null }
+                    val exactCandidates = candidates.filter { product -> isExactBinderPriceMatch(reference, product) }
+                    val trendChoice = exactCandidates.firstOrNull { it.trendPriceEur != null }
                     trendChoice?.let { product ->
                         item {
                             Text("Zuerst vorgeschlagen", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
@@ -1836,14 +1829,17 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                                 colors = CardDefaults.elevatedCardColors(containerColor = MewPlumDeep),
                             ) {
                                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    Text("Durchschnittspreis · Cardmarket-Trend", fontWeight = FontWeight.Bold)
+                            Text("Exakter Druck · Cardmarket-Preisguide", fontWeight = FontWeight.Bold)
                                     Text(euro(product.trendPriceEur!!), color = MewIce, fontSize = 20.sp, fontWeight = FontWeight.Black)
                                     Text("Passenden Druck auswählen und zum Binder hinzufügen", color = VaultTextMuted, fontSize = 11.sp)
                                 }
                             }
                         }
                     }
-                    item { Text("Weitere passende Cardmarket-Drucke", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+                    if (exactCandidates.isEmpty()) item {
+                        Text("Kein automatisch verknüpfbarer exakter Druck. Du kannst unten einen gleichnamigen Cardmarket-Druck bewusst auswählen.", color = VaultGold, fontSize = 11.sp)
+                    }
+                    item { Text("Weitere Cardmarket-Drucke", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
                     items(candidates.filter { it.productId != trendChoice?.productId }, key = { it.productId }) { product ->
                         OutlinedCard(
                             onClick = { addReference(product) },
@@ -1862,7 +1858,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                                     fontSize = 11.sp,
                                 )
                                 Text(
-                                    product.trendPriceEur?.let { "Cardmarket-Trendpreis: ${euro(it)}" } ?: "Cardmarket-Produkt ohne gespeicherten Trendpreis",
+                                    product.trendPriceEur?.let { "Cardmarket-Preisguide: ${euro(it)}" } ?: "Cardmarket-Produkt ohne gespeicherten Preisguide",
                                     color = if (product.trendPriceEur != null) MewIce else VaultTextMuted,
                                     fontSize = 13.sp,
                                 )
@@ -1885,11 +1881,14 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
 }
 
 private fun isExactBinderPriceMatch(reference: CollectionCard, product: CatalogSearchResult): Boolean {
-    val sameName = normalizeCardName(reference.name) == normalizeCardName(product.name)
+    val sameName = normalizeCardName(reference.marketSearchName ?: reference.name) == normalizeCardName(product.name)
     val sameNumber = normalizedCollectorNumber(reference.number) == normalizedCollectorNumber(product.collectorNumber.orEmpty())
     val sameSet = normalizeBinderMetadata(reference.set) == normalizeBinderMetadata(product.visualSetName ?: product.expansionId)
     return sameName && sameNumber && sameSet
 }
+
+private fun isSameNamePriceCandidate(name: String, product: CatalogSearchResult): Boolean =
+    normalizeCardName(name) == normalizeCardName(product.name)
 
 private fun normalizedCollectorNumber(value: String): String = value
     .substringBefore('/')
@@ -1915,7 +1914,7 @@ private fun normalizeBinderMetadata(value: String): String = value.lowercase(Loc
         openOfficialPage(context, OfficialSourceLinks.PSA_AUCTION_PRICES)
     }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.open_psa_research)) }
     Text(stringResource(R.string.psa_research_hint, OfficialSourceLinks.psaSearchText(card)), color = VaultTextMuted, fontSize = 10.sp)
-    Text("Portfoliowert ausschließlich aus dem aktuellen Cardmarket-Trendpreis des ausdrücklich verknüpften Produkts. Holo nutzt nur den Cardmarket-Holo-Trend, wenn vorhanden. Ohne exakte Zuordnung zeigt DomiDex keinen geschätzten Preis.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+    Text("Portfoliowert nutzt den Cardmarket-Preisguide des ausdrücklich verknüpften Produkts: Trendpreis, wenn vorhanden, sonst eine vorhandene Cardmarket-Preisreferenz. Holo nutzt zuerst den Holo-Preisguide. Ohne Verknüpfung wird kein Wert geschätzt.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
 }
 
 private fun openOfficialPage(context: Context, url: String) {
@@ -2081,6 +2080,7 @@ private fun catalogResultForVisualCard(card: PokemonVisualCard) = CatalogSearchR
     hasMarketProduct = false,
     mainSetSize = card.set.total.takeIf { it > 0 },
     setCode = card.set.ptcgoCode,
+    marketSearchName = card.marketSearchName,
 )
 
 private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: CatalogSearchResult): Boolean =
@@ -2120,17 +2120,22 @@ private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: Cat
     var marketProducts by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
     var marketLoading by remember { mutableStateOf(false) }
     var selectedMarketProductId by rememberSaveable { mutableStateOf<Long?>(initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }) }
-    LaunchedEffect(name, set, number) {
+    // The display name stays German. When the card came from TCGdex, use its
+    // matching English source name only for the Cardmarket catalogue lookup.
+    val priceSearchName = initialCatalog?.takeIf { name == initialCatalog.name }?.marketSearchName ?: name
+    LaunchedEffect(name, set, number, finish, priceSearchName) {
         if (name.trim().length < 2 || set.isBlank() || number.isBlank()) {
             marketProducts = emptyList(); marketLoading = false; selectedMarketProductId = initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }
             return@LaunchedEffect
         }
         marketLoading = true
-        val exactProducts = runCatching { repository.searchCatalog(name, 60) }
+        val sameNameProducts = runCatching { repository.searchCatalog(priceSearchName, 60) }
             .getOrDefault(emptyList())
-            .filter { product -> isExactManualPriceMatch(name, set, number, product) }
+            .filter { product -> isSameNamePriceCandidate(priceSearchName, product) }
             .distinctBy { it.productId }
-        marketProducts = exactProducts
+        val exactProducts = sameNameProducts.filter { product -> isExactManualPriceMatch(priceSearchName, set, number, product) }
+        val manualProducts = sameNameProducts.filterNot { product -> isExactManualPriceMatch(priceSearchName, set, number, product) }
+        marketProducts = exactProducts + manualProducts
         selectedMarketProductId = selectedMarketProductId?.takeIf { id -> exactProducts.any { it.productId == id } }
             ?: exactProducts.firstOrNull { it.trendPriceEur != null }?.productId
             ?: exactProducts.firstOrNull()?.productId
@@ -2145,11 +2150,14 @@ private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: Cat
             item { Text(stringResource(R.string.field_language), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); Text("Deutsch", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Text("DomiDex wird für deutsche Karten geführt.", color = VaultTextMuted, fontSize = 10.sp) }
             item { CardFinishAndEffectEditor(finish, { finish = it }, variant, { variant = it }, effectOverride, { effectOverride = it }) }
             item {
-                Text("Cardmarket-Trendpreis", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text("Cardmarket-Preisguide", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 when {
                     marketLoading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                    marketProducts.isEmpty() -> Text("Für Name, Set und Kartennummer ist aktuell kein exakter Cardmarket-Eintrag im lokalen Katalog verfügbar.", color = VaultTextMuted, fontSize = 11.sp)
+                    marketProducts.isEmpty() -> Text("Für diesen Kartennamen ist aktuell kein Cardmarket-Eintrag im lokalen Katalog verfügbar. Du kannst die Karte trotzdem speichern und später einen Preis verknüpfen.", color = VaultTextMuted, fontSize = 11.sp)
                     else -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (marketProducts.none { product -> isExactManualPriceMatch(priceSearchName, set, number, product) }) {
+                            Text("Kein exakt prüfbarer Druck gefunden. Gleichnamige Cardmarket-Produkte sind unten auswählbar – bitte Set und Druck vor dem Speichern prüfen.", color = VaultGold, fontSize = 11.sp)
+                        }
                         marketProducts.forEach { product ->
                             OutlinedCard(
                                 onClick = { selectedMarketProductId = product.productId },
@@ -2158,8 +2166,9 @@ private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: Cat
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(product.trendPriceEur?.let { "Cardmarket-Trend: ${euro(it)}" } ?: "Cardmarket-Produkt ohne gespeicherten Trendpreis", color = if (product.trendPriceEur != null) MewIce else VaultTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text(product.trendPriceEur?.let { "Cardmarket-Preisguide: ${euro(it)}" } ?: "Cardmarket-Produkt ohne gespeicherten Preisguide", color = if (product.trendPriceEur != null) MewIce else VaultTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                     Text(listOfNotNull(product.finish, product.variant).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "Exakter Druck" }, color = VaultTextMuted, fontSize = 11.sp)
+                                    Text(if (isExactManualPriceMatch(priceSearchName, set, number, product)) "Exakte Zuordnung" else "Gleichnamiger Druck – Auswahl vor dem Speichern prüfen", color = if (isExactManualPriceMatch(priceSearchName, set, number, product)) MewIce else VaultGold, fontSize = 10.sp)
                                 }
                             }
                         }
@@ -2243,6 +2252,13 @@ private fun parseDate(value: String): Long? = if (value.isBlank()) null else run
 /** A locally verified suggestion waiting for the collector's explicit selection. */
 private data class ScanRailResult(val candidate: CatalogSearchResult, val score: Int)
 
+private fun artworkLabel(result: ArtworkVerification): String = when (result.match) {
+    ArtworkMatch.CORROBORATES -> "passt zur Referenz"
+    ArtworkMatch.CONTRADICTS -> "abweichend – bitte prüfen"
+    ArtworkMatch.INCONCLUSIVE -> "nicht eindeutig"
+    ArtworkMatch.UNAVAILABLE -> "Referenz nicht verfügbar"
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun ScannerScreen(repository: CollectionRepository, onBack: () -> Unit) {
     val context = LocalContext.current
@@ -2254,6 +2270,8 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
     var analysisFailed by remember { mutableStateOf(false) }
     var candidates by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
     var candidateScores by remember { mutableStateOf<Map<Long, Int>>(emptyMap()) }
+    var artworkScores by remember { mutableStateOf<Map<Long, ArtworkVerification>>(emptyMap()) }
+    var artworkLoading by remember { mutableStateOf(false) }
     var candidatesLoading by remember { mutableStateOf(false) }
     var recentResults by remember { mutableStateOf<List<ScanRailResult>>(emptyList()) }
     var selectedCandidate by remember { mutableStateOf<CatalogSearchResult?>(null) }
@@ -2268,6 +2286,19 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
     DisposableEffect(textAnalyzer) { onDispose { textAnalyzer.close() } }
     LaunchedEffect(analysis) {
         val current = analysis ?: return@LaunchedEffect
+        if (!current.imageQuality.cardDetected || current.imageQuality.reason.isNotBlank()) {
+            candidates = emptyList()
+            candidateScores = emptyMap()
+            candidatesLoading = false
+            manualEvidence = true
+            ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
+                state = AutoScanState.NOT_FOUND,
+                frameConfidence = current.imageQuality.frameConfidence,
+                finalConfidence = 0,
+                reason = current.imageQuality.reason.ifBlank { "card_frame_missing" },
+            )
+            return@LaunchedEffect
+        }
         ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
             state = AutoScanState.MATCHING,
             numberConfidence = current.numberConfidence,
@@ -2276,6 +2307,8 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
             raritySymbolConfidence = current.raritySymbolEvidence.confidence,
         )
         candidatesLoading = true
+        artworkScores = emptyMap()
+        artworkLoading = false
         val found = linkedMapOf<Long, CatalogSearchResult>()
         runCatching {
             current.setIdentifier?.let { setCode -> current.collectorNumber?.let { number ->
@@ -2293,7 +2326,7 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
                         }
                         if (exactProducts.isNotEmpty()) {
                             exactProducts.forEach { product ->
-                                found.putIfAbsent(product.productId, product.copy(name = visualCard.name, visualSetName = visualCard.set.name, collectorNumber = visualCard.number, imageUrl = visualCard.largeImageUrl, finish = printing.finish, variant = printing.variant, rarity = visualCard.rarity, mainSetSize = visualCard.set.printedTotal, setCode = PokemonSetRegistry.metadata(visualCard.set).setCode))
+                                found.putIfAbsent(product.productId, product.copy(name = visualCard.name, visualSetName = visualCard.set.name, collectorNumber = visualCard.number, imageUrl = visualCard.largeImageUrl, finish = printing.finish, variant = printing.variant, rarity = visualCard.rarity, mainSetSize = visualCard.set.printedTotal, setCode = PokemonSetRegistry.metadata(visualCard.set).setCode, marketSearchName = visualCard.marketSearchName))
                             }
                         } else {
                             // Set + printed number identifies the card. The finish remains a
@@ -2314,6 +2347,7 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
                                 hasMarketProduct = false,
                                 mainSetSize = visualCard.set.printedTotal,
                                 setCode = PokemonSetRegistry.metadata(visualCard.set).setCode,
+                                marketSearchName = visualCard.marketSearchName,
                             ))
                         }
                     }
@@ -2334,13 +2368,37 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
         candidates = ranked.map { it.first }
         candidateScores = ranked.associate { it.first.productId to it.second }
         candidatesLoading = false
+        // Module 4 is deliberately asynchronous: a public reference image may be slow or absent,
+        // but it must never hold the camera or price refresh queue. It only corroborates an
+        // already strict set + number candidate and is surfaced before the collector adds a card.
+        current.normalizedCard?.takeIf { ranked.isNotEmpty() }?.let { captured ->
+            val visualCandidates = ranked.map { it.first }.filter { !it.imageUrl.isNullOrBlank() }.take(4)
+            if (visualCandidates.isNotEmpty()) {
+                artworkLoading = true
+                scope.launch {
+                    val verified = withContext(Dispatchers.IO) {
+                        visualCandidates.associate { candidate -> candidate.productId to CardArtworkVerifier.verify(captured, candidate.imageUrl) }
+                    }
+                    artworkScores = verified
+                    artworkLoading = false
+                    val bestArtwork = verified[ranked.first().first.productId]
+                    ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
+                        artworkConfidence = bestArtwork?.confidence ?: 0f,
+                        artworkMatch = bestArtwork?.match?.name.orEmpty(),
+                    )
+                }
+            }
+        }
+        val decision = ScannerDecisionPolicy.decide(ranked.map { it.second })
         ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
-            state = when { ranked.isEmpty() -> AutoScanState.NOT_FOUND; ranked.first().second >= 90 -> AutoScanState.CONFIRMED; else -> AutoScanState.AMBIGUOUS },
+            state = when (decision.decision) { ScannerDecision.ACCEPTED -> AutoScanState.CONFIRMED; ScannerDecision.AMBIGUOUS -> AutoScanState.AMBIGUOUS; ScannerDecision.REJECTED -> AutoScanState.NOT_FOUND },
             candidateCount = ranked.size,
-            finalConfidence = ranked.firstOrNull()?.second ?: 0,
-            reason = if (ranked.isEmpty()) "no_safe_candidate" else "set_number_name_ranked",
+            finalConfidence = decision.bestScore,
+            secondBestConfidence = decision.secondScore ?: 0,
+            decision = decision.decision.name,
+            reason = decision.reason,
         )
-        if (ranked.isNotEmpty()) {
+        if (decision.decision == ScannerDecision.ACCEPTED && ranked.isNotEmpty()) {
             // Fast scan mode never adds a card silently. It clears the blocking
             // sheet and keeps the best evidence-backed result in the lower rail,
             // ready for a deliberate tap while the camera continues with the next.
@@ -2353,7 +2411,7 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
         // A successful photo must never leave the collector at a dead end. When OCR
         // lacks sufficient evidence, immediately ask for the two printed markers
         // rather than pretending that a card identity can be guessed.
-        if (candidates.isEmpty()) manualEvidence = true
+        if (decision.decision == ScannerDecision.REJECTED) manualEvidence = true
     }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it; denied = !it }
     Box(Modifier.fillMaxSize()) {
@@ -2361,7 +2419,7 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
             LiveCameraScanner(
                 modifier = Modifier.fillMaxSize(),
                 onCaptureStarted = {
-                    analysisRunning = true; analysis = null; analysisFailed = false; candidates = emptyList(); candidateScores = emptyMap()
+                    analysisRunning = true; analysis = null; analysisFailed = false; candidates = emptyList(); candidateScores = emptyMap(); artworkScores = emptyMap(); artworkLoading = false
                     ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(state = AutoScanState.CAPTURING, reason = "capture_started")
                 },
                 onCaptureSaved = { file, qualityEligible ->
@@ -2389,6 +2447,11 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
         Surface(modifier = Modifier.align(Alignment.TopStart).padding(12.dp), color = VaultNight.copy(alpha = .78f), shape = CardVaultShapes.card) {
             TextButton(onClick = onBack) { Text("‹ Übersicht", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
         }
+        if (isDebuggableBuild(context)) ScannerDebugOverlay(
+            snapshot = ScannerDebugState.snapshot,
+            analysis = analysis,
+            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+        )
         if (analysisRunning || analysisFailed || analysis != null) {
             ModalBottomSheet(
                 onDismissRequest = { if (!analysisRunning) { analysis = null; analysisFailed = false } },
@@ -2414,7 +2477,21 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
                                 ElevatedCard(onClick = { selectedCandidate = candidate; analysis = null }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) {
                                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Text("${index + 1}", color = MewRoseSoft, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 12.dp))
-                                        Column(Modifier.weight(1f)) { Text(candidate.name, color = VaultText, fontWeight = FontWeight.SemiBold); Text("${candidate.visualSetName ?: candidate.expansionId} · ${candidate.collectorNumber ?: "ohne Nummer"}", color = VaultTextMuted, fontSize = 12.sp); candidate.finish?.let { finish -> Text("$finish · ${candidate.variant ?: "Standard"}", color = MewRoseSoft, fontSize = 11.sp) }; val rarity = CardRarityResolver.fromMetadata(candidate.rarity, candidate.collectorNumber.orEmpty(), candidate.mainSetSize); if (rarity.aboveMainSet) Text("Oberhalb der Hauptsetnummerierung", color = VaultGold, fontSize = 10.sp, fontWeight = FontWeight.SemiBold); if (rarity.type != CardRarityType.UNKNOWN) Text(rarity.type.label, color = MewIce, fontSize = 10.sp); Text("Abgleich: ${CardRecognitionRanker.label(candidateScores[candidate.productId] ?: 0)}", color = MewIce, fontSize = 11.sp); if (!candidate.hasMarketProduct) Text("Katalogtreffer · Preis noch nicht verknüpft", color = VaultTextMuted, fontSize = 10.sp) }
+                                        Column(Modifier.weight(1f)) {
+                                            Text(candidate.name, color = VaultText, fontWeight = FontWeight.SemiBold)
+                                            Text("${candidate.visualSetName ?: candidate.expansionId} · ${candidate.collectorNumber ?: "ohne Nummer"}", color = VaultTextMuted, fontSize = 12.sp)
+                                            candidate.finish?.let { finish -> Text("$finish · ${candidate.variant ?: "Standard"}", color = MewRoseSoft, fontSize = 11.sp) }
+                                            val rarity = CardRarityResolver.fromMetadata(candidate.rarity, candidate.collectorNumber.orEmpty(), candidate.mainSetSize)
+                                            if (rarity.aboveMainSet) Text("Oberhalb der Hauptsetnummerierung", color = VaultGold, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                            if (rarity.type != CardRarityType.UNKNOWN) Text(rarity.type.label, color = MewIce, fontSize = 10.sp)
+                                            Text("Abgleich: ${CardRecognitionRanker.label(candidateScores[candidate.productId] ?: 0)}", color = MewIce, fontSize = 11.sp)
+                                            val artwork = artworkScores[candidate.productId]
+                                            if (artwork != null) Text("Bildabgleich: ${artworkLabel(artwork)}", color = if (artwork.match == ArtworkMatch.CONTRADICTS) VaultGold else MewIce, fontSize = 10.sp)
+                                            else if (artworkLoading) Text("Bildabgleich läuft im Hintergrund", color = VaultTextMuted, fontSize = 10.sp)
+                                            val price = candidate.trendPriceEur
+                                            if (price != null) Text("Cardmarket-Preisguide: ${euro(price)}", color = MewIce, fontSize = 10.sp)
+                                            else if (!candidate.hasMarketProduct) Text("Katalogtreffer · Preis wird separat abgeglichen", color = VaultTextMuted, fontSize = 10.sp)
+                                        }
                                         Text("Auswählen", color = MewRoseSoft, fontSize = 12.sp)
                                     }
                                 }
@@ -2484,6 +2561,25 @@ private data class ScanRailResult(val candidate: CatalogSearchResult, val score:
                 manualEvidence = false
             },
         )
+    }
+}
+
+@Composable private fun ScannerDebugOverlay(snapshot: ScannerDebugSnapshot, analysis: CardTextAnalysis?, modifier: Modifier = Modifier) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Surface(modifier = modifier.widthIn(max = 250.dp), color = VaultNightRaised.copy(alpha = .94f), shape = CardVaultShapes.card, border = BorderStroke(1.dp, MewPlum.copy(alpha = .55f))) {
+        Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp)) { Text(if (expanded) "Scanner-Diagnose ▴" else "Scanner-Diagnose ▾", color = MewIce, fontSize = 11.sp) }
+            if (expanded) {
+                Text("Status: ${snapshot.state} · ${snapshot.reason}", color = VaultTextMuted, fontSize = 10.sp)
+                Text("Rahmen ${"%.0f".format(snapshot.frameConfidence * 100)}% · Schärfe ${"%.0f".format(snapshot.frameSharpness * 100)}% · Stabilität ${"%.0f".format(snapshot.frameStability * 100)}%", color = VaultTextMuted, fontSize = 10.sp)
+                analysis?.let { current ->
+                    Text("M1: ${current.imageQuality.reason.ifBlank { "normalisiert" }} · Reflexion ${"%.0f".format(current.imageQuality.glare * 100)}%", color = VaultTextMuted, fontSize = 10.sp)
+                    current.roiEvidence.forEach { evidence -> Text("M2 ${evidence.region}: ${evidence.normalizedValue ?: "—"} (${(evidence.confidence * 100).toInt()}%)", color = VaultTextMuted, fontSize = 10.sp) }
+                }
+                Text("M3: ${snapshot.candidateCount} Kandidaten · ${snapshot.finalConfidence}/${snapshot.secondBestConfidence} · ${snapshot.decision}", color = VaultTextMuted, fontSize = 10.sp)
+                if (snapshot.artworkMatch.isNotBlank()) Text("M4: ${snapshot.artworkMatch} (${(snapshot.artworkConfidence * 100).toInt()}%)", color = VaultTextMuted, fontSize = 10.sp)
+            }
+        }
     }
 }
 

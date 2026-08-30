@@ -16,10 +16,12 @@ interface CardVaultDao {
                c.language, c.finish, c.variant, c.rarity, e.quantity, e.condition,
                e.acquisitionPriceMinor, e.acquisitionCurrency, e.acquisitionDateEpochDay,
                e.notes,
-               CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.trendValueMinor)
-                    ELSE p.trendValueMinor END AS marketValueMinor,
+               CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor)
+                    ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END AS marketValueMinor,
                p.currency AS priceCurrency,
-               p.effectiveAtEpochMillis AS priceUpdatedAtEpochMillis,
+               CASE WHEN CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor)
+                              ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END IS NULL
+                    THEN NULL ELSE p.effectiveAtEpochMillis END AS priceUpdatedAtEpochMillis,
                e.externalProductSource, e.externalProductId,
                COALESCE(linked.id, c.id) AS priceCardId, c.imageUrl, c.effectOverride
                , e.binderId
@@ -39,7 +41,7 @@ interface CardVaultDao {
     @Query("""
         SELECT b.id, b.name, b.heroAsset, COUNT(DISTINCT e.cardId) AS uniqueCards,
                COALESCE(SUM(e.quantity), 0) AS ownedCards,
-               SUM(CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.trendValueMinor) ELSE p.trendValueMinor END * e.quantity) AS marketValueMinor,
+               SUM(CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END * e.quantity) AS marketValueMinor,
                MAX(p.effectiveAtEpochMillis) AS lastPriceUpdatedAtEpochMillis
         FROM binders b LEFT JOIN collection_entries e ON e.binderId = b.id
         LEFT JOIN catalog_cards c ON c.id = e.cardId
@@ -71,8 +73,8 @@ interface CardVaultDao {
      */
     @Query("""
         SELECT p.effectiveAtEpochMillis,
-               CASE WHEN :useHoloPrice THEN COALESCE(p.holoTrendValueMinor, p.trendValueMinor)
-                    ELSE p.trendValueMinor END AS valueMinor,
+               CASE WHEN :useHoloPrice THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor)
+                    ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END AS valueMinor,
                p.currency, p.source
         FROM raw_price_snapshots p
         WHERE p.cardId = COALESCE(
@@ -86,8 +88,8 @@ interface CardVaultDao {
             :fallbackCardId
         )
           AND p.source = :source
-          AND (CASE WHEN :useHoloPrice THEN COALESCE(p.holoTrendValueMinor, p.trendValueMinor)
-                    ELSE p.trendValueMinor END) IS NOT NULL
+          AND (CASE WHEN :useHoloPrice THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor)
+                    ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END) IS NOT NULL
         ORDER BY p.effectiveAtEpochMillis ASC, p.id ASC
     """)
     fun observeCardPriceHistory(
@@ -100,7 +102,8 @@ interface CardVaultDao {
     @Query("""
         SELECT c.externalProductId, c.name, c.setId, c.setName,
                c.collectorNumber, c.language, c.finish, c.variant, c.imageUrl,
-               p.marketValueMinor, p.currency, c.rarity
+               CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor)
+                    ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END AS marketValueMinor, p.currency, c.rarity
         FROM catalog_cards c
         LEFT JOIN raw_price_snapshots p ON p.id = (
             SELECT p2.id FROM raw_price_snapshots p2
@@ -119,7 +122,11 @@ interface CardVaultDao {
     @Query("""
         SELECT c.id AS cardId, c.name, c.setName, c.collectorNumber, c.language,
                c.finish, c.variant, c.imageUrl, c.externalProductId,
-               p.marketValueMinor, p.effectiveAtEpochMillis AS priceUpdatedAtEpochMillis
+               CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor)
+                    ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END AS marketValueMinor,
+               CASE WHEN CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(p.holoTrendValueMinor, p.holoAverageValueMinor, p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor)
+                              ELSE COALESCE(p.marketValueMinor, p.trendValueMinor, p.average30DayValueMinor, p.average7DayValueMinor, p.averageValueMinor, p.lowValueMinor) END IS NULL
+                    THEN NULL ELSE p.effectiveAtEpochMillis END AS priceUpdatedAtEpochMillis
         FROM catalog_cards c
         LEFT JOIN raw_price_snapshots p ON p.id = (
             SELECT p2.id FROM raw_price_snapshots p2
@@ -157,6 +164,11 @@ interface CardVaultDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertRawPricesIgnoringDuplicates(prices: List<RawPriceSnapshotEntity>)
+
+    /** Replaces a same-timestamp guide snapshot so newly available Cardmarket
+     * fallback fields become visible without waiting for the next source date. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRawPricesReplacing(prices: List<RawPriceSnapshotEntity>)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun putSyncState(state: CatalogSyncStateEntity)

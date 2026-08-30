@@ -16,6 +16,8 @@ data class CollectionCard(
     val rarity: String = "UNKNOWN",
     /** Explicit user display choice. Null keeps the source-derived visual effect. */
     val effectOverride: String? = null,
+    /** Source-backed Cardmarket lookup name when the German card name differs. */
+    val marketSearchName: String? = null,
 )
 
 data class CatalogSearchResult(
@@ -31,6 +33,8 @@ data class CatalogSearchResult(
     val mainSetSize: Int? = null,
     /** Canonical source-backed set code when one is known. */
     val setCode: String? = null,
+    /** Source-backed Cardmarket lookup name, usually the English TCGdex printing name. */
+    val marketSearchName: String? = null,
 )
 
 /** Metadata cache for a German master-set slot; it never represents possession. */
