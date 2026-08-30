@@ -41,7 +41,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -53,6 +54,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
@@ -2897,6 +2899,56 @@ private enum class ScanFeedbackDragMode {
     MOVE, LEFT, TOP, RIGHT, BOTTOM, TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT,
 }
 
+private const val SCAN_FEEDBACK_MIN_ZOOM = 1f
+private const val SCAN_FEEDBACK_MAX_ZOOM = 6f
+
+private fun Offset.distanceTo(other: Offset): Float = kotlin.math.hypot(
+    (x - other.x).toDouble(),
+    (y - other.y).toDouble(),
+).toFloat()
+
+/**
+ * All editor geometry remains tied to the original, normalised card plane.
+ * The preview is scaled uniformly around its centre, so a saved value never
+ * depends on device pixels, the current pan offset, or the active zoom level.
+ */
+internal fun scanFeedbackPointInViewport(
+    normalizedPoint: Offset,
+    viewport: Size,
+    zoom: Float,
+    pan: Offset,
+): Offset = Offset(
+    viewport.width / 2f + (normalizedPoint.x - .5f) * viewport.width * zoom + pan.x,
+    viewport.height / 2f + (normalizedPoint.y - .5f) * viewport.height * zoom + pan.y,
+)
+
+internal fun clampScanFeedbackPan(viewport: Size, zoom: Float, requested: Offset): Offset {
+    val safeZoom = zoom.coerceIn(SCAN_FEEDBACK_MIN_ZOOM, SCAN_FEEDBACK_MAX_ZOOM)
+    val maxX = viewport.width * (safeZoom - 1f) / 2f
+    val maxY = viewport.height * (safeZoom - 1f) / 2f
+    return Offset(
+        if (maxX == 0f) 0f else requested.x.coerceIn(-maxX, maxX),
+        if (maxY == 0f) 0f else requested.y.coerceIn(-maxY, maxY),
+    )
+}
+
+private data class ScanFeedbackViewportBounds(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+)
+
+private fun ScanFeedbackMark.viewportBounds(viewport: Size, zoom: Float, pan: Offset): ScanFeedbackViewportBounds {
+    val topLeft = scanFeedbackPointInViewport(Offset(left, top), viewport, zoom, pan)
+    return ScanFeedbackViewportBounds(
+        left = topLeft.x,
+        top = topLeft.y,
+        right = topLeft.x + width * viewport.width * zoom,
+        bottom = topLeft.y + height * viewport.height * zoom,
+    )
+}
+
 @Composable private fun ScanFeedbackConsentDialog(onHelp: () -> Unit, onDecline: () -> Unit, onManualSearch: () -> Unit) = AlertDialog(
     onDismissRequest = onDecline,
     title = { Text("Karte nicht sicher erkannt") },
@@ -2924,11 +2976,13 @@ private enum class ScanFeedbackDragMode {
     val categories = listOf("Kartenname", "HP", "Kartentyp", "Artwork", "Attacke 1", "Schaden Attacke 1", "Attacke 2", "Schaden Attacke 2", "Regeltext", "Kartennummer", "Setkennung", "Seltenheit", "Variantensymbol", "Copyright/Hersteller", "Sonstiges")
     val active = marks.getOrNull(selected)
     val latestMarks = rememberUpdatedState(marks)
+    val latestZoom = rememberUpdatedState(zoom)
+    val latestPan = rememberUpdatedState(pan)
     fun updateActive(change: (ScanFeedbackMark) -> ScanFeedbackMark) { marks = marks.mapIndexed { index, mark -> if (index == selected) change(mark) else mark } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Scanner-Feedback · ${editorStep + 1}/3") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (editorStep == 0) {
-            Text("Ein Finger auf einer Zone bewegt sie. Ziehe einen Griff an Ecke oder Kante zum präzisen Ändern; mit zwei Fingern wechselst du zu Ansicht/Zoom.", color = VaultTextMuted, fontSize = 12.sp)
+            Text("Ein Finger auf einer Zone bewegt oder vergrößert sie. Außerhalb einer Zone pannst du die Karte; mit zwei Fingern zoomst und pannst du jederzeit die Ansicht.", color = VaultTextMuted, fontSize = 12.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 FeedbackLegendSwatch(MewIce, "Cyan · hilfreiche Information")
                 FeedbackLegendSwatch(VaultGold, "Gelb · Falscherkennung")
@@ -2939,85 +2993,95 @@ private enum class ScanFeedbackDragMode {
                 FilterChip(!editBoxes, { editBoxes = false }, label = { Text("Ansicht · Zoom/Pan") })
                 TextButton(onClick = { zoom = 1f; pan = Offset.Zero }) { Text("Karte einpassen") }
             }
-            Box(Modifier.fillMaxWidth().aspectRatio(.72f).clip(RoundedCornerShape(12.dp)).background(Color.Black).pointerInput(editBoxes, zoom) {
-                if (!editBoxes) detectTransformGestures { _, delta, scaleChange, _ ->
-                    val nextZoom = (zoom * scaleChange).coerceIn(1f, 4f)
-                    val maxX = size.width * (nextZoom - 1f)
-                    val maxY = size.height * (nextZoom - 1f)
-                    zoom = nextZoom
-                    pan = Offset((pan.x + delta.x).coerceIn(-maxX, maxX), (pan.y + delta.y).coerceIn(-maxY, maxY))
-                }
-            }.then(if (editBoxes) Modifier.pointerInput(imageFile, zoom, pan) {
-                var dragIndex = -1
-                var dragMode = ScanFeedbackDragMode.MOVE
-                val handleRadius = 34f
-                detectDragGestures(
-                    onDragStart = { down ->
-                        val current = latestMarks.value
-                        dragIndex = current.indices.reversed().firstOrNull { index ->
-                            val mark = current[index]
-                            val left = mark.left * size.width * zoom + pan.x
-                            val top = mark.top * size.height * zoom + pan.y
-                            val right = left + mark.width * size.width * zoom
-                            val bottom = top + mark.height * size.height * zoom
-                            down.x in (left - handleRadius)..(right + handleRadius) && down.y in (top - handleRadius)..(bottom + handleRadius)
-                        } ?: -1
-                        if (dragIndex >= 0) {
-                            selected = dragIndex
-                            val mark = current[dragIndex]
-                            val left = mark.left * size.width * zoom + pan.x
-                            val top = mark.top * size.height * zoom + pan.y
-                            val right = left + mark.width * size.width * zoom
-                            val bottom = top + mark.height * size.height * zoom
-                            fun near(x: Float, y: Float) = (down - Offset(x, y)).getDistance() <= handleRadius
-                            dragMode = when {
-                                near(left, top) -> ScanFeedbackDragMode.TOP_LEFT
-                                near(right, top) -> ScanFeedbackDragMode.TOP_RIGHT
-                                near(left, bottom) -> ScanFeedbackDragMode.BOTTOM_LEFT
-                                near(right, bottom) -> ScanFeedbackDragMode.BOTTOM_RIGHT
-                                kotlin.math.abs(down.x - left) <= handleRadius && down.y in top..bottom -> ScanFeedbackDragMode.LEFT
-                                kotlin.math.abs(down.x - right) <= handleRadius && down.y in top..bottom -> ScanFeedbackDragMode.RIGHT
-                                kotlin.math.abs(down.y - top) <= handleRadius && down.x in left..right -> ScanFeedbackDragMode.TOP
-                                kotlin.math.abs(down.y - bottom) <= handleRadius && down.x in left..right -> ScanFeedbackDragMode.BOTTOM
-                                else -> ScanFeedbackDragMode.MOVE
-                            }
+            Box(Modifier.fillMaxWidth().aspectRatio(.72f).clip(RoundedCornerShape(12.dp)).background(Color.Black).pointerInput(imageFile, editBoxes) {
+                awaitEachGesture {
+                    val firstDown = awaitFirstDown(requireUnconsumed = false)
+                    val viewport = Size(size.width.toFloat(), size.height.toFloat())
+                    val handleRadius = 34f
+                    val current = latestMarks.value
+                    var dragIndex = if (editBoxes) current.indices.reversed().firstOrNull { index ->
+                        val bounds = current[index].viewportBounds(viewport, latestZoom.value, latestPan.value)
+                        firstDown.position.x in (bounds.left - handleRadius)..(bounds.right + handleRadius) &&
+                            firstDown.position.y in (bounds.top - handleRadius)..(bounds.bottom + handleRadius)
+                    } ?: -1 else -1
+                    var dragMode = ScanFeedbackDragMode.MOVE
+                    if (dragIndex >= 0) {
+                        selected = dragIndex
+                        val bounds = current[dragIndex].viewportBounds(viewport, latestZoom.value, latestPan.value)
+                        fun near(x: Float, y: Float) = firstDown.position.distanceTo(Offset(x, y)) <= handleRadius
+                        dragMode = when {
+                            near(bounds.left, bounds.top) -> ScanFeedbackDragMode.TOP_LEFT
+                            near(bounds.right, bounds.top) -> ScanFeedbackDragMode.TOP_RIGHT
+                            near(bounds.left, bounds.bottom) -> ScanFeedbackDragMode.BOTTOM_LEFT
+                            near(bounds.right, bounds.bottom) -> ScanFeedbackDragMode.BOTTOM_RIGHT
+                            kotlin.math.abs(firstDown.position.x - bounds.left) <= handleRadius && firstDown.position.y in bounds.top..bounds.bottom -> ScanFeedbackDragMode.LEFT
+                            kotlin.math.abs(firstDown.position.x - bounds.right) <= handleRadius && firstDown.position.y in bounds.top..bounds.bottom -> ScanFeedbackDragMode.RIGHT
+                            kotlin.math.abs(firstDown.position.y - bounds.top) <= handleRadius && firstDown.position.x in bounds.left..bounds.right -> ScanFeedbackDragMode.TOP
+                            kotlin.math.abs(firstDown.position.y - bounds.bottom) <= handleRadius && firstDown.position.x in bounds.left..bounds.right -> ScanFeedbackDragMode.BOTTOM
+                            else -> ScanFeedbackDragMode.MOVE
                         }
-                    },
-                    onDrag = { change, drag ->
-                        val index = dragIndex
-                        if (index < 0) return@detectDragGestures
+                    }
+                    var previousCentroid: Offset? = null
+                    var previousSpan: Float? = null
+                    var transformed = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val pressed = event.changes.filter { it.pressed }
+                        if (pressed.isEmpty()) break
+                        if (pressed.size >= 2) {
+                            // Two fingers always own the viewport. This prevents a
+                            // handle from moving when the user intended to zoom.
+                            transformed = true
+                            val first = pressed[0].position
+                            val second = pressed[1].position
+                            val centroid = (first + second) / 2f
+                            val span = first.distanceTo(second).coerceAtLeast(1f)
+                            previousCentroid?.let { oldCentroid ->
+                                val scaleChange = span / (previousSpan ?: span)
+                                val nextZoom = (latestZoom.value * scaleChange).coerceIn(SCAN_FEEDBACK_MIN_ZOOM, SCAN_FEEDBACK_MAX_ZOOM)
+                                zoom = nextZoom
+                                pan = clampScanFeedbackPan(viewport, nextZoom, latestPan.value + (centroid - oldCentroid))
+                            }
+                            previousCentroid = centroid
+                            previousSpan = span
+                            pressed.forEach { it.consume() }
+                            continue
+                        }
+                        val change = pressed.single()
+                        val delta = change.position - change.previousPosition
+                        if (transformed) { change.consume(); continue }
+                        if (dragIndex < 0) {
+                            pan = clampScanFeedbackPan(viewport, latestZoom.value, latestPan.value + delta)
+                        } else {
+                            val mark = latestMarks.value.getOrNull(dragIndex) ?: continue
+                            val horizontal = delta.x / (viewport.width * latestZoom.value).coerceAtLeast(1f)
+                            val vertical = delta.y / (viewport.height * latestZoom.value).coerceAtLeast(1f)
+                            val changed = when (dragMode) {
+                                ScanFeedbackDragMode.MOVE -> mark.copy(
+                                    left = (mark.left + horizontal).coerceIn(0f, 1f - mark.width),
+                                    top = (mark.top + vertical).coerceIn(0f, 1f - mark.height),
+                                )
+                                else -> {
+                                    val minWidth = .04f
+                                    val minHeight = .035f
+                                    var left = mark.left
+                                    var top = mark.top
+                                    var right = mark.left + mark.width
+                                    var bottom = mark.top + mark.height
+                                    if (dragMode in setOf(ScanFeedbackDragMode.LEFT, ScanFeedbackDragMode.TOP_LEFT, ScanFeedbackDragMode.BOTTOM_LEFT)) left = (left + horizontal).coerceIn(0f, right - minWidth)
+                                    if (dragMode in setOf(ScanFeedbackDragMode.RIGHT, ScanFeedbackDragMode.TOP_RIGHT, ScanFeedbackDragMode.BOTTOM_RIGHT)) right = (right + horizontal).coerceIn(left + minWidth, 1f)
+                                    if (dragMode in setOf(ScanFeedbackDragMode.TOP, ScanFeedbackDragMode.TOP_LEFT, ScanFeedbackDragMode.TOP_RIGHT)) top = (top + vertical).coerceIn(0f, bottom - minHeight)
+                                    if (dragMode in setOf(ScanFeedbackDragMode.BOTTOM, ScanFeedbackDragMode.BOTTOM_LEFT, ScanFeedbackDragMode.BOTTOM_RIGHT)) bottom = (bottom + vertical).coerceIn(top + minHeight, 1f)
+                                    mark.copy(left = left, top = top, width = right - left, height = bottom - top)
+                                }
+                            }
+                            marks = latestMarks.value.mapIndexed { itemIndex, item -> if (itemIndex == dragIndex) changed else item }
+                        }
                         change.consume()
-                        val current = latestMarks.value
-                        val mark = current.getOrNull(index) ?: return@detectDragGestures
-                        val horizontal = drag.x / (size.width * zoom).coerceAtLeast(1f)
-                        val vertical = drag.y / (size.height * zoom).coerceAtLeast(1f)
-                        val changed = when (dragMode) {
-                            ScanFeedbackDragMode.MOVE -> mark.copy(
-                                left = (mark.left + horizontal).coerceIn(0f, 1f - mark.width),
-                                top = (mark.top + vertical).coerceIn(0f, 1f - mark.height),
-                            )
-                            ScanFeedbackDragMode.LEFT, ScanFeedbackDragMode.TOP, ScanFeedbackDragMode.RIGHT, ScanFeedbackDragMode.BOTTOM,
-                            ScanFeedbackDragMode.TOP_LEFT, ScanFeedbackDragMode.TOP_RIGHT, ScanFeedbackDragMode.BOTTOM_LEFT, ScanFeedbackDragMode.BOTTOM_RIGHT -> {
-                                val minWidth = .04f
-                                val minHeight = .035f
-                                var left = mark.left
-                                var top = mark.top
-                                var right = mark.left + mark.width
-                                var bottom = mark.top + mark.height
-                                if (dragMode in setOf(ScanFeedbackDragMode.LEFT, ScanFeedbackDragMode.TOP_LEFT, ScanFeedbackDragMode.BOTTOM_LEFT)) left = (left + horizontal).coerceIn(0f, right - minWidth)
-                                if (dragMode in setOf(ScanFeedbackDragMode.RIGHT, ScanFeedbackDragMode.TOP_RIGHT, ScanFeedbackDragMode.BOTTOM_RIGHT)) right = (right + horizontal).coerceIn(left + minWidth, 1f)
-                                if (dragMode in setOf(ScanFeedbackDragMode.TOP, ScanFeedbackDragMode.TOP_LEFT, ScanFeedbackDragMode.TOP_RIGHT)) top = (top + vertical).coerceIn(0f, bottom - minHeight)
-                                if (dragMode in setOf(ScanFeedbackDragMode.BOTTOM, ScanFeedbackDragMode.BOTTOM_LEFT, ScanFeedbackDragMode.BOTTOM_RIGHT)) bottom = (bottom + vertical).coerceIn(top + minHeight, 1f)
-                                mark.copy(left = left, top = top, width = right - left, height = bottom - top)
-                            }
-                        }
-                        marks = current.mapIndexed { itemIndex, item -> if (itemIndex == index) changed else item }
-                    },
-                    onDragEnd = { dragIndex = -1 },
-                    onDragCancel = { dragIndex = -1 },
-                )
-            } else Modifier)) {
-                Box(Modifier.fillMaxSize().graphicsLayer { transformOrigin = TransformOrigin(0f, 0f); scaleX = zoom; scaleY = zoom; translationX = pan.x; translationY = pan.y }) {
+                    }
+                }
+            }) {
+                Box(Modifier.fillMaxSize().graphicsLayer { transformOrigin = TransformOrigin(.5f, .5f); scaleX = zoom; scaleY = zoom; translationX = pan.x; translationY = pan.y }) {
                 AsyncImage(model = imageFile, contentDescription = "Scanbild für Feedback", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
                 Canvas(Modifier.fillMaxSize()) {
                     marks.forEachIndexed { index, mark ->
