@@ -128,9 +128,14 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
         dao.deleteGeneratedGermanReferenceBinders()
     }
     override suspend fun searchCatalog(query: String, limit: Int): List<CatalogSearchResult> {
-        val normalized = query.trim()
-        if (normalized.length < 2) return emptyList()
-        return dao.searchCatalog(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, normalized, limit).map {
+        val input = query.trim()
+        if (input.length < 2) return emptyList()
+        // Printed German names such as "Mega-Camerupt-ex" often use dashes,
+        // while Cardmarket stores the same product as "Mega Camerupt ex".
+        // The DAO performs a LIKE query, so preserve the meaningful name parts
+        // but let punctuation bridge formatting differences.
+        val lookup = input.replace(Regex("[^\\p{L}\\p{N}]+"), "%").trim('%')
+        return dao.searchCatalog(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, lookup, limit).map {
             CatalogSearchResult(
                 productId = it.externalProductId,
                 name = it.name,
@@ -176,7 +181,7 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
 
     /** The whole portfolio follows the same exact Normal/Holo/Reverse trend as each card row. */
     private fun RawPriceSnapshotEntity.trendValueFor(finish: String): Long? =
-        if (finish.contains("holo", ignoreCase = true)) holoTrendValueMinor ?: trendValueMinor else trendValueMinor
+        if (finish.contains("holo", ignoreCase = true)) holoTrendValueMinor?.takeIf { it > 0 } ?: trendValueMinor else trendValueMinor
 
     private fun accentFor(name: String): Long = when {
         name.contains("Charizard", true) -> 0xFFF06445; name.contains("Pikachu", true) -> 0xFFFFC83D

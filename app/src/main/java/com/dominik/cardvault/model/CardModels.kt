@@ -18,6 +18,8 @@ data class CollectionCard(
     val effectOverride: String? = null,
     /** Source-backed Cardmarket lookup name when the German card name differs. */
     val marketSearchName: String? = null,
+    /** Transient source-verified Cardmarket expansion bridge for Binder reference slots. */
+    val marketExpansionId: String? = null,
 )
 
 data class CatalogSearchResult(

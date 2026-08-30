@@ -861,10 +861,6 @@ private fun isDebuggableBuild(context: Context): Boolean =
             // Keep an explicit local fallback visible while the verified refresh is
             // running or when the device is offline.
             setReferences = localReferences
-            if (localReferences.any { it.id.startsWith("tcgdex-") }) {
-                setReferences = localReferences
-                return@LaunchedEffect
-            }
             val normalized = setName.lowercase().filter(Char::isLetterOrDigit)
             val set = visualCatalog.sets().firstOrNull { candidate ->
                 val candidateName = candidate.name.lowercase().filter(Char::isLetterOrDigit)
@@ -1132,6 +1128,7 @@ private fun PokemonVisualCard.asBinderReferences(): List<CollectionCard> = print
         imageUrl = largeImageUrl,
         rarity = rarity ?: "UNKNOWN",
         marketSearchName = marketSearchName,
+        marketExpansionId = set.cardmarketExpansionId,
     )
 }
 
@@ -1802,10 +1799,28 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     val context = LocalContext.current
     val effect = remember(card.id, card.finish, card.variant) { CardEffectResolver.resolve(card) }
     val priceHistory by repository.priceHistory(card).collectAsState(initial = emptyList())
+    var referenceTrendPrices by remember(card.id, card.marketExpansionId) { mutableStateOf<List<Double>>(emptyList()) }
+    LaunchedEffect(card.id, card.marketExpansionId, card.marketSearchName) {
+        if (card.priceUpdatedAtEpochMillis != null || card.marketExpansionId == null) return@LaunchedEffect
+        val matches = runCatching { repository.searchCatalog(card.marketSearchName ?: card.name, 60) }.getOrDefault(emptyList())
+            .filter { it.expansionId == card.marketExpansionId && isSameNamePriceCandidate(card.marketSearchName ?: card.name, it) }
+        referenceTrendPrices = matches.mapNotNull { it.trendPriceEur }.distinct().sorted()
+    }
     val priceDate = card.priceUpdatedAtEpochMillis?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, Locale.GERMANY).format(java.util.Date(it)) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(card.name) }, text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = 570.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { InteractiveFocusCard(card, Modifier.size(174.dp, 246.dp), interactive = true) }
         item { Text("${card.set} · ${card.number}", fontWeight = FontWeight.Bold) }
+        when (referenceTrendPrices.size) {
+            1 -> item { Text("Cardmarket-Trendpreis: ${euro(referenceTrendPrices.first())}", color = MewIce, fontWeight = FontWeight.Bold) }
+            in 2..Int.MAX_VALUE -> item {
+                Text(
+                    "Cardmarket-Trendpreise: ${euro(referenceTrendPrices.first())} – ${euro(referenceTrendPrices.last())}",
+                    color = MewIce,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text("Mehrere Drucke verfügbar – beim Hinzufügen wird der Cardmarket-Standardpreis automatisch übernommen.", color = VaultTextMuted, fontSize = 11.sp)
+            }
+        }
         item { Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
         item { Text("Karteneffekt automatisch: ${effect.profile.label}", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
         item { HorizontalDivider(color = VaultOutline) }
@@ -1820,12 +1835,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
 }
 
-/**
- * A reference slot is not enough to assign a value.  Adding it is deliberately
- * a two-step operation: only a Cardmarket product with the same printed name,
- * set and collector number may be linked automatically.  Anything else stays
- * visibly unpriced instead of borrowing a similarly named card's value.
- */
+/** Adds a Binder reference with Cardmarket's available trend-price product by default. */
 @Composable private fun BinderCardAddDialog(
     reference: CollectionCard,
     repository: CollectionRepository,
@@ -1835,6 +1845,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     var candidates by remember(reference.id) { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
     var loading by remember(reference.id) { mutableStateOf(true) }
     var adding by remember(reference.id) { mutableStateOf(false) }
+    var autoAddStarted by remember(reference.id) { mutableStateOf(false) }
     var message by remember(reference.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val catalogSync by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
@@ -1844,12 +1855,15 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
         val catalogMatches = runCatching { repository.searchCatalog(reference.name, 60) }
             .getOrDefault(emptyList())
             // Cardmarket's compact public catalogue can omit printed number and
-            // German set metadata. Keep same-name products selectable, but never
-            // choose one automatically unless the full exact match is present.
+            // German set metadata. The set bridge and canonical card name still
+            // identify the intended current set product for a direct Binder add.
             .filter { product -> isSameNamePriceCandidate(reference.marketSearchName ?: reference.name, product) }
             .distinctBy { it.productId }
-        val exactCatalogMatches = catalogMatches.filter { product -> isExactBinderPriceMatch(reference, product) }
-        val manualCatalogMatches = catalogMatches.filterNot { product -> isExactBinderPriceMatch(reference, product) }
+        val sameExpansionMatches = reference.marketExpansionId?.let { expansion ->
+            catalogMatches.filter { product -> product.expansionId == expansion }
+        } ?: catalogMatches
+        val exactCatalogMatches = sameExpansionMatches.filter { product -> isExactBinderPriceMatch(reference, product) }
+        val manualCatalogMatches = sameExpansionMatches.filterNot { product -> isExactBinderPriceMatch(reference, product) }
         // An already owned card with a saved product identity is stronger
         // evidence than a fresh text search.  Reusing it for another copy is
         // safe and keeps the existing exact Cardmarket linkage intact.
@@ -1900,6 +1914,12 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
             }
         }
     }
+    LaunchedEffect(loading, candidates) {
+        if (loading || autoAddStarted) return@LaunchedEffect
+        val product = defaultBinderCardmarketProduct(reference, candidates) ?: return@LaunchedEffect
+        autoAddStarted = true
+        addReference(product)
+    }
     AlertDialog(
         onDismissRequest = { if (!adding) onDismiss() },
         title = { Text("Karte zum Binder hinzufügen") },
@@ -1908,58 +1928,19 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                 item {
                     Text(reference.name, fontWeight = FontWeight.Bold)
                     Text("${reference.set} · ${reference.number}", color = VaultTextMuted, fontSize = 12.sp)
-                    Text("Exakte Treffer werden zuerst gezeigt. Weitere gleichnamige Cardmarket-Produkte können bewusst ausgewählt werden, wenn Set und Druck geprüft wurden.", color = VaultTextMuted, fontSize = 12.sp)
+                    Text("Der aktuelle Cardmarket-Trendpreis wird beim Hinzufügen direkt übernommen. Details lassen sich anschließend an der gespeicherten Karte ändern.", color = VaultTextMuted, fontSize = 12.sp)
                 }
                 if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 if (!loading && candidates.isNotEmpty()) {
-                    val exactCandidates = candidates.filter { product -> isExactBinderPriceMatch(reference, product) }
-                    val trendChoice = exactCandidates.firstOrNull { it.trendPriceEur != null }
-                    trendChoice?.let { product ->
-                        item {
-                            Text("Zuerst vorgeschlagen", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            ElevatedCard(
-                                onClick = { addReference(product) },
-                                enabled = !adding,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.elevatedCardColors(containerColor = MewPlumDeep),
-                            ) {
-                                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("Exakter Druck · Cardmarket-Trendpreis", fontWeight = FontWeight.Bold)
-                                    Text(euro(product.trendPriceEur!!), color = MewIce, fontSize = 20.sp, fontWeight = FontWeight.Black)
-                                    Text("Passenden Druck auswählen und zum Binder hinzufügen", color = VaultTextMuted, fontSize = 11.sp)
-                                }
-                            }
-                        }
-                    }
-                    if (exactCandidates.isEmpty()) item {
-                        Text("Kein automatisch verknüpfbarer exakter Druck. Du kannst unten einen gleichnamigen Cardmarket-Druck bewusst auswählen.", color = VaultGold, fontSize = 11.sp)
-                    }
-                    item { Text("Weitere Cardmarket-Drucke", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
-                    items(candidates.filter { it.productId != trendChoice?.productId }, key = { it.productId }) { product ->
-                        OutlinedCard(
-                            onClick = { addReference(product) },
-                            enabled = !adding,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface),
-                        ) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Text("${product.visualSetName ?: reference.set} · ${product.collectorNumber ?: reference.number}", fontWeight = FontWeight.Bold)
-                                Text(
-                                    listOfNotNull(product.language, product.finish, product.variant)
-                                        .filter { it.isNotBlank() }
-                                        .joinToString(" · ")
-                                        .ifBlank { "Cardmarket-Produktdetails" },
-                                    color = VaultTextMuted,
-                                    fontSize = 11.sp,
-                                )
-                                Text(
-                                    product.trendPriceEur?.let { "Cardmarket-Trendpreis: ${euro(it)}" } ?: "Cardmarket-Trendpreis wird geladen",
-                                    color = if (product.trendPriceEur != null) MewIce else VaultTextMuted,
-                                    fontSize = 13.sp,
-                                )
-                                Text("Auswählen und zum Binder hinzufügen", color = MewRoseSoft, fontSize = 11.sp)
-                            }
-                        }
+                    val product = defaultBinderCardmarketProduct(reference, candidates)
+                    item {
+                        Text(
+                            product?.trendPriceEur?.let { "Cardmarket-Trendpreis wird übernommen: ${euro(it)}" }
+                                ?: "Cardmarket-Produkt wird übernommen",
+                            color = MewIce,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text("Karte wird zum Binder hinzugefügt …", color = VaultTextMuted, fontSize = 12.sp)
                     }
                 }
                 if (!loading && candidates.isEmpty()) item {
@@ -1982,8 +1963,27 @@ private fun isExactBinderPriceMatch(reference: CollectionCard, product: CatalogS
     return sameName && sameNumber && sameSet
 }
 
+/**
+ * Prefer a price-bearing exact product; otherwise retain Cardmarket's stable
+ * catalogue order for the verified set/name match.  This makes adding a Binder
+ * card one action while retaining the saved external product link for edits.
+ */
+private fun defaultBinderCardmarketProduct(
+    reference: CollectionCard,
+    candidates: List<CatalogSearchResult>,
+): CatalogSearchResult? = candidates
+    .sortedWith(
+        compareByDescending<CatalogSearchResult> { isExactBinderPriceMatch(reference, it) }
+            .thenByDescending { it.trendPriceEur != null }
+            .thenBy { it.productId },
+    )
+    .firstOrNull()
+
 private fun isSameNamePriceCandidate(name: String, product: CatalogSearchResult): Boolean =
-    normalizeCardName(name) == normalizeCardName(product.name)
+    // Cardmarket frequently appends a printing/variant description in brackets.
+    // A binder reference contains the printed card name only, so compare the
+    // same canonical base name used by the visual-card picker.
+    cardmarketNameMatches(product.name, name)
 
 private fun normalizedCollectorNumber(value: String): String = value
     .substringBefore('/')
@@ -2855,7 +2855,9 @@ private data class ScanFeedbackMark(
     val correctedText: String = "",
 )
 
-private enum class ScanFeedbackDragMode { MOVE, RESIZE }
+private enum class ScanFeedbackDragMode {
+    MOVE, LEFT, TOP, RIGHT, BOTTOM, TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT,
+}
 
 @Composable private fun ScanFeedbackConsentDialog(onHelp: () -> Unit, onDecline: () -> Unit, onManualSearch: () -> Unit) = AlertDialog(
     onDismissRequest = onDecline,
@@ -2880,21 +2882,23 @@ private enum class ScanFeedbackDragMode { MOVE, RESIZE }
     var editBoxes by remember(imageFile) { mutableStateOf(true) }
     var zoom by remember(imageFile) { mutableFloatStateOf(1f) }
     var pan by remember(imageFile) { mutableStateOf(Offset.Zero) }
+    var editorStep by remember(imageFile) { mutableIntStateOf(0) }
     val categories = listOf("Kartenname", "HP", "Kartentyp", "Artwork", "Attacke 1", "Schaden Attacke 1", "Attacke 2", "Schaden Attacke 2", "Regeltext", "Kartennummer", "Setkennung", "Seltenheit", "Variantensymbol", "Copyright/Hersteller", "Sonstiges")
     val active = marks.getOrNull(selected)
     val latestMarks = rememberUpdatedState(marks)
     fun updateActive(change: (ScanFeedbackMark) -> ScanFeedbackMark) { marks = marks.mapIndexed { index, mark -> if (index == selected) change(mark) else mark } }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Scanner-Feedback markieren") }, text = {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Scanner-Feedback · ${editorStep + 1}/3") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Tippe eine Zone an, ziehe sie im Rahmen und ziehe den pinken Griff unten rechts zum Vergrößern oder Verkleinern.", color = VaultTextMuted, fontSize = 12.sp)
+            if (editorStep == 0) {
+            Text("Ein Finger auf einer Zone bewegt sie. Ziehe einen Griff an Ecke oder Kante zum präzisen Ändern; mit zwei Fingern wechselst du zu Ansicht/Zoom.", color = VaultTextMuted, fontSize = 12.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 FeedbackLegendSwatch(MewIce, "Cyan · hilfreiche Information")
                 FeedbackLegendSwatch(VaultGold, "Gelb · Falscherkennung")
                 FeedbackLegendSwatch(MewRose, "Pink · Größen-Griff")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(editBoxes, { editBoxes = true }, label = { Text("Felder") })
-                FilterChip(!editBoxes, { editBoxes = false }, label = { Text("Ansicht · Zoom") })
+                FilterChip(editBoxes, { editBoxes = true }, label = { Text("Felder bearbeiten") })
+                FilterChip(!editBoxes, { editBoxes = false }, label = { Text("Ansicht · Zoom/Pan") })
                 TextButton(onClick = { zoom = 1f; pan = Offset.Zero }) { Text("Karte einpassen") }
             }
             Box(Modifier.fillMaxWidth().aspectRatio(.72f).clip(RoundedCornerShape(12.dp)).background(Color.Black).pointerInput(editBoxes, zoom) {
@@ -2908,7 +2912,7 @@ private enum class ScanFeedbackDragMode { MOVE, RESIZE }
             }.then(if (editBoxes) Modifier.pointerInput(imageFile, zoom, pan) {
                 var dragIndex = -1
                 var dragMode = ScanFeedbackDragMode.MOVE
-                val handleRadius = 38f
+                val handleRadius = 34f
                 detectDragGestures(
                     onDragStart = { down ->
                         val current = latestMarks.value
@@ -2923,9 +2927,22 @@ private enum class ScanFeedbackDragMode { MOVE, RESIZE }
                         if (dragIndex >= 0) {
                             selected = dragIndex
                             val mark = current[dragIndex]
-                            val handleX = (mark.left + mark.width) * size.width * zoom + pan.x
-                            val handleY = (mark.top + mark.height) * size.height * zoom + pan.y
-                            dragMode = if ((down - Offset(handleX, handleY)).getDistance() <= handleRadius * 1.5f) ScanFeedbackDragMode.RESIZE else ScanFeedbackDragMode.MOVE
+                            val left = mark.left * size.width * zoom + pan.x
+                            val top = mark.top * size.height * zoom + pan.y
+                            val right = left + mark.width * size.width * zoom
+                            val bottom = top + mark.height * size.height * zoom
+                            fun near(x: Float, y: Float) = (down - Offset(x, y)).getDistance() <= handleRadius
+                            dragMode = when {
+                                near(left, top) -> ScanFeedbackDragMode.TOP_LEFT
+                                near(right, top) -> ScanFeedbackDragMode.TOP_RIGHT
+                                near(left, bottom) -> ScanFeedbackDragMode.BOTTOM_LEFT
+                                near(right, bottom) -> ScanFeedbackDragMode.BOTTOM_RIGHT
+                                kotlin.math.abs(down.x - left) <= handleRadius && down.y in top..bottom -> ScanFeedbackDragMode.LEFT
+                                kotlin.math.abs(down.x - right) <= handleRadius && down.y in top..bottom -> ScanFeedbackDragMode.RIGHT
+                                kotlin.math.abs(down.y - top) <= handleRadius && down.x in left..right -> ScanFeedbackDragMode.TOP
+                                kotlin.math.abs(down.y - bottom) <= handleRadius && down.x in left..right -> ScanFeedbackDragMode.BOTTOM
+                                else -> ScanFeedbackDragMode.MOVE
+                            }
                         }
                     },
                     onDrag = { change, drag ->
@@ -2941,10 +2958,20 @@ private enum class ScanFeedbackDragMode { MOVE, RESIZE }
                                 left = (mark.left + horizontal).coerceIn(0f, 1f - mark.width),
                                 top = (mark.top + vertical).coerceIn(0f, 1f - mark.height),
                             )
-                            ScanFeedbackDragMode.RESIZE -> mark.copy(
-                                width = (mark.width + horizontal).coerceIn(.06f, 1f - mark.left),
-                                height = (mark.height + vertical).coerceIn(.05f, 1f - mark.top),
-                            )
+                            ScanFeedbackDragMode.LEFT, ScanFeedbackDragMode.TOP, ScanFeedbackDragMode.RIGHT, ScanFeedbackDragMode.BOTTOM,
+                            ScanFeedbackDragMode.TOP_LEFT, ScanFeedbackDragMode.TOP_RIGHT, ScanFeedbackDragMode.BOTTOM_LEFT, ScanFeedbackDragMode.BOTTOM_RIGHT -> {
+                                val minWidth = .04f
+                                val minHeight = .035f
+                                var left = mark.left
+                                var top = mark.top
+                                var right = mark.left + mark.width
+                                var bottom = mark.top + mark.height
+                                if (dragMode in setOf(ScanFeedbackDragMode.LEFT, ScanFeedbackDragMode.TOP_LEFT, ScanFeedbackDragMode.BOTTOM_LEFT)) left = (left + horizontal).coerceIn(0f, right - minWidth)
+                                if (dragMode in setOf(ScanFeedbackDragMode.RIGHT, ScanFeedbackDragMode.TOP_RIGHT, ScanFeedbackDragMode.BOTTOM_RIGHT)) right = (right + horizontal).coerceIn(left + minWidth, 1f)
+                                if (dragMode in setOf(ScanFeedbackDragMode.TOP, ScanFeedbackDragMode.TOP_LEFT, ScanFeedbackDragMode.TOP_RIGHT)) top = (top + vertical).coerceIn(0f, bottom - minHeight)
+                                if (dragMode in setOf(ScanFeedbackDragMode.BOTTOM, ScanFeedbackDragMode.BOTTOM_LEFT, ScanFeedbackDragMode.BOTTOM_RIGHT)) bottom = (bottom + vertical).coerceIn(top + minHeight, 1f)
+                                mark.copy(left = left, top = top, width = right - left, height = bottom - top)
+                            }
                         }
                         marks = current.mapIndexed { itemIndex, item -> if (itemIndex == index) changed else item }
                     },
@@ -2962,25 +2989,37 @@ private enum class ScanFeedbackDragMode { MOVE, RESIZE }
                         val bottomRight = Offset(topLeft.x + markSize.width, topLeft.y + markSize.height)
                         drawRect(color.copy(alpha = if (index == selected) .18f else .10f), topLeft, markSize)
                         drawRect(color, topLeft, markSize, style = Stroke(if (index == selected) 5f else 3f))
-                        listOf(topLeft, Offset(bottomRight.x, topLeft.y), Offset(topLeft.x, bottomRight.y)).forEach { drawCircle(color, if (index == selected) 8f else 5f, it) }
-                        drawCircle(if (index == selected) MewRose else color, if (index == selected) 13f else 6f, bottomRight)
+                        val topRight = Offset(bottomRight.x, topLeft.y)
+                        val bottomLeft = Offset(topLeft.x, bottomRight.y)
+                        val middleTop = Offset((topLeft.x + bottomRight.x) / 2f, topLeft.y)
+                        val middleBottom = Offset((topLeft.x + bottomRight.x) / 2f, bottomRight.y)
+                        val middleLeft = Offset(topLeft.x, (topLeft.y + bottomRight.y) / 2f)
+                        val middleRight = Offset(bottomRight.x, (topLeft.y + bottomRight.y) / 2f)
+                        val handleColor = if (index == selected) MewRose else color
+                        listOf(topLeft, topRight, bottomLeft, bottomRight, middleTop, middleBottom, middleLeft, middleRight)
+                            .forEach { drawCircle(handleColor, if (index == selected) 11f else 6f, it) }
                     }
                 }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = { marks = marks + ScanFeedbackMark(top = (.18f + marks.size * .08f).coerceAtMost(.75f)); selected = marks.lastIndex + 1 }) { Text("Bereich hinzufügen") }; TextButton(enabled = marks.size > 1, onClick = { marks = marks.filterIndexed { index, _ -> index != selected }; selected = (selected - 1).coerceAtLeast(0) }) { Text("Löschen", color = MaterialTheme.colorScheme.error) } }
-            active?.let { mark ->
-                Text("Bereich ${selected + 1} von ${marks.size} · Rahmen zum Verschieben ziehen", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Box { OutlinedButton(onClick = { categoryOpen = true }, modifier = Modifier.fillMaxWidth()) { Text(mark.category, modifier = Modifier.weight(1f)); Text("⌄") }; DropdownMenu(expanded = categoryOpen, onDismissRequest = { categoryOpen = false }) { categories.forEach { category -> DropdownMenuItem(text = { Text(category) }, onClick = { updateActive { it.copy(category = category, negative = category.startsWith("NICHT")) }; categoryOpen = false }) } } }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(!mark.negative, { updateActive { it.copy(negative = false) } }, label = { Text("Positiv") }); FilterChip(mark.negative, { updateActive { it.copy(negative = true) } }, label = { Text("Falscherkennung") }) }
-                OutlinedTextField(mark.detectedText, { value -> updateActive { it.copy(detectedText = value) } }, label = { Text("Erkannter Text") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(mark.correctedText, { value -> updateActive { it.copy(correctedText = value) } }, label = { Text("Korrigierter Text") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                FeedbackSlider("Breite", mark.width) { value -> updateActive { it.copy(width = value.coerceIn(.06f, 1f - it.left)) } }
-                FeedbackSlider("Höhe", mark.height) { value -> updateActive { it.copy(height = value.coerceIn(.05f, 1f - it.top)) } }
-            }
             if (marks.size > 1) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { marks.indices.forEach { index -> FilterChip(selected == index, { selected = index }, label = { Text("${index + 1}") }) } }
+            }
+            active?.let { mark ->
+                if (editorStep == 1) {
+                    Text("Schritt 2 · Feld beschreiben", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Box { OutlinedButton(onClick = { categoryOpen = true }, modifier = Modifier.fillMaxWidth()) { Text(mark.category, modifier = Modifier.weight(1f)); Text("⌄") }; DropdownMenu(expanded = categoryOpen, onDismissRequest = { categoryOpen = false }) { categories.forEach { category -> DropdownMenuItem(text = { Text(category) }, onClick = { updateActive { it.copy(category = category) }; categoryOpen = false }) } } }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(!mark.negative, { updateActive { it.copy(negative = false) } }, label = { Text("Cyan · hilfreich") }); FilterChip(mark.negative, { updateActive { it.copy(negative = true) } }, label = { Text("Gelb · Falscherkennung") }) }
+                } else if (editorStep == 2) {
+                    Text("Schritt 3 · Text und Größe", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(mark.detectedText, { value -> updateActive { it.copy(detectedText = value) } }, label = { Text("Erkannter Text") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(mark.correctedText, { value -> updateActive { it.copy(correctedText = value) } }, label = { Text("Korrigierter Text") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    FeedbackSlider("Breite", mark.width) { value -> updateActive { it.copy(width = value.coerceIn(.06f, 1f - it.left)) } }
+                    FeedbackSlider("Höhe", mark.height) { value -> updateActive { it.copy(height = value.coerceIn(.05f, 1f - it.top)) } }
+                }
+            }
         }
-    }, confirmButton = { TextButton(enabled = marks.isNotEmpty(), onClick = { runCatching { persistScanFeedback(context, imageFile, marks, analysis) }.onSuccess { onConfirmed() } }) { Text("Lokal speichern") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } })
+    }, confirmButton = { TextButton(enabled = marks.isNotEmpty(), onClick = { if (editorStep < 2) editorStep++ else runCatching { persistScanFeedback(context, imageFile, marks, analysis) }.onSuccess { onConfirmed() } }) { Text(if (editorStep < 2) "Weiter" else "Lokal speichern") } }, dismissButton = { TextButton(onClick = { if (editorStep > 0) editorStep-- else onDismiss() }) { Text(if (editorStep > 0) "Zurück" else "Abbrechen") } })
 }
 
 @Composable private fun FeedbackLegendSwatch(color: Color, label: String) = Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {

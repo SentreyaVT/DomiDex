@@ -29,6 +29,9 @@ data class PokemonSet(
  */
 private object CardmarketExpansionRegistry {
     private val byTcgDexId = mapOf(
+        // Cardmarket: Mega Evolution / MEG, source-verified against the public
+        // catalogue's 188 corresponding English printings.
+        "me01" to "6209",
         // Cardmarket: Perfect Order / POR, source-verified against the public
         // catalogue's Rowlet, Dartrix and Decidueye ex printings.
         "me03" to "6443",
