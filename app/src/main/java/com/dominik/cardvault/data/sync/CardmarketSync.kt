@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.withTransaction
 import androidx.work.*
 import com.dominik.cardvault.data.local.*
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,7 +57,11 @@ class CardmarketImporter(private val context: Context, private val database: Car
     private suspend fun download(address: String, name: String): File = withContext(Dispatchers.IO) {
         val target = File.createTempFile("cardvault-", name, context.cacheDir)
         val connection = URL(address).openConnection() as HttpURLConnection
-        connection.connectTimeout = 20_000; connection.readTimeout = 90_000; connection.setRequestProperty("User-Agent", "DomiDex/1.0 private Android app")
+        connection.useCaches = false
+        connection.connectTimeout = 20_000; connection.readTimeout = 90_000
+        connection.setRequestProperty("User-Agent", "DomiDex/1.0 private Android app")
+        connection.setRequestProperty("Cache-Control", "no-cache")
+        connection.setRequestProperty("Pragma", "no-cache")
         try { require(connection.responseCode in 200..299) { "Download fehlgeschlagen (HTTP ${connection.responseCode})." }; connection.inputStream.use { input -> target.outputStream().use(input::copyTo) } } finally { connection.disconnect() }
         target
     }
@@ -80,5 +85,14 @@ class CardmarketSyncScheduler(private val context: Context) {
             if (last == null || System.currentTimeMillis() - last >= CardmarketSyncContract.STALE_AFTER_MILLIS) refresh()
         }
     }
-    fun refresh() { workManager.enqueueUniqueWork(CardmarketSyncContract.UNIQUE_MANUAL, ExistingWorkPolicy.KEEP, OneTimeWorkRequestBuilder<CardmarketSyncWorker>().setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()) }
+    /**
+     * The dashboard action is intentionally immediate. Enqueuing it behind WorkManager's
+     * persisted work can leave the visible catalog stale even though the user pressed refresh.
+     * Periodic background updates still use WorkManager above.
+     */
+    fun refresh() {
+        CoroutineScope(Dispatchers.IO).launch {
+            CardmarketImporter(context.applicationContext, CardVaultDatabase.get(context)).import()
+        }
+    }
 }

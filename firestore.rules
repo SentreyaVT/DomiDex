@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function own(uid) { return signedIn() && request.auth.uid == uid; }
+
+    match /communitySubmissions/{submissionId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['submitterUid', 'status', 'createdAt', 'appVersion', 'imagePath', 'cardHint'])
+        && request.resource.data.submitterUid == request.auth.uid
+        && request.resource.data.status == 'PENDING_UPLOAD'
+        && request.resource.data.imagePath == 'community-submissions/' + request.auth.uid + '/' + submissionId + '/front.jpg'
+        && request.resource.data.appVersion is string && request.resource.data.cardHint is string;
+      allow update: if own(resource.data.submitterUid)
+        && resource.data.status in ['PENDING_UPLOAD', 'PENDING_REVIEW']
+        && request.resource.data.status == 'WITHDRAW_REQUESTED'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+      allow get: if own(resource.data.submitterUid);
+      allow list, delete: if false;
+    }
+
+    match /supportRequests/{requestId} {
+      // Metadata only: never camera/screen streams, raw logs, or diagnostics.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['requesterUid', 'status', 'createdAt', 'appVersion'])
+        && request.resource.data.requesterUid == request.auth.uid
+        && request.resource.data.status == 'PENDING'
+        && request.resource.data.appVersion is string;
+      allow get: if own(resource.data.requesterUid);
+      allow list, update, delete: if false;
+    }
+
+    // Default deny. Admin SDK is the only moderation/publication/claim-management path.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

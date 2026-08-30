@@ -1,6 +1,7 @@
 package com.dominik.cardvault.data.local
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -20,12 +21,44 @@ data class CatalogCardEntity(
     val externalSource: String? = null,
     val externalProductId: Long? = null,
     val imageUrl: String? = null,
+    @ColumnInfo(defaultValue = "'UNKNOWN'") val rarity: String = "UNKNOWN",
+    @ColumnInfo(defaultValue = "NULL") val effectOverride: String? = null,
+)
+
+/** Read-only catalog slot for a Binder master-set page; never an owned entry. */
+data class CatalogReferenceProjection(
+    val cardId: String,
+    val name: String,
+    val setName: String,
+    val collectorNumber: String,
+    val language: String,
+    val finish: String,
+    val variant: String,
+    val imageUrl: String?,
+    val externalProductId: Long?,
+    val marketValueMinor: Long?,
+    val priceUpdatedAtEpochMillis: Long?,
+)
+
+/** A Binder is the only collection grouping. Cards stay in collection_entries; no parallel state. */
+@Entity(tableName = "binders", indices = [Index(value = ["setKey"], unique = true)])
+data class BinderEntity(
+    @PrimaryKey val id: String,
+    val setKey: String,
+    val name: String,
+    val heroAsset: String? = null,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
 )
 
 @Entity(
     tableName = "collection_entries",
     foreignKeys = [ForeignKey(entity = CatalogCardEntity::class, parentColumns = ["id"], childColumns = ["cardId"], onDelete = ForeignKey.RESTRICT)],
-    indices = [Index("cardId"), Index(value = ["externalProductSource", "externalProductId"])],
+    indices = [
+        Index("cardId"),
+        Index(value = ["externalProductSource", "externalProductId"]),
+        Index("binderId"),
+    ],
 )
 data class CollectionEntryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -42,6 +75,7 @@ data class CollectionEntryEntity(
     val updatedAtEpochMillis: Long,
     val externalProductSource: String? = null,
     val externalProductId: Long? = null,
+    @ColumnInfo(defaultValue = "'inbox'") val binderId: String = "inbox",
 )
 
 @Entity(
@@ -156,12 +190,40 @@ data class CollectionProjection(
     val externalProductId: Long?,
     val priceCardId: String,
     val imageUrl: String?,
+    val binderId: String,
+    val rarity: String,
+    val effectOverride: String?,
+)
+
+data class BinderProjection(
+    val id: String,
+    val name: String,
+    val heroAsset: String?,
+    val uniqueCards: Int,
+    val ownedCards: Int,
+    val marketValueMinor: Long?,
+    val lastPriceUpdatedAtEpochMillis: Long?,
 )
 
 data class CatalogSearchProjection(
     val externalProductId: Long,
     val name: String,
     val setId: String,
+    val setName: String,
+    val collectorNumber: String,
+    val language: String,
+    val finish: String,
+    val variant: String,
+    val imageUrl: String?,
     val marketValueMinor: Long?,
     val currency: String?,
+    val rarity: String?,
+)
+
+/** Small Room projection: the price value is chosen for the exact finish by the DAO. */
+data class CardPriceHistoryProjection(
+    val effectiveAtEpochMillis: Long,
+    val valueMinor: Long,
+    val currency: String,
+    val source: String,
 )

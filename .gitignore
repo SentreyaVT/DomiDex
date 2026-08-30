@@ -15,6 +15,9 @@ build/
 **/build/
 /captures
 /releases/
+.codex-remote-attachments/
+.idea/
+/artifacts/
 .externalNativeBuild
 .cxx
 local.properties
