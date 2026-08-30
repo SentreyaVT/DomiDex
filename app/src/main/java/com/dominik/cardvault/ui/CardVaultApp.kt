@@ -2081,12 +2081,24 @@ private fun openOfficialPage(context: Context, url: String) {
                                 if (trendProduct != null) "Cardmarket-Trendpreis für den exakt passenden Druck: ${euro(it)}"
                                 else "Cardmarket-Trendpreis ab ${euro(it)} · Druck vor dem Hinzufügen prüfen"
                             }
-                                ?: "Der Cardmarket-Trendpreis wird geladen oder muss noch exakt verknüpft werden.",
+                                ?: when {
+                                    loading -> "Cardmarket-Trendpreis wird geladen …"
+                                    products.isNotEmpty() -> "Für diesen Cardmarket-Druck liegt aktuell kein Trendpreis vor."
+                                    else -> "Kein passender Cardmarket-Druck gefunden."
+                                },
                             color = VaultTextMuted,
                             fontSize = 11.sp,
                         )
                     }
-                    item { Text(if (exactProducts.isEmpty()) "Cardmarket-Treffer mit Trendpreis – Druck vor Auswahl prüfen" else "Cardmarket-Treffer mit Trendpreis", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+                    if (!loading && products.isNotEmpty()) item {
+                        Text(
+                            if (trendProduct != null) "Exakter Cardmarket-Druck gefunden"
+                            else "Cardmarket-Druck gefunden – vor Auswahl prüfen",
+                            color = MewIce,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                     if (!loading && products.isEmpty()) item {
                         Text("Kein passender Cardmarket-Druck gefunden. Du kannst die Karte trotzdem direkt hinzufügen.", color = VaultTextMuted, fontSize = 12.sp)
                     }
