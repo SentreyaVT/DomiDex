@@ -10,9 +10,9 @@ internal enum class MarketEvidence { PRICE_GUIDE, SOLD_COMPARABLES, ACTIVE_LISTI
 internal data class MarketSourceDescriptor(val label: String, val evidence: MarketEvidence, val contributesToValue: Boolean)
 
 internal object MarketPricePolicy {
-    val cardmarket = MarketSourceDescriptor("Cardmarket-Preisguide", MarketEvidence.PRICE_GUIDE, true)
+    val cardmarket = MarketSourceDescriptor("Cardmarket-Trendpreis", MarketEvidence.PRICE_GUIDE, true)
     fun valuationLabel(kind: CollectibleKind) = when (kind) {
-        CollectibleKind.SINGLE_CARD -> "Preisguide nur bei exakter Karten-Zuordnung"
+        CollectibleKind.SINGLE_CARD -> "Trendpreis nur bei exakter Karten-Zuordnung"
         else -> "Sealed nur mit eigener Produkt-ID und eigener Preisquelle"
     }
 }

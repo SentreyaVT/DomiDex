@@ -44,12 +44,11 @@ class CardmarketImporter(private val context: Context, private val database: Car
                     CatalogCardEntity(id = "cm-pokemon-${product.id}", tcg = "POKEMON", setId = product.expansionId?.toString() ?: "unknown", setName = product.expansionId?.let { "Cardmarket-Erweiterung $it" } ?: "Ohne Erweiterungsangabe", name = product.name, collectorNumber = "", language = "UNKNOWN", finish = "UNKNOWN", variant = "Cardmarket-Produkt", createdAtEpochMillis = now, externalSource = CardmarketSyncContract.SOURCE, externalProductId = product.id)
                 }) }
                 matchedPrices.chunked(1000).forEach { chunk -> dao.insertRawPricesReplacing(chunk.map { price ->
-                    // Trend is the preferred Cardmarket guide value. Some products do
-                    // not publish a trend on every import, although they do provide a
-                    // recent average or low price. Keep that verified fallback instead
-                    // of making a real Cardmarket product look permanently unpriced.
-                    val guideValue = price.guideValueMinor()
-                    RawPriceSnapshotEntity(cardId = "cm-pokemon-${price.productId}", source = CardmarketSyncContract.SOURCE, currency = "EUR", lowValueMinor = price.lowMinor, averageValueMinor = price.averageMinor, trendValueMinor = price.trendMinor, marketValueMinor = guideValue, average1DayValueMinor = price.average1Minor, average7DayValueMinor = price.average7Minor, average30DayValueMinor = price.average30Minor, holoAverageValueMinor = price.holoAverageMinor, holoLowValueMinor = price.holoLowMinor, holoTrendValueMinor = price.holoTrendMinor, fetchedAtEpochMillis = now, effectiveAtEpochMillis = effectiveAt)
+                    // DomiDex deliberately exposes one market figure only: the
+                    // Cardmarket trend price. Average/low fields remain stored for
+                    // source integrity, but never become a silently substituted UI
+                    // price or portfolio value.
+                    RawPriceSnapshotEntity(cardId = "cm-pokemon-${price.productId}", source = CardmarketSyncContract.SOURCE, currency = "EUR", lowValueMinor = price.lowMinor, averageValueMinor = price.averageMinor, trendValueMinor = price.trendMinor, marketValueMinor = price.trendMinor, average1DayValueMinor = price.average1Minor, average7DayValueMinor = price.average7Minor, average30DayValueMinor = price.average30Minor, holoAverageValueMinor = price.holoAverageMinor, holoLowValueMinor = price.holoLowMinor, holoTrendValueMinor = price.holoTrendMinor, fetchedAtEpochMillis = now, effectiveAtEpochMillis = effectiveAt)
                 }) }
                 dao.putSyncState(CatalogSyncStateEntity(CardmarketSyncContract.SOURCE, "SUCCESS", now, now, prices.createdAt ?: products.createdAt, products.records.size, matchedPrices.size, null))
             }
@@ -75,10 +74,8 @@ class CardmarketImporter(private val context: Context, private val database: Car
     private fun emptyState() = CatalogSyncStateEntity(CardmarketSyncContract.SOURCE, "IDLE", null, null, null, 0, 0, null)
 }
 
-/** Trend stays first. The remaining fields are source-provided Cardmarket
- * guide values, used only when the current product has no trend observation. */
-internal fun CardmarketPrice.guideValueMinor(): Long? =
-    trendMinor ?: average30Minor ?: average7Minor ?: averageMinor ?: lowMinor
+/** DomiDex uses only the declared Cardmarket trend, never an average/low fallback. */
+internal fun CardmarketPrice.guideValueMinor(): Long? = trendMinor
 
 class CardmarketSyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = CardmarketImporter(applicationContext, CardVaultDatabase.get(applicationContext)).import().fold({ Result.success() }, { Result.failure() })

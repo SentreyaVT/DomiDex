@@ -24,8 +24,8 @@
     <string name="card_preview_shine_hint">Nur ein visueller Vergleichseffekt. Er ändert oder erkennt die echte Druckvariante nicht.</string>
     <string name="card_preview_edit">Eintrag bearbeiten</string>
     <string name="price_sources_title">Preis &amp; offizielle Quellen</string>
-    <string name="raw_reference_value">Lokale Rohkarten-Referenz: %1$s pro Karte · Cardmarket-Tagesdaten vom %2$s. Kein Live-Angebotspreis.</string>
-    <string name="raw_reference_unavailable">Keine lokale Rohkarten-Referenz: Diese Kartenidentität ist nicht eindeutig mit einem Preisprodukt verknüpft.</string>
+    <string name="raw_reference_value">Cardmarket-Trendpreis: %1$s pro Karte · Cardmarket-Tagesdaten vom %2$s. Kein Live-Angebotspreis.</string>
+    <string name="raw_reference_unavailable">Kein Cardmarket-Trendpreis: Diese Kartenidentität ist noch nicht eindeutig mit einem Preisprodukt verknüpft.</string>
     <string name="open_cardmarket_current">Aktuelle Cardmarket-Ansicht</string>
     <string name="cardmarket_external_exact_hint">Öffnet die extern gewählte Cardmarket-Produkt-ID %1$d. DomiDex liest die Seite nicht aus und übernimmt keinen Livepreis.</string>
     <string name="open_cardmarket_search">Karte bei Cardmarket suchen</string>
@@ -89,7 +89,7 @@
     <string name="binder_title">Binder</string>
     <string name="binder_all">Alle Binder</string>
     <string name="binder_progress">%1$d Karten · %2$d Plätze</string>
-    <string name="binder_market_value">Durchschnittlicher Marktwert: %1$s</string>
+    <string name="binder_market_value">Cardmarket-Trendwert: %1$s</string>
     <string name="binder_manage">Binder verwalten</string>
     <string name="binder_delete">Binder löschen</string>
     <string name="binder_delete_first_title">Binder wirklich löschen?</string>
@@ -129,7 +129,7 @@
     <string name="action_delete">Löschen</string>
     <string name="delete_entry_title">Eintrag löschen?</string>
     <string name="delete_entry_body">„%1$s“ wird aus deiner lokalen Sammlung entfernt. Die Karte wird nicht automatisch erneut angelegt.</string>
-    <string name="no_market_price">Noch kein Marktpreis</string>
+    <string name="no_market_price">Trendpreis wird geladen</string>
     <string name="grading_action">Zustand prüfen</string>
     <string name="grading_card_future">Die geführte Prüfung für genau diese Kartenvariante folgt später. Ergebnisse und Wiederholungen bleiben dann an diesem Eintrag gespeichert.</string>
     <string name="card_metadata">%1$s · %2$s · ×%3$d</string>

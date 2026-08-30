@@ -23,8 +23,8 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
 
     override val portfolio: Flow<PortfolioSummary> = combine(dao.observeCollection(), dao.observeRawPriceHistory()) { rows, prices ->
         val cards = rows.map { row ->
-            val cardPrices = prices.filter { it.cardId == row.priceCardId && it.source == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE && it.marketValueMinor != null }
-            val first = cardPrices.firstOrNull()?.marketValueMinor
+            val cardPrices = prices.filter { it.cardId == row.priceCardId && it.source == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }
+            val first = cardPrices.asSequence().mapNotNull { it.trendValueFor(row.finish) }.firstOrNull()
             val latest = row.marketValueMinor
             val change = if (first != null && latest != null && first != 0L) (latest - first) * 100.0 / first else 0.0
             CollectionCard(row.entryId, row.cardId, row.name, row.setName, row.collectorNumber,
@@ -170,9 +170,13 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
 
     private fun buildHistory(rows: List<CollectionProjection>, prices: List<RawPriceSnapshotEntity>): List<PortfolioPoint> =
         prices.map { it.effectiveAtEpochMillis }.distinct().sorted().map { timestamp ->
-            val total = rows.sumOf { row -> prices.filter { it.cardId == row.priceCardId && it.source == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE && it.effectiveAtEpochMillis <= timestamp }.maxByOrNull { it.effectiveAtEpochMillis }?.marketValueMinor?.times(row.quantity) ?: 0L }
+            val total = rows.sumOf { row -> prices.filter { it.cardId == row.priceCardId && it.source == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE && it.effectiveAtEpochMillis <= timestamp }.maxByOrNull { it.effectiveAtEpochMillis }?.trendValueFor(row.finish)?.times(row.quantity) ?: 0L }
             PortfolioPoint(java.time.Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("MMM")), total / 100.0)
         }
+
+    /** The whole portfolio follows the same exact Normal/Holo/Reverse trend as each card row. */
+    private fun RawPriceSnapshotEntity.trendValueFor(finish: String): Long? =
+        if (finish.contains("holo", ignoreCase = true)) holoTrendValueMinor ?: trendValueMinor else trendValueMinor
 
     private fun accentFor(name: String): Long = when {
         name.contains("Charizard", true) -> 0xFFF06445; name.contains("Pikachu", true) -> 0xFFFFC83D

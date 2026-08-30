@@ -733,7 +733,7 @@ private fun isDebuggableBuild(context: Context): Boolean =
                                 Text(setName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                                 Text("DomiDex-Sammelalbum · $binderPages Kartenseiten für $capacity Karten", color = VaultTextMuted, fontSize = 12.sp)
                                 Text("Fortschritt: $progress/$capacity · ${setCards.sumOf { it.quantity }} im Besitz", color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                                Text("Gesamtwert: ${if (pricedCards.isEmpty()) "Kein Marktwert verfügbar" else euro(pricedCards.sumOf { it.currentValueEur * it.quantity })} · ${pricedCards.sumOf { it.quantity }}/${setCards.sumOf { it.quantity }} bepreist", color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text("Cardmarket-Trendwert: ${if (pricedCards.isEmpty()) "Kein Trendpreis verfügbar" else euro(pricedCards.sumOf { it.currentValueEur * it.quantity })} · ${pricedCards.sumOf { it.quantity }}/${setCards.sumOf { it.quantity }} bepreist", color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                                 Text("Öffnen und durchblättern ›", color = MewRoseSoft, fontSize = 11.sp)
                             }
                             MasterSetProgressRing(progress, capacity)
@@ -1317,13 +1317,13 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
                 Text("AKTUELLER BINDERWERT", color = MewIce, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
                 when {
                     bindersWithCards.isEmpty() -> Text("Noch keine Karten im Binder", color = VaultTextMuted, fontSize = 13.sp)
-                    pricedBinders.isEmpty() -> Text("Preisguide wird noch synchronisiert", color = VaultTextMuted, fontSize = 13.sp)
+                    pricedBinders.isEmpty() -> Text("Trendpreise werden noch synchronisiert", color = VaultTextMuted, fontSize = 13.sp)
                     else -> Text(euro(currentValue), color = VaultText, fontSize = 25.sp, fontWeight = FontWeight.Black)
                 }
                 if (bindersWithCards.isNotEmpty()) {
                     Text(
-                        if (pricedBinders.isEmpty()) "Sobald Cardmarket-Preise vorliegen, erscheint hier der echte Gesamtwert."
-                        else "Cardmarket-Preisguide: ${pricedBinders.size}/${bindersWithCards.size} Binder mit aktuellen Preisen",
+                        if (pricedBinders.isEmpty()) "Sobald Cardmarket-Trendpreise vorliegen, erscheint hier der echte Gesamtwert."
+                        else "Cardmarket-Trendpreise: ${pricedBinders.size}/${bindersWithCards.size} Binder aktuell",
                         color = VaultTextMuted,
                         fontSize = 10.sp,
                     )
@@ -1476,8 +1476,8 @@ private fun openDiscordCommunity(context: Context) {
             Row(Modifier.fillMaxSize().padding(start = 20.dp, end = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Surface(color = MewRose.copy(alpha = .16f), shape = CardVaultShapes.field) { Text(stringResource(R.string.portfolio_private_badge), Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = Color(0xFFFFD8E5), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-                    Text(stringResource(R.string.portfolio_estimated_value), color = VaultTextMuted, fontSize = 13.sp)
-                    Text(if (portfolio.hasPricedCards) euro(portfolio.totalValue) else "Kein Marktwert verfügbar", fontSize = if (portfolio.hasPricedCards) 30.sp else 18.sp, fontWeight = FontWeight.Black, color = VaultText, maxLines = 1)
+                    Text("Gesamtportfolio · alle Binder", color = VaultTextMuted, fontSize = 13.sp)
+                    Text(if (portfolio.hasPricedCards) euro(portfolio.totalValue) else "Kein Trendpreis verfügbar", fontSize = if (portfolio.hasPricedCards) 30.sp else 18.sp, fontWeight = FontWeight.Black, color = VaultText, maxLines = 1)
                     Text(
                         if (portfolio.history.size > 1) stringResource(R.string.portfolio_change, portfolio.changePercent) else "Noch nicht genügend echte Verlaufsdaten",
                         color = if (portfolio.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error,
@@ -1485,8 +1485,8 @@ private fun openDiscordCommunity(context: Context) {
                         fontSize = 12.sp,
                     )
                     Text(
-                        if (portfolio.unpricedCards == 0) "Cardmarket-Wert für alle ${portfolio.pricedCards} Karten verfügbar"
-                        else "Bepreist: ${portfolio.pricedCards} von ${portfolio.totalCards} Karten",
+                        if (portfolio.unpricedCards == 0) "Cardmarket-Trendpreis für alle ${portfolio.pricedCards} Karten verfügbar"
+                        else "Trendpreis: ${portfolio.pricedCards} von ${portfolio.totalCards} Karten",
                         color = VaultTextMuted,
                         fontSize = 10.sp,
                     )
@@ -1599,7 +1599,7 @@ private enum class PriceHistoryRange(val label: String, val days: Long?) {
         Text("AKTUELLER WERT", fontWeight = FontWeight.Bold, color = MewRoseSoft)
         if (current == null) {
             Text("Kein Marktwert verfügbar", color = VaultTextMuted, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Text("Für diese konkrete deutsche Variante ist noch kein eindeutig verknüpfter Cardmarket-Wert gespeichert.", color = VaultTextMuted, fontSize = 11.sp)
+            Text("Für diese konkrete deutsche Variante ist noch kein eindeutig verknüpfter Cardmarket-Trendpreis gespeichert.", color = VaultTextMuted, fontSize = 11.sp)
         } else {
             Text(euro(current), color = MewIce, fontSize = 25.sp, fontWeight = FontWeight.Black)
             change?.let { delta ->
@@ -1777,8 +1777,9 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     var adding by remember(reference.id) { mutableStateOf(false) }
     var message by remember(reference.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val catalogSync by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
 
-    LaunchedEffect(reference.id) {
+    LaunchedEffect(reference.id, catalogSync.lastSuccessAtEpochMillis) {
         loading = true
         val catalogMatches = runCatching { repository.searchCatalog(reference.name, 60) }
             .getOrDefault(emptyList())
@@ -1863,7 +1864,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                                 colors = CardDefaults.elevatedCardColors(containerColor = MewPlumDeep),
                             ) {
                                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("Exakter Druck · Cardmarket-Preisguide", fontWeight = FontWeight.Bold)
+                            Text("Exakter Druck · Cardmarket-Trendpreis", fontWeight = FontWeight.Bold)
                                     Text(euro(product.trendPriceEur!!), color = MewIce, fontSize = 20.sp, fontWeight = FontWeight.Black)
                                     Text("Passenden Druck auswählen und zum Binder hinzufügen", color = VaultTextMuted, fontSize = 11.sp)
                                 }
@@ -1892,7 +1893,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                                     fontSize = 11.sp,
                                 )
                                 Text(
-                                    product.trendPriceEur?.let { "Cardmarket-Preisguide: ${euro(it)}" } ?: "Cardmarket-Produkt ohne gespeicherten Preisguide",
+                                    product.trendPriceEur?.let { "Cardmarket-Trendpreis: ${euro(it)}" } ?: "Cardmarket-Trendpreis wird geladen",
                                     color = if (product.trendPriceEur != null) MewIce else VaultTextMuted,
                                     fontSize = 13.sp,
                                 )
@@ -1903,7 +1904,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                 }
                 if (!loading && candidates.isEmpty()) item {
                     Text("Für diese genaue Karte ist derzeit kein eindeutig passendes Cardmarket-Produkt im lokalen Katalog vorhanden.", color = VaultTextMuted, fontSize = 12.sp)
-                    Text("Du kannst sie ohne Preis hinzufügen und später über die Kartendetails exakt verknüpfen. Es wird kein geschätzter oder fremder Preis eingesetzt.", color = VaultTextMuted, fontSize = 11.sp)
+                    Text("Die Karte kann gespeichert werden; nach der exakten Cardmarket-Verknüpfung erscheint ihr Trendpreis automatisch. Es wird kein geschätzter oder fremder Preis eingesetzt.", color = VaultTextMuted, fontSize = 11.sp)
                     OutlinedButton(onClick = { addReference(null) }, enabled = !adding, modifier = Modifier.fillMaxWidth()) { Text("Ohne Preis hinzufügen") }
                 }
                 message?.let { item { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) } }
@@ -1948,7 +1949,7 @@ private fun normalizeBinderMetadata(value: String): String = value.lowercase(Loc
         openOfficialPage(context, OfficialSourceLinks.PSA_AUCTION_PRICES)
     }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.open_psa_research)) }
     Text(stringResource(R.string.psa_research_hint, OfficialSourceLinks.psaSearchText(card)), color = VaultTextMuted, fontSize = 10.sp)
-    Text("Portfoliowert nutzt den Cardmarket-Preisguide des ausdrücklich verknüpften Produkts: Trendpreis, wenn vorhanden, sonst eine vorhandene Cardmarket-Preisreferenz. Holo nutzt zuerst den Holo-Preisguide. Ohne Verknüpfung wird kein Wert geschätzt.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+    Text("Portfoliowert nutzt ausschließlich den Cardmarket-Trendpreis des ausdrücklich verknüpften Produkts. Holo und Reverse Holo nutzen den zugehörigen Holo-Trendpreis. Ohne Verknüpfung wird kein Wert geschätzt.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
 }
 
 private fun openOfficialPage(context: Context, url: String) {
@@ -1987,34 +1988,35 @@ private fun openOfficialPage(context: Context, url: String) {
     var setConfirmationHint by rememberSaveable { mutableStateOf(false) }
     var pokemonResults by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }; var error by remember { mutableStateOf(false) }
+    val catalogSync by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
+    // The initial Cardmarket import runs in the background. Repeat the active
+    // lookup once it finishes so a search opened immediately after app launch
+    // receives its real trend prices without requiring the user to type again.
+    val catalogRevision = catalogSync.lastSuccessAtEpochMillis
     LaunchedEffect(selectedSet) {
         loading = true; error = false; query = ""
         runCatching { if (selectedSet == null) sets = visualCatalog.sets() else cards = visualCatalog.cards(selectedSet!!) }
             .onFailure { error = true }
         loading = false
     }
-    LaunchedEffect(selectedCard) {
+    LaunchedEffect(selectedCard, catalogRevision) {
         val card = selectedCard ?: return@LaunchedEffect
         loading = true; error = false
-        // A Cardmarket match is optional.  The TCGdex card selected above
-        // already provides the German name, set and collector number needed
-        // for a correct Binder entry, so an unavailable price lookup must not
-        // trap the user on this screen.
+        // Show same-name Cardmarket trend prices immediately. Only a complete
+        // name+set+number match is auto-linked; every other printing remains
+        // an explicit collector choice and is never linked silently.
         runCatching {
-            repository.searchCatalog(card.name, 40)
-                .filter { product -> isExactVisualCatalogPriceMatch(card, product) }
-                .map {
-                it.copy(
-                    visualSetName = card.set.name,
-                    collectorNumber = card.number,
-                    imageUrl = card.largeImageUrl,
-                )
-            }
+            val priceSearchName = card.marketSearchName ?: card.name
+            val sameNameProducts = repository.searchCatalog(priceSearchName, 40)
+                .filter { product -> isSameNamePriceCandidate(priceSearchName, product) }
+                .distinctBy { it.productId }
+            val exactProducts = sameNameProducts.filter { product -> isExactVisualCatalogPriceMatch(card, product) }
+            exactProducts.ifEmpty { sameNameProducts }
         }.onSuccess { products = it }
             .onFailure { products = emptyList(); error = true }
         loading = false
     }
-    LaunchedEffect(query, searchByPokemon, selectedSet) {
+    LaunchedEffect(query, searchByPokemon, selectedSet, catalogRevision) {
         if (selectedSet == null && searchByPokemon && query.trim().length >= 2) pokemonResults = repository.searchCatalog(query, 20) else if (selectedSet == null) pokemonResults = emptyList()
     }
     val matchingSets = remember(sets, query) {
@@ -2038,7 +2040,8 @@ private fun openOfficialPage(context: Context, url: String) {
                 selectedCard != null -> {
                     item { VisualCardRow(selectedCard!!) {} }
                     val selected = selectedCard!!
-                    val trendProduct = products.firstOrNull { it.trendPriceEur != null }
+                    val exactProducts = products.filter { isExactVisualCatalogPriceMatch(selected, it) }
+                    val trendProduct = exactProducts.firstOrNull { it.trendPriceEur != null }
                     item {
                         Button(
                             onClick = { onSelected(trendProduct ?: catalogResultForVisualCard(selected)) },
@@ -2055,12 +2058,12 @@ private fun openOfficialPage(context: Context, url: String) {
                     item {
                         Text(
                             trendProduct?.trendPriceEur?.let { "Cardmarket-Trendpreis für den exakt passenden Druck: ${euro(it)}" }
-                                ?: "Karte ohne bestätigten Marktpreis speichern. Eine Cardmarket-Verknüpfung ist optional.",
+                                ?: "Der Cardmarket-Trendpreis wird geladen oder muss noch exakt verknüpft werden.",
                             color = VaultTextMuted,
                             fontSize = 11.sp,
                         )
                     }
-                    item { Text("Optional: Cardmarket-Druck verknüpfen", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+                    item { Text(if (exactProducts.isEmpty()) "Cardmarket-Treffer mit Trendpreis – Druck vor Auswahl prüfen" else "Cardmarket-Treffer mit Trendpreis", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
                     if (!loading && products.isEmpty()) item {
                         Text("Kein passender Cardmarket-Druck gefunden. Du kannst die Karte trotzdem direkt hinzufügen.", color = VaultTextMuted, fontSize = 12.sp)
                     }
@@ -2068,7 +2071,7 @@ private fun openOfficialPage(context: Context, url: String) {
                         OutlinedCard(onClick = { onSelected(product.copy(name = selected.name, visualSetName = selected.set.name, collectorNumber = selected.number, imageUrl = selected.largeImageUrl)) }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface)) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("Cardmarket-Trendpreis", fontWeight = FontWeight.Bold)
                             Text(product.trendPriceEur?.let(::euro) ?: "Noch kein Trendpreis", color = MewIce, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            Text("Exaktes Produkt auswählen", color = MewRoseSoft, fontSize = 12.sp)
+                            Text(if (isExactVisualCatalogPriceMatch(selected, product)) "Exaktes Produkt auswählen" else "Gleichnamigen Druck prüfen und auswählen", color = if (isExactVisualCatalogPriceMatch(selected, product)) MewRoseSoft else VaultGold, fontSize = 12.sp)
                         } }
                     }
                 }
@@ -2154,10 +2157,11 @@ private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: Cat
     var marketProducts by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
     var marketLoading by remember { mutableStateOf(false) }
     var selectedMarketProductId by rememberSaveable { mutableStateOf<Long?>(initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }) }
+    val catalogSync by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
     // The display name stays German. When the card came from TCGdex, use its
     // matching English source name only for the Cardmarket catalogue lookup.
     val priceSearchName = initialCatalog?.takeIf { name == initialCatalog.name }?.marketSearchName ?: name
-    LaunchedEffect(name, set, number, finish, priceSearchName) {
+    LaunchedEffect(name, set, number, finish, priceSearchName, catalogSync.lastSuccessAtEpochMillis) {
         if (name.trim().length < 2 || set.isBlank() || number.isBlank()) {
             marketProducts = emptyList(); marketLoading = false; selectedMarketProductId = initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }
             return@LaunchedEffect
@@ -2184,10 +2188,10 @@ private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: Cat
             item { Text(stringResource(R.string.field_language), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); Text("Deutsch", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Text("DomiDex wird für deutsche Karten geführt.", color = VaultTextMuted, fontSize = 10.sp) }
             item { CardFinishAndEffectEditor(finish, { finish = it }, variant, { variant = it }, effectOverride, { effectOverride = it }) }
             item {
-                Text("Cardmarket-Preisguide", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text("Cardmarket-Trendpreis", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 when {
                     marketLoading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                    marketProducts.isEmpty() -> Text("Für diesen Kartennamen ist aktuell kein Cardmarket-Eintrag im lokalen Katalog verfügbar. Du kannst die Karte trotzdem speichern und später einen Preis verknüpfen.", color = VaultTextMuted, fontSize = 11.sp)
+                    marketProducts.isEmpty() -> Text("Cardmarket-Preise werden noch synchronisiert oder dieses Produkt muss exakt verknüpft werden.", color = VaultTextMuted, fontSize = 11.sp)
                     else -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (marketProducts.none { product -> isExactManualPriceMatch(priceSearchName, set, number, product) }) {
                             Text("Kein exakt prüfbarer Druck gefunden. Gleichnamige Cardmarket-Produkte sind unten auswählbar – bitte Set und Druck vor dem Speichern prüfen.", color = VaultGold, fontSize = 11.sp)
@@ -2200,7 +2204,7 @@ private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: Cat
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(product.trendPriceEur?.let { "Cardmarket-Preisguide: ${euro(it)}" } ?: "Cardmarket-Produkt ohne gespeicherten Preisguide", color = if (product.trendPriceEur != null) MewIce else VaultTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text(product.trendPriceEur?.let { "Cardmarket-Trendpreis: ${euro(it)}" } ?: "Cardmarket-Trendpreis wird geladen", color = if (product.trendPriceEur != null) MewIce else VaultTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                     Text(listOfNotNull(product.finish, product.variant).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "Exakter Druck" }, color = VaultTextMuted, fontSize = 11.sp)
                                     Text(if (isExactManualPriceMatch(priceSearchName, set, number, product)) "Exakte Zuordnung" else "Gleichnamiger Druck – Auswahl vor dem Speichern prüfen", color = if (isExactManualPriceMatch(priceSearchName, set, number, product)) MewIce else VaultGold, fontSize = 10.sp)
                                 }
@@ -2523,7 +2527,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                                             if (artwork != null) Text("Bildabgleich: ${artworkLabel(artwork)}", color = if (artwork.match == ArtworkMatch.CONTRADICTS) VaultGold else MewIce, fontSize = 10.sp)
                                             else if (artworkLoading) Text("Bildabgleich läuft im Hintergrund", color = VaultTextMuted, fontSize = 10.sp)
                                             val price = candidate.trendPriceEur
-                                            if (price != null) Text("Cardmarket-Preisguide: ${euro(price)}", color = MewIce, fontSize = 10.sp)
+                                            if (price != null) Text("Cardmarket-Trendpreis: ${euro(price)}", color = MewIce, fontSize = 10.sp)
                                             else if (!candidate.hasMarketProduct) Text("Katalogtreffer · Preis wird separat abgeglichen", color = VaultTextMuted, fontSize = 10.sp)
                                         }
                                         Text("Auswählen", color = MewRoseSoft, fontSize = 12.sp)
