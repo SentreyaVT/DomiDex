@@ -39,6 +39,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -2978,22 +2980,22 @@ private fun ScanFeedbackMark.viewportBounds(viewport: Size, zoom: Float, pan: Of
     val latestMarks = rememberUpdatedState(marks)
     val latestZoom = rememberUpdatedState(zoom)
     val latestPan = rememberUpdatedState(pan)
+    val editorScrollState = rememberScrollState()
     fun updateActive(change: (ScanFeedbackMark) -> ScanFeedbackMark) { marks = marks.mapIndexed { index, mark -> if (index == selected) change(mark) else mark } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Scanner-Feedback · ${editorStep + 1}/3") }, text = {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(editorScrollState),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             if (editorStep == 0) {
-            Text("Ein Finger auf einer Zone bewegt oder vergrößert sie. Außerhalb einer Zone pannst du die Karte; mit zwei Fingern zoomst und pannst du jederzeit die Ansicht.", color = VaultTextMuted, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                FeedbackLegendSwatch(MewIce, "Cyan · hilfreiche Information")
-                FeedbackLegendSwatch(VaultGold, "Gelb · Falscherkennung")
-                FeedbackLegendSwatch(MewRose, "Pink · Größen-Griff")
-            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(editBoxes, { editBoxes = true }, label = { Text("Felder bearbeiten") })
                 FilterChip(!editBoxes, { editBoxes = false }, label = { Text("Ansicht · Zoom/Pan") })
                 TextButton(onClick = { zoom = 1f; pan = Offset.Zero }) { Text("Karte einpassen") }
             }
-            Box(Modifier.fillMaxWidth().aspectRatio(.72f).clip(RoundedCornerShape(12.dp)).background(Color.Black).pointerInput(imageFile, editBoxes) {
+            BoxWithConstraints(Modifier.fillMaxWidth().heightIn(max = 420.dp), contentAlignment = Alignment.Center) {
+            val cardWidth = minOf(maxWidth, maxHeight * .72f)
+            Box(Modifier.width(cardWidth).aspectRatio(.72f).clip(RoundedCornerShape(12.dp)).background(Color.Black).pointerInput(imageFile, editBoxes) {
                 awaitEachGesture {
                     val firstDown = awaitFirstDown(requireUnconsumed = false)
                     val viewport = Size(size.width.toFloat(), size.height.toFloat())
@@ -3104,16 +3106,15 @@ private fun ScanFeedbackMark.viewportBounds(viewport: Size, zoom: Float, pan: Of
                 }
                 }
             }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = { marks = marks + ScanFeedbackMark(top = (.18f + marks.size * .08f).coerceAtMost(.75f)); selected = marks.lastIndex + 1 }) { Text("Bereich hinzufügen") }; TextButton(enabled = marks.size > 1, onClick = { marks = marks.filterIndexed { index, _ -> index != selected }; selected = (selected - 1).coerceAtLeast(0) }) { Text("Löschen", color = MaterialTheme.colorScheme.error) } }
             if (marks.size > 1) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { marks.indices.forEach { index -> FilterChip(selected == index, { selected = index }, label = { Text("${index + 1}") }) } }
             }
             active?.let { mark ->
                 if (editorStep == 1) {
-                    Text("Schritt 2 · Feld beschreiben", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     Box { OutlinedButton(onClick = { categoryOpen = true }, modifier = Modifier.fillMaxWidth()) { Text(mark.category, modifier = Modifier.weight(1f)); Text("⌄") }; DropdownMenu(expanded = categoryOpen, onDismissRequest = { categoryOpen = false }) { categories.forEach { category -> DropdownMenuItem(text = { Text(category) }, onClick = { updateActive { it.copy(category = category) }; categoryOpen = false }) } } }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(!mark.negative, { updateActive { it.copy(negative = false) } }, label = { Text("Cyan · hilfreich") }); FilterChip(mark.negative, { updateActive { it.copy(negative = true) } }, label = { Text("Gelb · Falscherkennung") }) }
                 } else if (editorStep == 2) {
-                    Text("Schritt 3 · Text und Größe", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     OutlinedTextField(mark.detectedText, { value -> updateActive { it.copy(detectedText = value) } }, label = { Text("Erkannter Text") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(mark.correctedText, { value -> updateActive { it.copy(correctedText = value) } }, label = { Text("Korrigierter Text") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     FeedbackSlider("Breite", mark.width) { value -> updateActive { it.copy(width = value.coerceIn(.06f, 1f - it.left)) } }
