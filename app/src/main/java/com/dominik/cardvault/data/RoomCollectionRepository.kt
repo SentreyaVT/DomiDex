@@ -65,8 +65,11 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
             }
         }
         val cardId = "manual-${UUID.randomUUID()}"
-        val setKey = input.setName.trim().lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifBlank { "inbox" }
-        val binderId = dao.binderIdForSet(setKey) ?: "set-$setKey"
+        // Cardmarket's expansion id is the stable set identity. The visible Binder
+        // name intentionally stays the German source/user name, so collectors can
+        // still find the set exactly as before.
+        val setKey = binderSetKey(input.cardmarketExpansionId, input.setName)
+        val binderId = dao.binderIdForSet(setKey) ?: binderIdForSetKey(setKey)
         dao.insertBinder(BinderEntity(binderId, setKey, input.setName.trim().ifBlank { "Ohne Setzuordnung" }, createdAtEpochMillis = now, updatedAtEpochMillis = now))
         dao.insertCatalogCard(CatalogCardEntity(cardId, "POKEMON", setKey, input.setName.trim(), input.name.trim(), input.collectorNumber.trim(), input.language.name, normalizedFinish, normalizedVariant, now, imageUrl = input.imageUrl, rarity = input.rarity?.trim()?.ifBlank { "UNKNOWN" } ?: "UNKNOWN", effectOverride = input.effectOverride))
         dao.insertCollectionEntry(CollectionEntryEntity(cardId = cardId, quantity = input.quantity.coerceAtLeast(1), condition = normalizedCondition, acquisitionPriceMinor = input.acquisitionPriceEur?.times(100)?.roundToLong(), acquisitionCurrency = input.acquisitionPriceEur?.let { "EUR" }, acquisitionDateEpochDay = input.acquisitionDateEpochDay, notes = input.notes.trim(), frontPhotoUri = null, backPhotoUri = null, createdAtEpochMillis = now, updatedAtEpochMillis = now, externalProductSource = input.externalProductId?.let { com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }, externalProductId = input.externalProductId, binderId = binderId))
@@ -197,3 +200,15 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
         private const val DEMO_CLEANUP_KEY = "remove_accidental_demo_collection_v1"
     }
 }
+
+/** Keeps Binder identity independent from translated or differently formatted set names. */
+internal fun binderSetKey(cardmarketExpansionId: String?, displaySetName: String): String {
+    // Cardmarket expansion ids are numeric. Rejecting arbitrary labels here
+    // prevents an old display name from accidentally being stored as an ID.
+    val expansionId = cardmarketExpansionId?.trim()?.takeIf { it.all(Char::isDigit) }
+    return expansionId?.let { "cardmarket-$it" }
+        ?: displaySetName.trim().lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifBlank { "inbox" }
+}
+
+internal fun binderIdForSetKey(setKey: String): String =
+    if (setKey.startsWith("cardmarket-")) setKey else "set-$setKey"

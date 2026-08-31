@@ -76,7 +76,10 @@ data class PortfolioSummary(val cards: List<CollectionCard>, val history: List<P
     companion object { val Empty = PortfolioSummary(emptyList(), emptyList()) }
 }
 
-data class ManualCardInput(val name: String, val setName: String, val collectorNumber: String, val language: CardLanguage, val finish: String, val variant: String, val quantity: Int, val condition: String, val notes: String, val acquisitionPriceEur: Double?, val acquisitionDateEpochDay: Long?, val externalProductId: Long? = null, val imageUrl: String? = null, val rarity: String? = null, val effectOverride: String? = null)
+data class ManualCardInput(val name: String, val setName: String, val collectorNumber: String, val language: CardLanguage, val finish: String, val variant: String, val quantity: Int, val condition: String, val notes: String, val acquisitionPriceEur: Double?, val acquisitionDateEpochDay: Long?, val externalProductId: Long? = null, val imageUrl: String? = null, val rarity: String? = null, val effectOverride: String? = null,
+    /** Stable Cardmarket expansion id. It is used for Binder identity only; the German display name remains unchanged. */
+    val cardmarketExpansionId: String? = null,
+)
 data class CollectionEntryUpdate(val quantity: Int, val condition: String, val notes: String, val acquisitionPriceEur: Double?, val acquisitionDateEpochDay: Long?, val finish: String, val variant: String, val effectOverride: String?)
 enum class AddCardOutcome { CREATED, QUANTITY_INCREMENTED }
 

@@ -709,16 +709,18 @@ private fun isDebuggableBuild(context: Context): Boolean =
     val catalog = remember { PokemonVisualCatalog() }
     var catalogSets by remember { mutableStateOf<List<PokemonSet>>(emptyList()) }
     var localReferenceCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
-    var selected by remember { mutableStateOf<Triple<String, List<CollectionCard>, Int>?>(null) }
-    var openingBinder by remember { mutableStateOf<Triple<String, List<CollectionCard>, Int>?>(null) }
+    // Keep only the selected set name. Its cards must always be derived from the
+    // live portfolio state so a just-added card immediately replaces its shadow slot.
+    var selectedSetName by remember { mutableStateOf<String?>(null) }
+    var openingBinder by remember { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
     var choosingCatalog by remember { mutableStateOf(false) }
     var catalogDraft by remember { mutableStateOf<CatalogSearchResult?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(openingBinder) {
-        openingBinder?.let { pending ->
+        openingBinder?.let { pendingSetName ->
             delay(DomiMotion.Fast.toLong()) // UI-only cover opening beat; collection data is untouched.
-            selected = pending
+            selectedSetName = pendingSetName
             openingBinder = null
         }
     }
@@ -760,20 +762,22 @@ private fun isDebuggableBuild(context: Context): Boolean =
         val observedVariantSlots = numberedCards.size - numberedCards.distinctBy { collectorNumberOf(it.number) }.size
         return maxOf(1, setCards.size, maxOf(catalogTotal, printedDenominator) + observedVariantSlots)
     }
-    selected?.let { (setName, setCards, capacity) ->
+    selectedSetName?.let { setName ->
+        val setCards = grouped[setName].orEmpty()
+        val capacity = cardCapacityFor(setName, setCards)
         BinderReaderScreen(
             setName = setName,
             cards = setCards,
             cardCapacity = capacity,
             coverUrl = coverFor(setName),
             repository = repository,
-            onBack = { selected = null },
+            onBack = { selectedSetName = null },
             onHideReferenceBinder = if (setCards.isEmpty()) {
                 {
                     val updated = hiddenReferenceBinders + setName
                     binderPreferences.edit().putStringSet("hidden_reference_binders", updated).apply()
                     hiddenReferenceBinders = updated
-                    selected = null
+                    selectedSetName = null
                 }
             } else null,
         )
@@ -788,10 +792,10 @@ private fun isDebuggableBuild(context: Context): Boolean =
             val binderPages = (capacity + 8) / 9
             val progress = if (isWachsendesChaosSet(setName)) setCards.distinctBy { "${it.number}|${it.finish}|${it.variant}" }.size else setCards.distinctBy { it.number }.size
             item {
-                OutlinedCard(onClick = { openingBinder = Triple(setName, setCards, capacity) }, shape = CardVaultShapes.card, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), border = BorderStroke(1.dp, if (openingBinder?.first == setName) MewRose else MewPlum.copy(alpha = .42f))) {
+                OutlinedCard(onClick = { openingBinder = setName }, shape = CardVaultShapes.card, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), border = BorderStroke(1.dp, if (openingBinder == setName) MewRose else MewPlum.copy(alpha = .42f))) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            DomiBinderCover(setName, coverFor(setName), openingBinder?.first == setName)
+                            DomiBinderCover(setName, coverFor(setName), openingBinder == setName)
                             Column(Modifier.padding(start = 12.dp).weight(1f)) {
                                 val pricedCards = setCards.filter { it.priceUpdatedAtEpochMillis != null }
                                 Text(setName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -850,7 +854,8 @@ private fun isDebuggableBuild(context: Context): Boolean =
     val visualCatalog = remember { PokemonVisualCatalog() }
     var setReferences by remember(setName) { mutableStateOf<List<CollectionCard>>(emptyList()) }
     var referencesLoading by remember(setName) { mutableStateOf(true) }
-    LaunchedEffect(setName) {
+    var refreshVersion by rememberSaveable(setName) { mutableIntStateOf(0) }
+    LaunchedEffect(setName, refreshVersion) {
         if (isWachsendesChaosSet(setName)) {
             referencesLoading = false
             return@LaunchedEffect
@@ -931,7 +936,7 @@ private fun isDebuggableBuild(context: Context): Boolean =
             referencesLoading = false
         }
     }
-    val arrangedCards = remember(setName, cards, cardCapacity, setReferences) { arrangeBinderCards(setName, cards, cardCapacity, setReferences) }
+    val arrangedCards = remember(setName, cards, cardCapacity, setReferences, refreshVersion) { arrangeBinderCards(setName, cards, cardCapacity, setReferences) }
     val binderPageCount = ((arrangedCards.size + 8) / 9).coerceAtLeast(1)
     val faces = remember(arrangedCards, binderPageCount) {
         buildList {
@@ -942,7 +947,9 @@ private fun isDebuggableBuild(context: Context): Boolean =
     }
     var page by rememberSaveable(setName) { mutableIntStateOf(0) }
     var selectedCard by remember { mutableStateOf<CollectionCard?>(null) }
-    var addingReference by remember { mutableStateOf<CollectionCard?>(null) }
+    var addingReferenceId by remember { mutableStateOf<String?>(null) }
+    var editingCard by remember { mutableStateOf<CollectionCard?>(null) }
+    var linkingCard by remember { mutableStateOf<CollectionCard?>(null) }
     var removalCandidate by remember { mutableStateOf<CollectionCard?>(null) }
     var removalStage by rememberSaveable { mutableIntStateOf(0) }
     val ownedBinderId = remember(cards) { cards.map { it.binderId }.filter { it.isNotBlank() }.distinct().singleOrNull() }
@@ -960,6 +967,7 @@ private fun isDebuggableBuild(context: Context): Boolean =
                 if (referencesLoading) Text("Deutsche Setvarianten werden geprüft …", color = MewIce, fontSize = 10.sp)
                 Text("Binderwert: ${if (pricedBinderCards == 0) "Kein Marktwert verfügbar" else euro(binderValue)} · $pricedBinderCards/$binderCards bepreist", color = MewIce, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
             }
+            TextButton(onClick = { refreshVersion++ }, enabled = !referencesLoading) { Text("↻", color = MewIce, fontSize = 18.sp) }
             if (coverUrl != null) AsyncImage(coverUrl, "Set-Umschlag", Modifier.size(58.dp, 34.dp)) else Text("DM", color = MewRose, fontWeight = FontWeight.Black)
         }
         if (ownedBinderId != null || onHideReferenceBinder != null) TextButton(onClick = { binderDeletionStage = 1 }, modifier = Modifier.align(Alignment.End)) {
@@ -1001,21 +1009,58 @@ private fun isDebuggableBuild(context: Context): Boolean =
             card = card,
             repository = repository,
             onDismiss = { selectedCard = null },
-            onEdit = null,
+            onEdit = card.takeIf { it.entryId > 0L }?.let { { selectedCard = null; editingCard = card } },
             // Catalog/reference slots use entryId 0 and are intentionally never removable.
             onDelete = if (card.entryId > 0L) { { removalCandidate = card; removalStage = 1 } } else null,
-            // Both empty reference slots and already owned prints support this
-            // route.  For an owned print it simply adds another copy, retaining
-            // its known Cardmarket product where one is already linked.
-            onAdd = { selectedCard = null; addingReference = card },
+            // A reference slot is only added after the collector explicitly
+            // confirms the one visible Cardmarket trend price in this preview.
+            onAdd = if (card.entryId == 0L) { { product ->
+                if (addingReferenceId != null) return@CardPreviewDialog
+                addingReferenceId = card.id
+                scope.launch {
+                    runCatching {
+                        repository.addManualCard(
+                            ManualCardInput(
+                                name = card.name,
+                                setName = card.set,
+                                collectorNumber = card.number,
+                                language = card.language,
+                                finish = card.finish,
+                                variant = card.variant,
+                                quantity = 1,
+                                condition = "Nicht geprüft",
+                                notes = "",
+                                acquisitionPriceEur = null,
+                                acquisitionDateEpochDay = null,
+                                externalProductId = product.productId,
+                                imageUrl = card.imageUrl,
+                                cardmarketExpansionId = product.expansionId,
+                            ),
+                        )
+                    }.onSuccess {
+                        selectedCard = null
+                    }
+                    addingReferenceId = null
+                }
+            } } else null,
+            addInProgress = addingReferenceId == card.id,
         )
     }
-    addingReference?.let { reference ->
-        BinderCardAddDialog(
-            reference = reference,
+    editingCard?.let { card ->
+        EditEntryDialog(
+            card = card,
+            onDismiss = { editingCard = null },
+            onDelete = { editingCard = null; removalCandidate = card; removalStage = 1 },
+            onLink = { editingCard = null; linkingCard = card },
+            onSave = { update -> scope.launch { repository.updateEntry(card.entryId, update) }; editingCard = null },
+        )
+    }
+    linkingCard?.let { card ->
+        CatalogLinkDialog(
+            card = card,
             repository = repository,
-            onDismiss = { addingReference = null },
-            onAdded = { addingReference = null },
+            onDismiss = { linkingCard = null },
+            onLinked = { productId -> scope.launch { repository.linkCatalogProduct(card.entryId, productId) }; linkingCard = null },
         )
     }
     if (removalCandidate != null && removalStage == 1) AlertDialog(
@@ -1831,12 +1876,13 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     onDismiss: () -> Unit,
     onEdit: (() -> Unit)?,
     onDelete: (() -> Unit)? = null,
-    onAdd: (() -> Unit)? = null,
+    onAdd: ((CatalogSearchResult) -> Unit)? = null,
+    addInProgress: Boolean = false,
 ) {
     val context = LocalContext.current
     val effect = remember(card.id, card.finish, card.variant) { CardEffectResolver.resolve(card) }
     val priceHistory by repository.priceHistory(card).collectAsState(initial = emptyList())
-    var referenceTrendPrices by remember(card.id, card.marketExpansionId) { mutableStateOf<List<Double>>(emptyList()) }
+    var referenceProducts by remember(card.id, card.marketExpansionId) { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
     LaunchedEffect(card.id, card.externalProductId, card.marketExpansionId, card.marketSearchName) {
         val query = card.marketSearchName ?: card.name
         val matches = runCatching { repository.searchCatalog(query, 100) }.getOrDefault(emptyList())
@@ -1844,158 +1890,45 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
         val cardMatches = linkedMatches ?: card.marketExpansionId?.let { expansion ->
             matches.filter { it.expansionId == expansion && isSameNamePriceCandidate(query, it) }
         }.orEmpty()
-        referenceTrendPrices = cardMatches.mapNotNull { it.trendPriceEur }.distinct().sorted()
+        referenceProducts = cardMatches
     }
+    val referenceTrendPrices = referenceProducts.mapNotNull { it.trendPriceEur }.distinct().sorted()
+    val preferredMarketProduct = defaultBinderCardmarketProduct(card, referenceProducts)
+        ?.takeIf { it.trendPriceEur != null }
     val storedTrendPrice = card.currentValueEur.takeIf { card.priceUpdatedAtEpochMillis != null && it > 0.0 }
     val priceDate = card.priceUpdatedAtEpochMillis?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, Locale.GERMANY).format(java.util.Date(it)) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(card.name) }, text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = 570.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val isReferenceAdd = onAdd != null
+    AlertDialog(onDismissRequest = { if (!addInProgress) onDismiss() }, title = { Text(card.name) }, text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = if (isReferenceAdd) 390.dp else 570.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { InteractiveFocusCard(card, Modifier.size(174.dp, 246.dp), interactive = true) }
-        item { Text("${card.set} · ${card.number}", fontWeight = FontWeight.Bold) }
-        when {
-            storedTrendPrice != null -> item { Text("Cardmarket-Trendpreis: ${euro(storedTrendPrice)}", color = MewIce, fontWeight = FontWeight.Bold) }
-            referenceTrendPrices.size == 1 -> item { Text("Cardmarket-Trendpreis: ${euro(referenceTrendPrices.first())}", color = MewIce, fontWeight = FontWeight.Bold) }
-            referenceTrendPrices.size >= 2 -> item {
+        if (isReferenceAdd) {
+            item {
                 Text(
-                    "Cardmarket-Trendpreise: ${euro(referenceTrendPrices.first())} – ${euro(referenceTrendPrices.last())}",
-                    color = MewIce,
+                    preferredMarketProduct?.trendPriceEur?.let { "Cardmarket-Trendpreis: ${euro(it)}" }
+                        ?: "Cardmarket-Trendpreis wird geladen …",
+                    color = if (preferredMarketProduct?.trendPriceEur != null) MewIce else VaultTextMuted,
                     fontWeight = FontWeight.Bold,
                 )
-                Text("Mehrere Drucke verfügbar – beim Hinzufügen wird der Cardmarket-Standardpreis automatisch übernommen.", color = VaultTextMuted, fontSize = 11.sp)
             }
+        } else {
+            item { Text("${card.set} · ${card.number}", fontWeight = FontWeight.Bold) }
+            when {
+                storedTrendPrice != null -> item { Text("Cardmarket-Trendpreis: ${euro(storedTrendPrice)}", color = MewIce, fontWeight = FontWeight.Bold) }
+                referenceTrendPrices.size == 1 -> item { Text("Cardmarket-Trendpreis: ${euro(referenceTrendPrices.first())}", color = MewIce, fontWeight = FontWeight.Bold) }
+                referenceTrendPrices.size >= 2 -> item { Text("Cardmarket-Trendpreise: ${euro(referenceTrendPrices.first())} – ${euro(referenceTrendPrices.last())}", color = MewIce, fontWeight = FontWeight.Bold) }
+            }
+            item { Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
+            item { Text("Karteneffekt automatisch: ${effect.profile.label}", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+            item { HorizontalDivider(color = VaultOutline) }
+            item { CardPriceHistorySection(card, priceHistory, storedTrendPrice ?: referenceTrendPrices.singleOrNull()) }
+            item { PriceSourcesSection(card, priceDate, context) }
         }
-        item { Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
-        item { Text("Karteneffekt automatisch: ${effect.profile.label}", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
-        item { HorizontalDivider(color = VaultOutline) }
-        item { CardPriceHistorySection(card, priceHistory, storedTrendPrice ?: referenceTrendPrices.singleOrNull()) }
-        item { PriceSourcesSection(card, priceDate, context) }
     } }, confirmButton = {
         Row {
-            if (onAdd != null) TextButton(onClick = onAdd) { Text("Zum Binder hinzufügen") }
+            if (onAdd != null) TextButton(enabled = preferredMarketProduct != null && !addInProgress, onClick = { onAdd(preferredMarketProduct!!) }) { Text("Zum Binder hinzufügen") }
             if (onDelete != null) TextButton(onClick = onDelete) { Text("Aus Binder entfernen", color = MaterialTheme.colorScheme.error) }
             if (onEdit != null) TextButton(onClick = onEdit) { Text(stringResource(R.string.card_preview_edit)) }
         }
-    }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
-}
-
-/** Adds a Binder reference with Cardmarket's available trend-price product by default. */
-@Composable private fun BinderCardAddDialog(
-    reference: CollectionCard,
-    repository: CollectionRepository,
-    onDismiss: () -> Unit,
-    onAdded: () -> Unit,
-) {
-    var candidates by remember(reference.id) { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
-    var loading by remember(reference.id) { mutableStateOf(true) }
-    var adding by remember(reference.id) { mutableStateOf(false) }
-    var autoAddStarted by remember(reference.id) { mutableStateOf(false) }
-    var message by remember(reference.id) { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    val catalogSync by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
-
-    LaunchedEffect(reference.id, catalogSync.lastSuccessAtEpochMillis) {
-        loading = true
-        val catalogMatches = runCatching { repository.searchCatalog(reference.name, 60) }
-            .getOrDefault(emptyList())
-            // Cardmarket's compact public catalogue can omit printed number and
-            // German set metadata. The set bridge and canonical card name still
-            // identify the intended current set product for a direct Binder add.
-            .filter { product -> isSameNamePriceCandidate(reference.marketSearchName ?: reference.name, product) }
-            .distinctBy { it.productId }
-        val sameExpansionMatches = reference.marketExpansionId?.let { expansion ->
-            catalogMatches.filter { product -> product.expansionId == expansion }
-        } ?: catalogMatches
-        val exactCatalogMatches = sameExpansionMatches.filter { product -> isExactBinderPriceMatch(reference, product) }
-        val manualCatalogMatches = sameExpansionMatches.filterNot { product -> isExactBinderPriceMatch(reference, product) }
-        // An already owned card with a saved product identity is stronger
-        // evidence than a fresh text search.  Reusing it for another copy is
-        // safe and keeps the existing exact Cardmarket linkage intact.
-        val knownLinkedProduct = reference.externalProductId?.let { productId ->
-            CatalogSearchResult(
-                productId = productId,
-                name = reference.name,
-                expansionId = reference.set,
-                trendPriceEur = reference.currentValueEur.takeIf { reference.priceUpdatedAtEpochMillis != null },
-                currency = "EUR",
-                visualSetName = reference.set,
-                collectorNumber = reference.number,
-                imageUrl = reference.imageUrl,
-                language = reference.language.label,
-                finish = reference.finish,
-                variant = reference.variant,
-            )
-        }
-        candidates = listOfNotNull(knownLinkedProduct).plus(exactCatalogMatches).plus(manualCatalogMatches).distinctBy { it.productId }
-        loading = false
-    }
-    fun addReference(product: CatalogSearchResult?) {
-        if (adding) return
-        adding = true
-        scope.launch {
-            val outcome = runCatching {
-                repository.addManualCard(
-                    ManualCardInput(
-                        name = reference.name,
-                        setName = reference.set,
-                        collectorNumber = reference.number,
-                        language = reference.language,
-                        finish = reference.finish,
-                        variant = reference.variant,
-                        quantity = 1,
-                        condition = "Nicht geprüft",
-                        notes = "",
-                        acquisitionPriceEur = null,
-                        acquisitionDateEpochDay = null,
-                        externalProductId = product?.productId,
-                        imageUrl = reference.imageUrl,
-                    ),
-                )
-            }
-            outcome.onSuccess { onAdded() }.onFailure {
-                adding = false
-                message = "Die Karte konnte gerade nicht hinzugefügt werden. Bitte erneut versuchen."
-            }
-        }
-    }
-    LaunchedEffect(loading, candidates) {
-        if (loading || autoAddStarted) return@LaunchedEffect
-        val product = defaultBinderCardmarketProduct(reference, candidates) ?: return@LaunchedEffect
-        autoAddStarted = true
-        addReference(product)
-    }
-    AlertDialog(
-        onDismissRequest = { if (!adding) onDismiss() },
-        title = { Text("Karte zum Binder hinzufügen") },
-        text = {
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                item {
-                    Text(reference.name, fontWeight = FontWeight.Bold)
-                    Text("${reference.set} · ${reference.number}", color = VaultTextMuted, fontSize = 12.sp)
-                    Text("Der aktuelle Cardmarket-Trendpreis wird beim Hinzufügen direkt übernommen. Details lassen sich anschließend an der gespeicherten Karte ändern.", color = VaultTextMuted, fontSize = 12.sp)
-                }
-                if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                if (!loading && candidates.isNotEmpty()) {
-                    val product = defaultBinderCardmarketProduct(reference, candidates)
-                    item {
-                        Text(
-                            product?.trendPriceEur?.let { "Cardmarket-Trendpreis wird übernommen: ${euro(it)}" }
-                                ?: "Cardmarket-Produkt wird übernommen",
-                            color = MewIce,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text("Karte wird zum Binder hinzugefügt …", color = VaultTextMuted, fontSize = 12.sp)
-                    }
-                }
-                if (!loading && candidates.isEmpty()) item {
-                    Text("Für diese genaue Karte ist derzeit kein eindeutig passendes Cardmarket-Produkt im lokalen Katalog vorhanden.", color = VaultTextMuted, fontSize = 12.sp)
-                    Text("Die Karte kann gespeichert werden; nach der exakten Cardmarket-Verknüpfung erscheint ihr Trendpreis automatisch. Es wird kein geschätzter oder fremder Preis eingesetzt.", color = VaultTextMuted, fontSize = 11.sp)
-                    OutlinedButton(onClick = { addReference(null) }, enabled = !adding, modifier = Modifier.fillMaxWidth()) { Text("Ohne Preis hinzufügen") }
-                }
-                message?.let { item { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) } }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !adding) { Text(stringResource(R.string.action_cancel)) } },
-    )
+    }, dismissButton = { TextButton(onClick = onDismiss, enabled = !addInProgress) { Text(stringResource(R.string.action_cancel)) } })
 }
 
 private fun isExactBinderPriceMatch(reference: CollectionCard, product: CatalogSearchResult): Boolean {
@@ -2402,8 +2335,9 @@ private fun cardmarketNameMatches(cardmarketName: String, sourceName: String): B
             .distinctBy { it.productId }
         val exactProducts = sameNameProducts.filter { product -> isExactManualPriceMatch(priceSearchName, set, number, product) }
         val manualProducts = sameNameProducts.filterNot { product -> isExactManualPriceMatch(priceSearchName, set, number, product) }
-        marketProducts = exactProducts + manualProducts
-        selectedMarketProductId = selectedMarketProductId?.takeIf { id -> exactProducts.any { it.productId == id } }
+        marketProducts = (exactProducts + manualProducts)
+            .sortedByDescending { product -> product.productId == initialCatalog?.productId }
+        selectedMarketProductId = selectedMarketProductId?.takeIf { id -> marketProducts.any { it.productId == id } }
             ?: exactProducts.firstOrNull { it.trendPriceEur != null }?.productId
             ?: exactProducts.firstOrNull()?.productId
         marketLoading = false
@@ -2445,7 +2379,7 @@ private fun cardmarketNameMatches(cardmarketName: String, sourceName: String): B
             item { FormField(quantity, { quantity = it.filter(Char::isDigit) }, R.string.field_quantity, KeyboardType.Number) }; item { FormField(condition, { condition = it }, R.string.field_condition) }
             item { FormField(price, { price = it }, R.string.field_acquisition_price, KeyboardType.Decimal) }; item { FormField(date, { date = it }, R.string.field_acquisition_date) }; item { FormField(notes, { notes = it }, R.string.field_notes, singleLine = false) }
         }
-    }, confirmButton = { TextButton(enabled = valid, onClick = { onSave(ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, selectedMarketProduct?.productId ?: initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }, initialCatalog?.imageUrl ?: selectedMarketProduct?.imageUrl, effectOverride = effectOverride)) }) { Text(stringResource(R.string.action_save)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
+    }, confirmButton = { TextButton(enabled = valid, onClick = { onSave(ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, selectedMarketProduct?.productId ?: initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }, initialCatalog?.imageUrl ?: selectedMarketProduct?.imageUrl, effectOverride = effectOverride, cardmarketExpansionId = selectedMarketProduct?.expansionId?.takeIf { selectedMarketProduct.hasMarketProduct } ?: initialCatalog?.expansionId?.takeIf { initialCatalog.hasMarketProduct })) }) { Text(stringResource(R.string.action_save)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
 }
 
 private fun isExactManualPriceMatch(name: String, set: String, number: String, product: CatalogSearchResult): Boolean =
@@ -3229,7 +3163,7 @@ private fun persistScanFeedback(context: Context, imageFile: File, marks: List<S
             FormField(condition, { condition = it }, R.string.field_condition)
         } },
         confirmButton = { TextButton(enabled = (quantity.toIntOrNull() ?: 0) > 0, onClick = {
-            onAdd(ManualCardInput(candidate.name, candidate.visualSetName ?: candidate.expansionId, candidate.collectorNumber.orEmpty(), language, finish, variant, quantity.toInt(), condition, "", null, null, candidate.productId.takeIf { candidate.hasMarketProduct }, candidate.imageUrl, candidate.rarity, effectOverride))
+            onAdd(ManualCardInput(candidate.name, candidate.visualSetName ?: candidate.expansionId, candidate.collectorNumber.orEmpty(), language, finish, variant, quantity.toInt(), condition, "", null, null, candidate.productId.takeIf { candidate.hasMarketProduct }, candidate.imageUrl, candidate.rarity, effectOverride, candidate.expansionId.takeIf { candidate.hasMarketProduct }))
         }) { Text("Zum Binder hinzufügen") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
