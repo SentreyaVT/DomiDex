@@ -9,7 +9,10 @@ import java.text.Normalizer
 import java.util.UUID
 
 internal object ScanQueuePolicy {
-    const val MAX_PARALLEL_WORKERS = 2
+    // OCR, perspective correction and artwork verification are intentionally serialized.
+    // CameraX keeps the preview independent and the queue remains responsive without doubling
+    // native bitmap/OpenCV pressure when two captures arrive close together.
+    const val MAX_PARALLEL_WORKERS = 1
     const val MAX_VISUAL_CANDIDATES = 4
 }
 

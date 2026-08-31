@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CardVault"
+rootProject.name = "DomiDex"
 include(":app")

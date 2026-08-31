@@ -22,8 +22,15 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
     } }
 
     override val portfolio: Flow<PortfolioSummary> = combine(dao.observeCollection(), dao.observeRawPriceHistory()) { rows, prices ->
+        // One indexed view replaces repeated full price-table scans for every card and every
+        // history timestamp. Room already emits immutable snapshots, so this cache is local to
+        // the current calculation and can never become stale.
+        val cardmarketPrices = prices.asSequence()
+            .filter { it.source == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }
+            .groupBy(RawPriceSnapshotEntity::cardId)
+            .mapValues { (_, values) -> values.sortedBy(RawPriceSnapshotEntity::effectiveAtEpochMillis) }
         val cards = rows.map { row ->
-            val cardPrices = prices.filter { it.cardId == row.priceCardId && it.source == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }
+            val cardPrices = cardmarketPrices[row.priceCardId].orEmpty()
             val first = cardPrices.asSequence().mapNotNull { it.trendValueFor(row.finish) }.firstOrNull()
             val latest = row.marketValueMinor
             val change = if (first != null && latest != null && first != 0L) (latest - first) * 100.0 / first else 0.0
@@ -33,7 +40,7 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
                 row.acquisitionPriceMinor?.div(100.0), row.acquisitionDateEpochDay, accentFor(row.name), imageUrl = row.imageUrl)
                 .copy(binderId = row.binderId, externalProductId = row.externalProductId, rarity = row.rarity, effectOverride = row.effectOverride)
         }
-        PortfolioSummary(cards, buildHistory(rows, prices))
+        PortfolioSummary(cards, buildHistory(rows, prices, cardmarketPrices))
     }
 
     override suspend fun seedIfNeeded() = database.withTransaction {
@@ -176,11 +183,38 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
         }
     }
 
-    private fun buildHistory(rows: List<CollectionProjection>, prices: List<RawPriceSnapshotEntity>): List<PortfolioPoint> =
+    private fun buildHistory(
+        rows: List<CollectionProjection>,
+        prices: List<RawPriceSnapshotEntity>,
+        cardmarketPrices: Map<String, List<RawPriceSnapshotEntity>>,
+    ): List<PortfolioPoint> =
         prices.map { it.effectiveAtEpochMillis }.distinct().sorted().map { timestamp ->
-            val total = rows.sumOf { row -> prices.filter { it.cardId == row.priceCardId && it.source == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE && it.effectiveAtEpochMillis <= timestamp }.maxByOrNull { it.effectiveAtEpochMillis }?.trendValueFor(row.finish)?.times(row.quantity) ?: 0L }
+            val total = rows.sumOf { row ->
+                latestPriceAtOrBefore(cardmarketPrices[row.priceCardId].orEmpty(), timestamp)
+                    ?.trendValueFor(row.finish)
+                    ?.times(row.quantity)
+                    ?: 0L
+            }
             PortfolioPoint(java.time.Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("MMM")), total / 100.0)
         }
+
+    /** Binary search over the already sorted per-product history. */
+    private fun latestPriceAtOrBefore(prices: List<RawPriceSnapshotEntity>, timestamp: Long): RawPriceSnapshotEntity? {
+        var low = 0
+        var high = prices.lastIndex
+        var match: RawPriceSnapshotEntity? = null
+        while (low <= high) {
+            val middle = (low + high).ushr(1)
+            val candidate = prices[middle]
+            if (candidate.effectiveAtEpochMillis <= timestamp) {
+                match = candidate
+                low = middle + 1
+            } else {
+                high = middle - 1
+            }
+        }
+        return match
+    }
 
     /** The whole portfolio follows the same exact Normal/Holo/Reverse trend as each card row. */
     private fun RawPriceSnapshotEntity.trendValueFor(finish: String): Long? =

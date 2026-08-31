@@ -315,7 +315,7 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
         CardScript.LATIN to TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS),
     )
     // Module 1 uses OpenCV and must never run in the camera callback or Compose main dispatcher.
-    // Two slots match the scanner queue's bounded worker count, keeping memory and native work
+    // One slot matches the scanner queue's bounded worker count, keeping memory and native work
     // predictable even when a collector captures a series quickly.
     private val preprocessingExecutor = Executors.newFixedThreadPool(ScanQueuePolicy.MAX_PARALLEL_WORKERS)
 

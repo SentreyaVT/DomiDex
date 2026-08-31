@@ -15,8 +15,8 @@ android {
         applicationId = "com.dominik.cardvault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 15
-        versionName = "1.0.6-rc3"
+        versionCode = 16
+        versionName = "1.0-beta"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

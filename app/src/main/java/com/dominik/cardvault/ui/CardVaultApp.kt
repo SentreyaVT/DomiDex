@@ -91,6 +91,7 @@ import com.dominik.cardvault.auth.GoogleLoginResult
 import com.dominik.cardvault.auth.GitHubLoginResult
 import com.dominik.cardvault.model.*
 import com.dominik.cardvault.data.catalog.PokemonSet
+import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
 import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
 import com.dominik.cardvault.data.catalog.PokemonSetRegistry
@@ -972,7 +973,7 @@ private fun isDebuggableBuild(context: Context): Boolean =
             }
             repository.cacheGermanMasterSetCards(
                 GermanMasterSetDefinition(set.id, set.name, set.logoUrl),
-                detailedCards.flatMap { reference -> reference.printVariants.map { printing ->
+                detailedCards.flatMap { reference -> reference.binderPrintVariants().map { printing ->
                     GermanMasterSetCardDefinition(
                         if (printing.id == "normal") reference.id else "${reference.id}-${printing.id}",
                         reference.name, reference.number, reference.largeImageUrl, printing.finish, printing.variant,
@@ -1291,10 +1292,33 @@ private fun collectorNumberOf(value: String): Int? = Regex("\\d{1,4}").find(valu
 private fun isWachsendesChaosSet(setName: String): Boolean = setName.equals("Wachsendes Chaos", ignoreCase = true) ||
     setName.equals("Chaos Rising", ignoreCase = true)
 
-/** Every source-confirmed printing gets its own master-set slot. */
+/**
+ * Binder invariant: a numbered main-set card may occupy at most two physical print slots.
+ * EX/evolution-rule cards, special rarities and cards above the printed main set stay singular.
+ */
+internal fun PokemonVisualCard.binderPrintVariants(): List<PokemonPrintVariant> {
+    val distinct = printVariants.distinctBy { printing ->
+        "${normalizeBinderMetadata(printing.finish)}|${normalizeBinderMetadata(printing.variant)}"
+    }
+    if (distinct.isEmpty()) return listOf(PokemonPrintVariant("normal", "Normal", "Standard"))
+    val number = collectorNumberOf(this.number)
+    val inMainSet = number != null && set.printedTotal > 0 && number <= set.printedTotal
+    val normalizedName = name.trim().lowercase(Locale.ROOT)
+    val normalizedRarity = rarity.orEmpty().lowercase(Locale.ROOT)
+    val isRuleBoxPokemon = Regex("(?:^|\\s|-)(ex|gx|v|vmax|vstar)$", RegexOption.IGNORE_CASE).containsMatchIn(normalizedName)
+    val isSpecialRarity = listOf("ace", "special", "illustration", "ultra", "hyper", "secret", "rainbow", "gold")
+        .any(normalizedRarity::contains)
+    if (!inMainSet || isRuleBoxPokemon || isSpecialRarity) return distinct.take(1)
+
+    val normal = distinct.firstOrNull { masterFinishOrder(it.finish, it.variant) == 0 }
+    val reverse = distinct.firstOrNull { masterFinishOrder(it.finish, it.variant) == 2 }
+    return if (normal != null && reverse != null) listOf(normal, reverse) else distinct.take(2)
+}
+
+/** Every allowed source-confirmed printing gets its own master-set slot. */
 private fun PokemonVisualCard.asBinderReferences(
     marketExpansionId: String? = set.cardmarketExpansionId,
-): List<CollectionCard> = printVariants.map { printing ->
+): List<CollectionCard> = binderPrintVariants().map { printing ->
     CollectionCard(
         entryId = 0,
         id = "$id-${printing.id}",
@@ -1403,9 +1427,11 @@ private fun isSameMasterPrinting(reference: CollectionCard, owned: CollectionCar
     return referenceFinish in 0..2 || normalizeBinderMetadata(reference.variant) == normalizeBinderMetadata(owned.variant)
 }
 
-private fun masterFinishOrder(card: CollectionCard): Int = when {
-    card.finish.contains("reverse", true) || card.variant.contains("reverse", true) || card.variant.contains("parallel", true) -> 2
-    card.finish.contains("holo", true) -> 1
+private fun masterFinishOrder(card: CollectionCard): Int = masterFinishOrder(card.finish, card.variant)
+
+private fun masterFinishOrder(finish: String, variant: String): Int = when {
+    finish.contains("reverse", true) || variant.contains("reverse", true) || variant.contains("parallel", true) -> 2
+    finish.contains("holo", true) -> 1
     else -> 0
 }
 
@@ -2888,6 +2914,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     terminal(ScanPipelineStage.FAILED, "Texterkennung fehlgeschlagen: ${error?.javaClass?.simpleName ?: "Unbekannt"}")
                     return@withPermit
                 }
+                try {
                 ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
                     geometryScore = currentAnalysis.imageQuality.geometryScore,
                     perspectiveScore = currentAnalysis.imageQuality.perspective,
@@ -2930,7 +2957,14 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     "multiFrame" to currentAnalysis.usedMultiFrameEvidence,
                 )
                 stage(ScanPipelineStage.OCR)
-                updateQueuedScan(scan.id) { it.copy(analysis = currentAnalysis, message = ScanPipelineStage.OCR.label) }
+                // Queue/UI state retains evidence, never the full normalized bitmap. The worker
+                // owns that native memory only for the duration of this recognition job.
+                updateQueuedScan(scan.id) {
+                    it.copy(
+                        analysis = currentAnalysis.copy(normalizedCard = null, visualDescriptors = emptyList()),
+                        message = ScanPipelineStage.OCR.label,
+                    )
+                }
                 if (!currentAnalysis.imageQuality.cardDetected || currentAnalysis.imageQuality.reason.isNotBlank()) {
                     terminal(ScanPipelineStage.MANUAL_REVIEW, "Kartenfläche nicht sicher erkannt")
                     return@withPermit
@@ -3032,6 +3066,11 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     stageTimings = durations.entries.joinToString(" · ") { (pipelineStage, elapsed) -> "${pipelineStage.name.take(4)} ${elapsed}ms" },
                     scanId = scan.id,
                 )
+                } finally {
+                    currentAnalysis.normalizedCard?.let { bitmap ->
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                    }
+                }
             }
         }
     }

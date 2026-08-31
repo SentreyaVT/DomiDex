@@ -27,9 +27,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -49,8 +46,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.core.content.ContextCompat
 import com.dominik.cardvault.R
 import com.dominik.cardvault.ui.theme.*
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -243,7 +238,14 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         val analyzer = FrameQualityAnalyzer { quality = it }
         controller.setImageAnalysisAnalyzer(analysisExecutor, analyzer)
         controller.bindToLifecycle(lifecycleOwner)
-        onDispose { controller.clearImageAnalysisAnalyzer(); controller.unbind(); analysisExecutor.shutdown() }
+        onDispose {
+            controller.clearImageAnalysisAnalyzer()
+            controller.unbind()
+            // Release the reusable native OpenCV buffers only after any in-flight
+            // analyzer call has completed on the same single-thread executor.
+            runCatching { analysisExecutor.execute(analyzer::close) }
+            analysisExecutor.shutdown()
+        }
     }
     DisposableEffect(confirmationSound, cameraManager, torchCameraId) { onDispose { confirmationSound.release(); captureTimeoutHandler.removeCallbacksAndMessages(null); torchCameraId?.let { runCatching { cameraManager.setTorchMode(it, false) } } } }
     fun setTorch(enabled: Boolean, strength: Int = torchStrength) {
@@ -345,31 +347,9 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     }
     val captureConfirmed = captureMessage == R.string.capture_saved
     val outlineTarget = if (captureConfirmed && confirmedOutlineCorners.size == 4) confirmedOutlineCorners else quality.corners
-    val outlineCoordinates = remember { List(8) { Animatable(0f) } }
-    var outlineInitialized by remember { mutableStateOf(false) }
-    LaunchedEffect(outlineTarget) {
-        if (outlineTarget.size != 4) {
-            outlineInitialized = false
-            return@LaunchedEffect
-        }
-        val targets = outlineTarget.flatMap { (x, y) -> listOf(x, y) }
-        if (!outlineInitialized) {
-            outlineCoordinates.zip(targets).forEach { (coordinate, target) -> coordinate.snapTo(target) }
-            outlineInitialized = true
-        } else {
-            coroutineScope {
-                outlineCoordinates.zip(targets).forEach { (coordinate, target) ->
-                    launch { coordinate.animateTo(target, tween(durationMillis = 280, easing = LinearOutSlowInEasing)) }
-                }
-            }
-        }
-    }
-    val animatedOutline = if (outlineInitialized) listOf(
-        outlineCoordinates[0].value to outlineCoordinates[1].value,
-        outlineCoordinates[2].value to outlineCoordinates[3].value,
-        outlineCoordinates[4].value to outlineCoordinates[5].value,
-        outlineCoordinates[6].value to outlineCoordinates[7].value,
-    ) else emptyList()
+    // Detection already applies bounded temporal smoothing. A second 280 ms animation used to
+    // restart eight coroutines for every proposal and made the guide visibly trail the card.
+    val animatedOutline = outlineTarget
     Box(modifier.fillMaxSize().background(Color.Black)) {
         Box(Modifier.matchParentSize()) {
             // Preserve the webcam's complete 4:3 scene. FIT_CENTER intentionally letterboxes
@@ -577,9 +557,9 @@ internal class AutoCaptureGate(
  * Detection/OCR always continue to use the unsmoothed source geometry.
  */
 internal class OverlayCornerStabilizer(
-    private val smoothing: Float = .12f,
-    private val deadZone: Float = .007f,
-    private val maxStep: Float = .010f,
+    private val smoothing: Float = .30f,
+    private val deadZone: Float = .004f,
+    private val maxStep: Float = .028f,
     private val missingFramesToClear: Int = 5,
 ) {
     private var displayed = emptyList<Pair<Float, Float>>()
@@ -639,9 +619,11 @@ private val QualityGuidance.stringResource: Int get() = when (this) {
     QualityGuidance.READY -> R.string.capture_ready
 }
 
-private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit) : ImageAnalysis.Analyzer {
+private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit) : ImageAnalysis.Analyzer, AutoCloseable {
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var previous: IntArray? = null
+    private val samples = IntArray(16 * 20)
+    private val previous = IntArray(16 * 20)
+    private var hasPrevious = false
     private var lastPublished = 0L
     private var stableReadyFrames = 0
     private var trackedFrame: CardFrame? = null
@@ -653,9 +635,9 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
 
     override fun analyze(image: ImageProxy) {
         try {
-            val now = System.currentTimeMillis(); if (now - lastPublished < 180) return
+            val now = SystemClock.elapsedRealtime(); if (now - lastPublished < 180) return
             val plane = image.planes.first(); val buffer = plane.buffer; val width = image.width; val height = image.height
-            val samples = IntArray(16 * 20); var index = 0; var bright = 0; var dark = 0; var total = 0.0; var detail = 0.0; var centerDetail = 0.0; var centerPairs = 0
+            var index = 0; var bright = 0; var dark = 0; var total = 0.0; var detail = 0.0; var centerDetail = 0.0; var centerPairs = 0
             for (gy in 0 until 20) for (gx in 0 until 16) {
                 val x = ((gx + .5) * width / 16).toInt().coerceIn(0, width - 1); val y = ((gy + .5) * height / 20).toInt().coerceIn(0, height - 1)
                 val offset = y * plane.rowStride + x * plane.pixelStride; val value = buffer.get(offset).toInt() and 0xFF
@@ -668,8 +650,8 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                 index++
             }
             val mean = total / samples.size; val clippedBright = bright.toFloat() / samples.size; val clippedDark = dark.toFloat() / samples.size
-            val motion = previous?.let { old -> samples.indices.sumOf { abs(samples[it] - old[it]) }.toFloat() / samples.size } ?: 100f
-            previous = samples; lastPublished = now
+            val motion = if (hasPrevious) samples.indices.sumOf { abs(samples[it] - previous[it]) }.toFloat() / samples.size else 100f
+            samples.copyInto(previous); hasPrevious = true; lastPublished = now
             val exposureScore = (1f - (abs(mean - 128.0) / 128.0).toFloat()).coerceIn(0f, 1f)
             val sharpnessScore = (detail / (samples.size - 20) / 28.0).toFloat().coerceIn(0f, 1f)
             val centeredCardEvidence = (centerDetail / centerPairs.coerceAtLeast(1) / 24.0).toFloat().coerceIn(0f, 1f)
@@ -722,6 +704,11 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                 onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, displayedCorners, clippedBright, frameQualityScore, hasCardEvidence, cardFingerprint))
             }
         } finally { image.close() }
+    }
+
+    override fun close() {
+        mainHandler.removeCallbacksAndMessages(null)
+        detector.close()
     }
 
     private fun sampleCardFingerprint(
@@ -796,27 +783,51 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
 
 internal data class CardFrame(val found: Boolean, val coverage: Float, val perspective: Float, val corners: List<Pair<Float, Float>> = emptyList(), val geometryScore: Float = 0f, val usedFallbackGeometry: Boolean = false)
 
-internal class CardFrameDetector {
+internal class CardFrameDetector(private val maxAnalysisEdge: Int = 720) : AutoCloseable {
     private val available = runCatching { OpenCVLoader.initLocal() }.getOrDefault(false)
+    private var lumaBytes = ByteArray(0)
+    private val gray = Mat()
+    private val normalized = Mat()
+    private val rawBlurred = Mat()
+    private val blurred = Mat()
+    private val edges = Mat()
+    private val contrastEdges = Mat()
+    private val adaptiveEdges = Mat()
+    private val luminanceEdges = Mat()
+    private val hierarchy = Mat()
+    private val kernelDelegate = lazy { Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0)) }
+    private val kernel by kernelDelegate
+    private val claheDelegate = lazy { Imgproc.createCLAHE(2.0, Size(8.0, 8.0)) }
+    private val clahe by claheDelegate
 
-    fun detect(buffer: java.nio.ByteBuffer, width: Int, height: Int, rowStride: Int, pixelStride: Int): CardFrame {
+    fun detect(buffer: java.nio.ByteBuffer, sourceWidth: Int, sourceHeight: Int, rowStride: Int, pixelStride: Int): CardFrame {
         if (!available) return CardFrame(false, 0f, 0f)
-        val bytes = ByteArray(width * height); var target = 0
-        for (y in 0 until height) for (x in 0 until width) bytes[target++] = buffer.get(y * rowStride + x * pixelStride)
-        val gray = Mat(height, width, CvType.CV_8UC1); val normalized = Mat(); val rawBlurred = Mat(); val blurred = Mat(); val edges = Mat(); val contrastEdges = Mat(); val adaptiveEdges = Mat(); val luminanceEdges = Mat(); val hierarchy = Mat()
+        val scale = min(1f, maxAnalysisEdge.toFloat() / maxOf(sourceWidth, sourceHeight).coerceAtLeast(1))
+        val width = (sourceWidth * scale).toInt().coerceAtLeast(1)
+        val height = (sourceHeight * scale).toInt().coerceAtLeast(1)
+        val requiredBytes = width * height
+        if (lumaBytes.size != requiredBytes) lumaBytes = ByteArray(requiredBytes)
+        var target = 0
+        for (y in 0 until height) {
+            val sourceY = (y * sourceHeight / height).coerceAtMost(sourceHeight - 1)
+            for (x in 0 until width) {
+                val sourceX = (x * sourceWidth / width).coerceAtMost(sourceWidth - 1)
+                lumaBytes[target++] = buffer.get(sourceY * rowStride + sourceX * pixelStride)
+            }
+        }
         val contours = ArrayList<MatOfPoint>()
         return try {
-            gray.put(0, 0, bytes)
+            gray.create(height, width, CvType.CV_8UC1)
+            gray.put(0, 0, lumaBytes)
             // Local contrast normalization keeps edges usable in uneven room lighting. It only
             // affects frame finding; the original camera image is never altered or saved.
-            val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0)); clahe.apply(gray, normalized); clahe.collectGarbage()
+            clahe.apply(gray, normalized)
             Imgproc.GaussianBlur(gray, rawBlurred, Size(5.0, 5.0), 0.0)
             Imgproc.GaussianBlur(normalized, blurred, Size(5.0, 5.0), 0.0)
             // Webcam feeds tend to have softer, lower-contrast card edges than phone cameras.
             // Combine a conventional edge pass with an adaptive local-contrast pass so a card
             // against a similarly bright desk can still propose its outer contour.
             Imgproc.Canny(rawBlurred, edges, 28.0, 98.0)
-            val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
             Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel)
             Imgproc.dilate(edges, edges, kernel)
             val imageArea = width.toDouble() * height; var best: CardFrame? = null; var bestScore = 0f
@@ -862,9 +873,10 @@ internal class CardFrameDetector {
                 inspectContours(adaptiveEdges, true)
                 inspectContours(luminanceEdges, true)
             }
-            kernel.release()
             best ?: CardFrame(false, 0f, 0f)
-        } finally { contours.forEach(Mat::release); gray.release(); normalized.release(); rawBlurred.release(); blurred.release(); edges.release(); contrastEdges.release(); adaptiveEdges.release(); luminanceEdges.release(); hierarchy.release() }
+        } finally {
+            contours.forEach(Mat::release)
+        }
     }
 
     private fun liveRightAngleScore(points: List<Point>): Float = points.indices.map { index ->
@@ -881,5 +893,20 @@ internal class CardFrameDetector {
         // The live analyzer rotates CameraX's landscape analysis coordinates for its portrait preview.
         // A gallery/captured bitmap is displayed unrotated, so map them back before editing.
         return liveCoordinates.copy(corners = liveCoordinates.corners.map { it.second.coerceIn(0f, 1f) to (1f - it.first).coerceIn(0f, 1f) })
+    }
+
+    override fun close() {
+        gray.release()
+        normalized.release()
+        rawBlurred.release()
+        blurred.release()
+        edges.release()
+        contrastEdges.release()
+        adaptiveEdges.release()
+        luminanceEdges.release()
+        hierarchy.release()
+        if (kernelDelegate.isInitialized()) kernel.release()
+        if (claheDelegate.isInitialized()) clahe.collectGarbage()
+        lumaBytes = ByteArray(0)
     }
 }
