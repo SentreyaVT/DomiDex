@@ -8,6 +8,11 @@ import java.io.File
 import java.text.Normalizer
 import java.util.UUID
 
+internal object ScanQueuePolicy {
+    const val MAX_PARALLEL_WORKERS = 2
+    const val MAX_VISUAL_CANDIDATES = 4
+}
+
 /**
  * One immutable, locally scoped work item for the rapid scanner.  The image stays in the app
  * cache and every later result is carried with this id, so callbacks from different cards cannot
@@ -23,6 +28,8 @@ internal data class QueuedCardScan(
     val candidates: List<ScanCandidate> = emptyList(),
     val artwork: Map<Long, ArtworkVerification> = emptyMap(),
     val decision: ScannerDecisionResult? = null,
+    val stageDurationsMillis: Map<ScanPipelineStage, Long> = emptyMap(),
+    val totalProcessingMillis: Long? = null,
     val message: String = ScanPipelineStage.CAPTURED.label,
 )
 
@@ -43,7 +50,11 @@ internal enum class ScanPipelineStage(val label: String) {
     SAVED("Zum Binder hinzugefügt"),
 }
 
-internal data class ScanCandidate(val card: CatalogSearchResult, val score: Int)
+internal data class ScanCandidate(
+    val card: CatalogSearchResult,
+    val score: Int,
+    val evidence: CandidateSignalScores? = null,
+)
 
 internal data class ScanCandidateResolution(
     val candidates: List<ScanCandidate>,

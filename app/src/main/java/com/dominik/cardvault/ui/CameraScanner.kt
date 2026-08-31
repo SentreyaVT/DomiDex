@@ -82,6 +82,14 @@ internal data class ScannerDebugSnapshot(
     val decision: String = "",
     val artworkConfidence: Float = 0f,
     val artworkMatch: String = "",
+    val visualScore: Int = 0,
+    val numberScore: Int = 0,
+    val setScore: Int = 0,
+    val nameScore: Int = 0,
+    val languageScore: Int = 0,
+    val processingMillis: Long = 0L,
+    val stageTimings: String = "",
+    val scanId: String = "",
 )
 /** Volatile diagnostic data only; no card, image, or account data is retained here. */
 internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugSnapshot()) }
@@ -374,7 +382,14 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                 else -> AutoScanState.CARD_DETECTED
             }
             mainHandler.post {
-                ScannerDebugState.snapshot = ScannerDebugSnapshot(scanState, sharpnessScore, stabilityScore, contourStability, reason = guidance.name)
+                ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
+                    state = scanState,
+                    frameSharpness = sharpnessScore,
+                    frameStability = stabilityScore,
+                    contourStability = contourStability,
+                    frameConfidence = frame.coverage.coerceIn(0f, 1f),
+                    reason = if (ScannerDebugState.snapshot.scanId.isBlank()) guidance.name else ScannerDebugState.snapshot.reason,
+                )
                 onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, frame.corners))
             }
         } finally { image.close() }

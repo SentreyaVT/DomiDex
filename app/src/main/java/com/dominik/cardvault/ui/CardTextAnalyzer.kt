@@ -195,7 +195,7 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
     // Module 1 uses OpenCV and must never run in the camera callback or Compose main dispatcher.
     // Two slots match the scanner queue's bounded worker count, keeping memory and native work
     // predictable even when a collector captures a series quickly.
-    private val preprocessingExecutor = Executors.newFixedThreadPool(2)
+    private val preprocessingExecutor = Executors.newFixedThreadPool(ScanQueuePolicy.MAX_PARALLEL_WORKERS)
 
     fun analyze(file: File, onComplete: (Result<CardTextAnalysis>) -> Unit) {
         preprocessingExecutor.execute { analyzeNormalized(file, onComplete) }

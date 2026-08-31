@@ -16,4 +16,13 @@ class AutoCaptureGateTest {
         assertFalse(gate.onFrame(QualityLevel.GREEN, QualityGuidance.READY))
         assertTrue(gate.onFrame(QualityLevel.GREEN, QualityGuidance.READY))
     }
+
+    @Test fun briefMissingFrameDoesNotRearmSamePresentation() {
+        val gate = AutoCaptureGate(missingFramesToRearm = 3, readyFramesToCapture = 2)
+        assertFalse(gate.onFrame(QualityLevel.GREEN, QualityGuidance.READY))
+        assertTrue(gate.onFrame(QualityLevel.GREEN, QualityGuidance.READY))
+        assertFalse(gate.onFrame(QualityLevel.YELLOW, QualityGuidance.FIND_CARD))
+        assertFalse(gate.onFrame(QualityLevel.GREEN, QualityGuidance.READY))
+        assertFalse(gate.onFrame(QualityLevel.GREEN, QualityGuidance.READY))
+    }
 }
