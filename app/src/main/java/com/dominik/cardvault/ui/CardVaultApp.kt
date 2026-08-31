@@ -2007,23 +2007,29 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     addInProgress: Boolean = false,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val effect = remember(card.id, card.finish, card.variant) { CardEffectResolver.resolve(card) }
     val priceHistory by repository.priceHistory(card).collectAsState(initial = emptyList())
     var referenceProducts by remember(card.id, card.marketExpansionId) { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
+    var selectedMarketProductId by rememberSaveable(card.entryId) { mutableStateOf(card.externalProductId) }
+    var priceChoicesExpanded by rememberSaveable(card.entryId) { mutableStateOf(false) }
     LaunchedEffect(card.id, card.externalProductId, card.marketExpansionId, card.marketSearchName) {
         val query = card.marketSearchName ?: card.name
         val matches = runCatching { repository.searchCatalog(query, 100) }.getOrDefault(emptyList())
-        val linkedMatches = card.externalProductId?.let { productId -> matches.filter { it.productId == productId } }
-        val cardMatches = linkedMatches ?: card.marketExpansionId?.let { expansion ->
+        val linkedProduct = card.externalProductId?.let { productId -> matches.firstOrNull { it.productId == productId } }
+        val verifiedExpansion = card.marketExpansionId ?: linkedProduct?.expansionId
+        val cardMatches = verifiedExpansion?.let { expansion ->
             matches.filter { it.expansionId == expansion && isSameNamePriceCandidate(query, it) }
-        }.orEmpty()
+        } ?: linkedProduct?.let(::listOf).orEmpty()
         referenceProducts = cardMatches
     }
-    val referenceTrendPrices = referenceProducts.mapNotNull { it.trendPriceEur }.distinct().sorted()
+    val marketPriceChoices = binderCardmarketPriceChoices(card, referenceProducts)
     val preferredMarketProduct = defaultBinderCardmarketProduct(card, referenceProducts)
         ?.takeIf { it.trendPriceEur != null }
+    val selectedMarketProduct = marketPriceChoices.firstOrNull { it.productId == selectedMarketProductId }
+        ?: preferredMarketProduct
     val storedTrendPrice = card.currentValueEur.takeIf { card.priceUpdatedAtEpochMillis != null && it > 0.0 }
-    val displayedTrendPrice = storedTrendPrice ?: preferredMarketProduct?.trendPriceEur ?: referenceTrendPrices.firstOrNull()
+    val displayedTrendPrice = selectedMarketProduct?.trendPriceEur ?: storedTrendPrice
     val priceDate = card.priceUpdatedAtEpochMillis?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, Locale.GERMANY).format(java.util.Date(it)) }
     val isReferenceAdd = onAdd != null
     AlertDialog(
@@ -2050,6 +2056,57 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                 Text("Nach dem Hinzufügen kannst du Zustand, Menge und weitere Angaben bearbeiten.", color = VaultTextMuted, fontSize = 11.sp, textAlign = TextAlign.Center)
             }
         } else {
+            if (card.entryId > 0L && marketPriceChoices.isNotEmpty()) item {
+                DomiGlassCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().clickable { priceChoicesExpanded = !priceChoicesExpanded },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        ) {
+                            DomiLineIcon(DomiIconKind.MARKET, MewIce, Modifier.size(18.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Cardmarket-Preis auswählen", color = VaultText, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("Standardmäßig wird der Trendpreis verwendet.", color = VaultTextMuted, fontSize = 10.sp)
+                            }
+                            Text(if (priceChoicesExpanded) "▲" else "▼", color = VaultTextMuted, fontSize = 11.sp)
+                        }
+                        if (priceChoicesExpanded) {
+                            HorizontalDivider(color = VaultOutlineSoft)
+                            LazyColumn(
+                                Modifier.fillMaxWidth().heightIn(max = 190.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                items(marketPriceChoices, key = { it.productId }) { product ->
+                                    val selected = product.productId == selectedMarketProduct?.productId
+                                    Surface(
+                                        onClick = {
+                                            selectedMarketProductId = product.productId
+                                            scope.launch { repository.linkCatalogProduct(card.entryId, product.productId) }
+                                        },
+                                        color = if (selected) MewPlumDeep.copy(alpha = .72f) else Color.Transparent,
+                                        shape = CardVaultShapes.cardCompact,
+                                        border = BorderStroke(1.dp, if (selected) MewRoseSoft else VaultOutlineSoft),
+                                    ) {
+                                        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            RadioButton(
+                                                selected = selected,
+                                                onClick = null,
+                                                colors = RadioButtonDefaults.colors(selectedColor = MewRose, unselectedColor = VaultTextMuted),
+                                            )
+                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                Text(product.name, color = VaultText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                                Text(product.visualSetName ?: "Cardmarket-Erweiterung ${product.expansionId}", color = VaultTextMuted, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            }
+                                            Text(euro(product.trendPriceEur!!), color = MewIce, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             item { Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
             item { Text("Visueller Effekt: ${effect.profile.label}", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
             item { HorizontalDivider(color = VaultOutline) }
@@ -2088,6 +2145,26 @@ private fun defaultBinderCardmarketProduct(
             .thenBy { it.productId },
     )
     .firstOrNull()
+
+/**
+ * An owned Binder card may be relinked only to source-backed, priced Cardmarket
+ * products that already passed the verified set/name filter. Trend remains the
+ * default; this list merely lets the collector choose another real printing.
+ */
+internal fun binderCardmarketPriceChoices(
+    reference: CollectionCard,
+    candidates: List<CatalogSearchResult>,
+): List<CatalogSearchResult> = candidates
+    .asSequence()
+    .filter { it.hasMarketProduct && it.trendPriceEur != null }
+    .distinctBy { it.productId }
+    .sortedWith(
+        compareByDescending<CatalogSearchResult> { it.productId == reference.externalProductId }
+            .thenByDescending { isExactBinderPriceMatch(reference, it) }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+            .thenBy { it.productId },
+    )
+    .toList()
 
 private fun isSameNamePriceCandidate(name: String, product: CatalogSearchResult): Boolean =
     // Cardmarket frequently appends a printing/variant description in brackets.

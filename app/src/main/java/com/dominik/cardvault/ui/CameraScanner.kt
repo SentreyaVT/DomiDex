@@ -33,9 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -216,6 +214,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     var quality by remember { mutableStateOf(FrameQuality(QualityLevel.RED, QualityGuidance.HOLD_STILL, 0f, 0f, 0f, 0f, 0f)) }
     var captureMessage by remember { mutableStateOf<Int?>(null) }
+    var confirmedOutlineCorners by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
     var autoCaptureEnabled by rememberSaveable { mutableStateOf(true) }
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
     var captureInProgress by remember { mutableStateOf(false) }
@@ -258,7 +257,8 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     }
     fun capture(auto: Boolean) {
         if (captureInProgress) return
-        captureInProgress = true; captureMessage = null; autoCaptureGate.disarm(quality.fingerprint)
+        val captureOutlineCorners = quality.corners
+        captureInProgress = true; captureMessage = null; confirmedOutlineCorners = emptyList(); autoCaptureGate.disarm(quality.fingerprint)
         onCaptureStarted(auto)
         val captureId = System.nanoTime()
         val captureStartedAt = SystemClock.elapsedRealtime()
@@ -275,11 +275,13 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
             latestCapture = primary; captureInProgress = false
             LatestCardCapture.path = primary.absolutePath
             captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
+            confirmedOutlineCorners = captureOutlineCorners.takeIf { it.size == 4 } ?: quality.corners
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             confirmationSound.play()
             captureTimeoutHandler.postDelayed({
                 if (activeCaptureId == 0L && latestCapture == primary && captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) {
                     captureMessage = null
+                    confirmedOutlineCorners = emptyList()
                 }
             }, 1_050L)
             ScannerDiagnosticLog.event(
@@ -303,7 +305,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         }
         fun failCapture() {
             if (activeCaptureId != captureId) return
-            activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed
+            activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; confirmedOutlineCorners = emptyList()
             ScannerDiagnosticLog.event(
                 event = "CAPTURE_FAILED",
                 scanId = "capture-$captureId",
@@ -355,7 +357,6 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
             // Preserve the webcam's complete 4:3 scene. FIT_CENTER intentionally letterboxes
             // the portrait scanner rather than applying PreviewView's crop-to-fill zoom.
             AndroidView(factory = { PreviewView(it).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; this.controller = controller } }, modifier = Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .08f)))
             DomiStatusBanner(
                 message = when {
                     captureMessage != null -> captureMessage?.let { stringResource(it) }
@@ -387,43 +388,27 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                     contentWidth = size.width; contentHeight = contentWidth / imageAspect
                     offsetX = 0f; offsetY = (size.height - contentHeight) / 2f
                 }
-                if (quality.corners.size == 4) {
+                val captureConfirmed = captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)
+                val displayedOutline = if (captureConfirmed && confirmedOutlineCorners.size == 4) confirmedOutlineCorners else quality.corners
+                if (displayedOutline.size == 4) {
                     val path = Path()
-                    quality.corners.forEachIndexed { index, point ->
+                    displayedOutline.forEachIndexed { index, point ->
                         val x = offsetX + point.first * contentWidth; val y = offsetY + point.second * contentHeight
                         if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                     }
                     path.close()
-                    // The preview remains useful for positioning, but once Module 1 has a
-                    // plausible quadrilateral every pixel outside the physical card is visibly
-                    // excluded. The captured analysis uses the same four-corner gate and never
-                    // sends this surrounding scene to OCR or artwork matching.
-                    clipPath(path, clipOp = ClipOp.Difference) {
-                        drawRect(Color.Black.copy(alpha = .68f))
-                    }
+                    val outlineColor = if (captureConfirmed || quality.level == QualityLevel.GREEN) VaultPositive else VaultWarning
+                    drawPath(
+                        path = path,
+                        color = outlineColor,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = 3.dp.toPx(),
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                            join = androidx.compose.ui.graphics.StrokeJoin.Round,
+                        ),
+                    )
                 }
-                // A fixed presentation guide gives the eye one calm target. It does not feed
-                // Module 1 and therefore cannot alter detection, crop or OCR coordinates.
-                val guideWidth = contentWidth * .76f
-                val preferredGuideHeight = guideWidth * (88f / 63f)
-                val guideHeight = minOf(preferredGuideHeight, contentHeight * .72f)
-                val fittedGuideWidth = guideHeight * (63f / 88f)
-                val guideLeft = offsetX + (contentWidth - fittedGuideWidth) / 2f
-                val guideTop = offsetY + (contentHeight - guideHeight) / 2f
-                val guideRight = guideLeft + fittedGuideWidth
-                val guideBottom = guideTop + guideHeight
-                val corner = 25.dp.toPx()
-                val guideColor = if (captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) VaultPositive else MewRose.copy(alpha = .76f)
-                val guideStroke = 2.dp.toPx()
-                drawLine(guideColor, Offset(guideLeft, guideTop + corner), Offset(guideLeft, guideTop), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(guideColor, Offset(guideLeft, guideTop), Offset(guideLeft + corner, guideTop), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(guideColor, Offset(guideRight - corner, guideTop), Offset(guideRight, guideTop), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(guideColor, Offset(guideRight, guideTop), Offset(guideRight, guideTop + corner), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(guideColor, Offset(guideLeft, guideBottom - corner), Offset(guideLeft, guideBottom), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(guideColor, Offset(guideLeft, guideBottom), Offset(guideLeft + corner, guideBottom), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(guideColor, Offset(guideRight - corner, guideBottom), Offset(guideRight, guideBottom), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(guideColor, Offset(guideRight, guideBottom), Offset(guideRight, guideBottom - corner), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
-                if (captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) {
+                if (captureConfirmed) {
                     // Confirmation stays centred even if the person removes the card immediately
                     // after the shutter; it represents the saved still, not live detector state.
                     val center = androidx.compose.ui.geometry.Offset(offsetX + contentWidth * .5f, offsetY + contentHeight * .5f)
