@@ -2481,6 +2481,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     var queuedScans by remember { mutableStateOf<List<QueuedCardScan>>(emptyList()) }
     var selectedScanId by remember { mutableStateOf<String?>(null) }
     var queueReviewMode by remember { mutableStateOf(false) }
+    var queueExpanded by remember { mutableStateOf(false) }
     var selectedCandidate by remember { mutableStateOf<CatalogSearchResult?>(null) }
     var manualEvidence by rememberSaveable { mutableStateOf(false) }
     var latestScanFile by remember { mutableStateOf<File?>(null) }
@@ -2642,8 +2643,20 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
         }
     }
     fun enqueueScan(file: File, qualityEligible: Boolean, evidenceFiles: List<File> = emptyList()) {
+        // Rapid scan never covers the camera with old results. The person explicitly pulls the
+        // compact rail up only when they want to review it.
+        queueExpanded = false
         val scan = QueuedCardScan(file = file, evidenceFiles = evidenceFiles, qualityEligible = qualityEligible)
         queuedScans = listOf(scan) + queuedScans
+        ScannerDiagnosticLog.event(
+            event = "QUEUED",
+            scanId = scan.id,
+            "captureKey" to file.name,
+            "captureTimestamp" to scan.capturedAtMillis,
+            "frameCount" to (evidenceFiles.size + 1),
+            "queueSize" to (latestQueuedScans.value.size + 1),
+            "qualityEligible" to qualityEligible,
+        )
         ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(state = AutoScanState.READING, reason = "queued:${scan.id.take(8)}", scanId = scan.id)
         scope.launch {
             processingSlots.withPermit {
@@ -2659,6 +2672,13 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     updateQueuedScan(scan.id) { current ->
                         if (current.stage.canTransitionTo(next) || current.stage == next) current.copy(stage = next, message = message, stageDurationsMillis = durations.toMap()) else current
                     }
+                    ScannerDiagnosticLog.event(
+                        event = "STAGE",
+                        scanId = scan.id,
+                        "state" to next.name,
+                        "worker" to Thread.currentThread().name,
+                        "queueSize" to latestQueuedScans.value.size,
+                    )
                 }
                 fun terminal(next: ScanPipelineStage, message: String, change: (QueuedCardScan) -> QueuedCardScan = { it }) {
                     stage(next, message)
@@ -2677,6 +2697,15 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                         processingMillis = totalMillis,
                         stageTimings = durations.entries.joinToString(" · ") { (pipelineStage, elapsed) -> "${pipelineStage.name.take(4)} ${elapsed}ms" },
                         scanId = scan.id,
+                    )
+                    ScannerDiagnosticLog.event(
+                        event = "TERMINAL",
+                        scanId = scan.id,
+                        "state" to next.name,
+                        "message" to message,
+                        "totalProcessingMs" to totalMillis,
+                        "stageTimings" to durations.entries.joinToString(",") { (pipelineStage, elapsed) -> "${pipelineStage.name}:$elapsed" },
+                        "queueSize" to latestQueuedScans.value.size,
                     )
                 }
 
@@ -2701,6 +2730,38 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     usedDynamicOcr = currentAnalysis.usedDynamicOcr,
                     usedMultiFrameEvidence = currentAnalysis.usedMultiFrameEvidence,
                 )
+                val quality = currentAnalysis.imageQuality
+                ScannerDiagnosticLog.event(
+                    event = "ANALYSIS",
+                    scanId = scan.id,
+                    "frameCount" to (evidenceFiles.size + 1),
+                    "cardBoundaryFound" to quality.cardDetected,
+                    "geometryScore" to quality.geometryScore,
+                    "cardCoverage" to quality.cardCoverage,
+                    "aspectRatio" to quality.aspectRatio,
+                    "cornerConfidence" to quality.cornerConfidence,
+                    "perspectiveScore" to quality.perspective,
+                    "usedGeometryFallback" to quality.usedFallbackGeometry,
+                    "sharpnessScore" to quality.sharpness,
+                    "glarePercentage" to quality.glare,
+                    "clippingPercentage" to quality.clippingPercentage,
+                    "motionScore" to quality.motionScore,
+                    "selectedBestFrame" to quality.selectedBestFrame,
+                    "rawNameOcr" to currentAnalysis.roiEvidence.firstOrNull { it.region == CardOcrRegion.NAME }?.rawValues?.joinToString(" | "),
+                    "normalizedName" to currentAnalysis.searchQueries.firstOrNull(),
+                    "rawCollectorNumber" to currentAnalysis.roiEvidence.firstOrNull { it.region == CardOcrRegion.NUMBER }?.rawValues?.joinToString(" | "),
+                    "normalizedCollectorNumber" to currentAnalysis.collectorNumber,
+                    "rawSetOcr" to currentAnalysis.roiEvidence.firstOrNull { it.region == CardOcrRegion.SET }?.rawValues?.joinToString(" | "),
+                    "detectedSet" to currentAnalysis.setIdentifier,
+                    "detectedLanguage" to currentAnalysis.likelyScript,
+                    "numberOcrConfidence" to currentAnalysis.numberConfidence,
+                    "roiUsed" to currentAnalysis.roiEvidence.filter { it.rawValues.isNotEmpty() }.joinToString(",") { it.region.name },
+                    "geometryDurationMs" to quality.geometryDurationMillis,
+                    "perspectiveDurationMs" to quality.perspectiveDurationMillis,
+                    "ocrDurationMs" to currentAnalysis.ocrDurationMillis,
+                    "descriptorDurationMs" to currentAnalysis.descriptorDurationMillis,
+                    "multiFrame" to currentAnalysis.usedMultiFrameEvidence,
+                )
                 stage(ScanPipelineStage.OCR)
                 updateQueuedScan(scan.id) { it.copy(analysis = currentAnalysis, message = ScanPipelineStage.OCR.label) }
                 if (!currentAnalysis.imageQuality.cardDetected || currentAnalysis.imageQuality.reason.isNotBlank()) {
@@ -2708,12 +2769,18 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     return@withPermit
                 }
                 stage(ScanPipelineStage.SET_ANALYSIS)
-                if (currentAnalysis.setIdentifier == null || currentAnalysis.collectorNumber == null) {
-                    terminal(ScanPipelineStage.MANUAL_REVIEW, "Set-Kennung oder Nummer fehlt")
+                if (currentAnalysis.collectorNumber == null) {
+                    terminal(ScanPipelineStage.MANUAL_REVIEW, "Kartennummer fehlt")
                     return@withPermit
                 }
                 stage(ScanPipelineStage.CANDIDATE_SEARCH)
                 val resolution = withContext(Dispatchers.IO) { CardScanCandidateResolver.resolve(currentAnalysis, repository, visualCatalog) }
+                ScannerDiagnosticLog.event(
+                    event = "CANDIDATES_BEFORE_VISUAL",
+                    scanId = scan.id,
+                    "candidateCount" to resolution.candidates.size,
+                    "topCandidates" to resolution.candidates.take(3).joinToString(" | ") { "${it.card.name}:${it.card.setCode}/${it.card.collectorNumber}:${it.score}" },
+                )
                 updateQueuedScan(scan.id) { it.copy(candidates = resolution.candidates, decision = resolution.decision) }
                 if (resolution.candidates.isEmpty()) {
                     terminal(ScanPipelineStage.MANUAL_REVIEW, "Kein verlässlicher Katalogtreffer")
@@ -2732,8 +2799,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                             }
                     }
                 }.orEmpty()
+                val fusionStarted = SystemClock.elapsedRealtime()
                 val fused = HybridCandidateFusion.rank(currentAnalysis, resolution.candidates, artwork)
                 val finalDecision = HybridCandidateFusion.decide(fused)
+                val fusionDuration = SystemClock.elapsedRealtime() - fusionStarted
                 updateQueuedScan(scan.id) { it.copy(candidates = fused, artwork = artwork, decision = finalDecision) }
                 stage(ScanPipelineStage.VARIANT_ANALYSIS)
                 stage(ScanPipelineStage.PRICE_LOOKUP)
@@ -2749,6 +2818,27 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 }
                 val bestArtwork = best?.let { artwork[it.card.productId] }
                 val evidence = best?.evidence
+                ScannerDiagnosticLog.event(
+                    event = "DECISION",
+                    scanId = scan.id,
+                    "candidateCountBeforeVisual" to resolution.candidates.size,
+                    "candidateCountAfterVisual" to fused.size,
+                    "top1" to best?.let { "${it.card.name}:${it.card.setCode}/${it.card.collectorNumber}" },
+                    "top1Score" to finalDecision.bestScore,
+                    "top2" to fused.getOrNull(1)?.let { "${it.card.name}:${it.card.setCode}/${it.card.collectorNumber}" },
+                    "top2Score" to finalDecision.secondScore,
+                    "scoreMargin" to finalDecision.absoluteMargin,
+                    "relativeMargin" to finalDecision.relativeMargin,
+                    "contradictions" to evidence?.contradictions?.joinToString(","),
+                    "finalConfidence" to evidence?.confidence,
+                    "finalState" to finalDecision.decision,
+                    "reason" to finalDecision.reason,
+                    "fullCardVisualScore" to bestArtwork?.fullCardSimilarity,
+                    "artworkScore" to bestArtwork?.artworkSimilarity,
+                    "descriptorScore" to bestArtwork?.similarity,
+                    "visualMatchingDurationMs" to (durations[ScanPipelineStage.ARTWORK_VERIFICATION] ?: 0L),
+                    "candidateFusionDurationMs" to fusionDuration,
+                )
                 ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
                     state = when (finalStage) { ScanPipelineStage.MATCHED -> AutoScanState.CONFIRMED; ScanPipelineStage.AMBIGUOUS -> AutoScanState.AMBIGUOUS; else -> AutoScanState.NOT_FOUND },
                     candidateCount = fused.size,
@@ -2818,11 +2908,8 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 }
             }
         }
-        if (isDebuggableBuild(context)) ScannerDebugOverlay(
-            snapshot = ScannerDebugState.snapshot,
-            analysis = analysis,
-            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
-        )
+        // Detailed scanner evidence remains available in local DomiDexScanner logs. Keeping the
+        // debug panel off the camera preview prevents it from covering the card and guidance.
         if (analysisRunning || analysisFailed || analysis != null) {
             ModalBottomSheet(
                 onDismissRequest = { if (!analysisRunning) { analysis = null; analysisFailed = false; queueReviewMode = false } },
@@ -2882,26 +2969,51 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
         }
         if (queuedScans.isNotEmpty() || recentResults.isNotEmpty()) {
             Surface(
-                modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 14.dp, vertical = 92.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 14.dp, vertical = 92.dp)
+                    .pointerInput(Unit) {
+                        var verticalDrag = 0f
+                        detectDragGestures(
+                            onDragStart = { verticalDrag = 0f },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                verticalDrag += amount.y
+                                if (verticalDrag <= -28f) queueExpanded = true
+                                if (verticalDrag >= 28f) queueExpanded = false
+                            },
+                        )
+                    },
                 color = VaultNightRaised.copy(alpha = .96f),
                 shape = CardVaultShapes.card,
                 tonalElevation = 8.dp,
             ) {
-                Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     val processingCount = queuedScans.count { it.stage in setOf(ScanPipelineStage.CAPTURED, ScanPipelineStage.PREPROCESSING, ScanPipelineStage.OCR, ScanPipelineStage.SET_ANALYSIS, ScanPipelineStage.CANDIDATE_SEARCH, ScanPipelineStage.ARTWORK_VERIFICATION, ScanPipelineStage.VARIANT_ANALYSIS, ScanPipelineStage.PRICE_LOOKUP) }
                     val matchedCount = queuedScans.count { it.stage in setOf(ScanPipelineStage.MATCHED, ScanPipelineStage.SAVED) }
                     val reviewCount = queuedScans.count { it.stage in setOf(ScanPipelineStage.AMBIGUOUS, ScanPipelineStage.MANUAL_REVIEW, ScanPipelineStage.FAILED) }
-                    Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Scan-Warteschlange", color = VaultText, fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        TextButton(onClick = {
-                            val removable = queuedScans.filter { it.stage in setOf(ScanPipelineStage.MATCHED, ScanPipelineStage.AMBIGUOUS, ScanPipelineStage.MANUAL_REVIEW, ScanPipelineStage.FAILED, ScanPipelineStage.SAVED) }
-                            removable.forEach { scan -> scan.file.delete(); scan.evidenceFiles.forEach(File::delete) }
-                            queuedScans = queuedScans.filterNot { scan -> removable.any { it.id == scan.id } }
-                            recentResults = emptyList()
-                        }) { Text("Fertige leeren", fontSize = 11.sp) }
+                    Row(
+                        Modifier.fillMaxWidth().clickable { queueExpanded = !queueExpanded }.padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text("Scan-Warteschlange", color = VaultText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("$matchedCount erkannt · $processingCount in Analyse · $reviewCount prüfen", color = MewIce, fontSize = 10.sp, maxLines = 1)
+                        }
+                        Text(if (queueExpanded) "▼" else "▲", color = MewRoseSoft, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
-                    Text("${queuedScans.size} gescannt · $matchedCount erkannt · $processingCount in Analyse · $reviewCount prüfen", color = MewIce, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp))
-                    LazyRow(contentPadding = PaddingValues(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AnimatedVisibility(visible = queueExpanded) {
+                        Column(Modifier.fillMaxWidth().padding(bottom = 5.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("${queuedScans.size} Aufnahmen", color = VaultTextMuted, fontSize = 10.sp, modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    val removable = queuedScans.filter { it.stage in setOf(ScanPipelineStage.MATCHED, ScanPipelineStage.AMBIGUOUS, ScanPipelineStage.MANUAL_REVIEW, ScanPipelineStage.FAILED, ScanPipelineStage.SAVED) }
+                                    removable.forEach { scan -> scan.file.delete(); scan.evidenceFiles.forEach(File::delete) }
+                                    queuedScans = queuedScans.filterNot { scan -> removable.any { it.id == scan.id } }
+                                    recentResults = emptyList()
+                                }) { Text("Fertige leeren", fontSize = 11.sp) }
+                            }
+                            LazyRow(contentPadding = PaddingValues(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(queuedScans, key = { it.id }) { scan ->
                             val best = scan.candidates.firstOrNull()
                             val actionable = scan.stage in setOf(ScanPipelineStage.MATCHED, ScanPipelineStage.AMBIGUOUS, ScanPipelineStage.MANUAL_REVIEW)
@@ -2962,6 +3074,8 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                                     Text("${result.candidate.visualSetName ?: result.candidate.expansionId} · ${result.candidate.collectorNumber ?: "Nr. prüfen"}", color = VaultTextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text("Abgleich: ${CardRecognitionRanker.label(result.score)}", color = MewIce, fontSize = 10.sp)
                                 }
+                            }
+                        }
                             }
                         }
                     }

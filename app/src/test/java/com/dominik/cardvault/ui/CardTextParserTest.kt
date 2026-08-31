@@ -139,6 +139,94 @@ class CardTextParserTest {
         assertTrue(result.numberConfidence in .60f..(.70f))
     }
 
+    @Test fun jointNumberRoiOutranksAConflictingStandaloneSetCrop() {
+        val result = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Unlesbarer Holo-Name"),
+            preferredSetText = "SRI DE 087",
+            preferredNumberText = "GRI DE O87\nIg\nga StaAho2",
+        )
+
+        assertEquals("087", result.collectorNumber)
+        assertEquals("GRI", result.setIdentifier)
+        assertTrue(result.numberConfidence in .60f..(.70f))
+    }
+
+    @Test fun verifiedThreeLetterPrefixSurvivesOneAttachedFoilOcrLetter() {
+        val result = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Igamaro"),
+            preferredSetText = "Mvste Afsvzhf Furusawo CRIm 087o86 Resistenz",
+            preferredNumberText = "087/086",
+        )
+
+        assertEquals("087/086", result.collectorNumber)
+        assertEquals("CRI", result.setIdentifier)
+    }
+
+    @Test fun unknownThreeLetterOcrFragmentNeverBecomesASetIdentity() {
+        val result = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Igamaro"),
+            preferredSetText = "RIU 087/086",
+            preferredNumberText = "087/086",
+        )
+
+        assertEquals("087/086", result.collectorNumber)
+        assertEquals(null, result.setIdentifier)
+    }
+
+    @Test fun repeatedLowerBorderReadsOutrankOneEarlyWrongCollectorNumber() {
+        val result = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Flamara"),
+            preferredSetText = "087/086\n087/086\nRÌM 087/086",
+            preferredNumberText = "037/086\n037/086\n097/086\n087/086\n087/086\n087/086",
+        )
+
+        assertEquals("087/086", result.collectorNumber)
+    }
+
+    @Test fun corroboratedTightIdentityStripOutranksNoisyBroadCrops() {
+        val selected = selectIdentityNumberText(
+            listOf(
+                IdentityNumberReading("PBL DE 009/080", false),
+                IdentityNumberReading("009/080", false),
+                IdentityNumberReading("J PBL DE 094/084", true),
+                IdentityNumberReading("PBL 094/084", true),
+            ),
+        )
+
+        assertEquals("094/084", CardNumberParser.find(selected)?.value)
+    }
+
+    @Test fun oneUncorroboratedTightReadCannotOverrideBroadConsensus() {
+        val selected = selectIdentityNumberText(
+            listOf(
+                IdentityNumberReading("SCR DE 030/142", false),
+                IdentityNumberReading("030/142", false),
+                IdentityNumberReading("SCR DE 080/142", true),
+            ),
+        )
+
+        assertEquals("030/142", CardNumberParser.find(selected)?.value)
+    }
+
+    @Test fun tightVariantsMayCorroborateNumberComponentsWithoutInventingAPair() {
+        val selected = selectIdentityNumberText(
+            listOf(
+                IdentityNumberReading("PRE 028/013", false),
+                IdentityNumberReading("128/130", true),
+                IdentityNumberReading("28/130", true),
+                IdentityNumberReading("128/00", true),
+            ),
+        )
+
+        assertEquals("128/130", CardNumberParser.find(selected)?.value)
+    }
+
+    @Test fun realLowerBorderSlashConfusionsRemainNumericIdentityOnly() {
+        assertEquals("094/084", CardNumberParser.find("PBL o94YO84")?.value)
+        assertEquals("009/080", CardNumberParser.find("PBL 09V080")?.value)
+        assertEquals(null, CardNumberParser.find("Attacke VSTAR 130"))
+    }
+
     @Test fun isolatedAttackNumberIsNeverRepairedIntoCollectorEvidence() {
         val result = CardTextParser.parse(
             mapOf(CardScript.LATIN to "Glurak ex"),

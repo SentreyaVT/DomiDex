@@ -58,7 +58,10 @@ internal object HybridCandidateFusion {
 
         val readSet = canonicalMetadata(analysis.setIdentifier.orEmpty())
         val candidateSet = canonicalMetadata(candidate.setCode.orEmpty())
+        val readPrintedTotal = analysis.collectorNumber?.substringAfter('/', "")?.filter(Char::isDigit)?.toIntOrNull()
+        val printedTotalMatches = readPrintedTotal != null && candidate.mainSetSize == readPrintedTotal
         val set = when {
+            readSet.isBlank() && printedTotalMatches -> 65
             readSet.isBlank() -> 0
             candidateSet.isBlank() -> 65 // candidate came from exact source lookup, but has no display code
             readSet == candidateSet -> 100
@@ -80,7 +83,7 @@ internal object HybridCandidateFusion {
         val visualAvailable = artwork != null && artwork.match != ArtworkMatch.UNAVAILABLE
         val visual = if (visualAvailable) (artwork!!.similarity * 100).roundToInt().coerceIn(0, 100) else 0
         val numberAvailable = readNumber.isNotBlank()
-        val setAvailable = readSet.isNotBlank()
+        val setAvailable = readSet.isNotBlank() || printedTotalMatches
         var weighted = language * LANGUAGE_WEIGHT
         var availableWeight = LANGUAGE_WEIGHT
         if (numberAvailable) { weighted += number * NUMBER_WEIGHT; availableWeight += NUMBER_WEIGHT }

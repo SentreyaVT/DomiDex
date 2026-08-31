@@ -9,13 +9,19 @@ internal object CardRecognitionRanker {
         val readNumber = analysis.collectorNumber?.substringBefore('/')?.trimStart('0')
         val catalogNumber = candidate.collectorNumber?.substringBefore('/')?.trimStart('0')
         val numberMatch = readNumber != null && readNumber == catalogNumber
+        val readPrintedTotal = analysis.collectorNumber?.substringAfter('/', "")?.filter(Char::isDigit)?.toIntOrNull()
+        val printedTotalMatch = readPrintedTotal != null && candidate.mainSetSize == readPrintedTotal
         val name = normalize(candidate.name)
         val nameEvidence = analysis.searchQueries.maxOfOrNull { similarity(normalize(it), name) } ?: 0f
         val hasReadableName = analysis.hasNameRoiEvidence && analysis.searchQueries.any { normalize(it).length >= 3 }
         // Set + number are hard gates before this method is called.  A readable
         // German name then confirms the identity; a clear contradiction must not
         // become a high-confidence false positive.
-        var confidence = (numberMatch.then(55) + (analysis.setIdentifier != null).then(20) + (nameEvidence * 25f).toInt())
+        var confidence = (numberMatch.then(55) + when {
+            analysis.setIdentifier != null -> 20
+            printedTotalMatch -> 15
+            else -> 0
+        } + (nameEvidence * 25f).toInt())
         // Lower-border colour is deliberately only corroboration. It can never
         // turn an unknown/contradictory candidate into a match by itself.
         val rarity = CardRarityResolver.fromMetadata(candidate.rarity, candidate.collectorNumber.orEmpty(), candidate.mainSetSize)

@@ -43,6 +43,30 @@ class CardImageNormalizerInstrumentedTest {
         assertTrue(!result.quality.cardDetected || result.quality.reason.isNotBlank())
     }
 
+    @Test fun rejectsTexturedFabricWithoutPhysicalCard() {
+        val background = Bitmap.createBitmap(900, 1_200, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(background)
+        canvas.drawColor(Color.rgb(30, 48, 82))
+        repeat(150) { column ->
+            canvas.drawRect(
+                column * 6f,
+                0f,
+                column * 6f + 2f,
+                1_200f,
+                Paint().apply { color = if (column % 3 == 0) Color.rgb(47, 66, 105) else Color.rgb(25, 43, 75) },
+            )
+        }
+        repeat(7) { fold ->
+            canvas.drawLine(0f, 130f + fold * 155f, 900f, 165f + fold * 155f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(60, 77, 112); strokeWidth = 13f
+            })
+        }
+
+        val result = CardImageNormalizer.normalize(background)
+
+        assertNull("fabric texture became a false card: ${result.quality}", result.bitmap)
+    }
+
     @Test fun holoHighlightDoesNotInvalidateAnOtherwisePlausibleSpecialCard() {
         val source = Bitmap.createBitmap(900, 1_200, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(source)
@@ -64,5 +88,72 @@ class CardImageNormalizerInstrumentedTest {
         assertTrue(result.quality.cardDetected)
         assertTrue(result.quality.glare > 0f)
         assertTrue(result.recognitionBitmap != null)
+    }
+
+    @Test fun landscapeCameraStillIsRotatedBeforeOcrRegionsAreUsed() {
+        val source = Bitmap.createBitmap(1_200, 900, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(source)
+        canvas.drawColor(Color.rgb(18, 20, 27))
+        val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(72, 106, 152) }
+        canvas.drawRect(215f, 175f, 985f, 725f, cardPaint)
+        canvas.drawRect(895f, 175f, 985f, 725f, Paint().apply { color = Color.rgb(220, 35, 48) })
+        canvas.drawRect(215f, 175f, 305f, 725f, Paint().apply { color = Color.rgb(25, 55, 215) })
+        canvas.drawRect(215f, 175f, 985f, 725f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 14f
+        })
+        repeat(28) { index ->
+            canvas.drawLine(340f + index * 18f, 215f, 340f + index * 18f, 685f, Paint().apply {
+                color = if (index % 2 == 0) Color.rgb(125, 170, 205) else Color.rgb(42, 72, 114)
+                strokeWidth = 5f
+            })
+        }
+        repeat(24) { row -> repeat(28) { column ->
+            canvas.drawRect(
+                345f + column * 18f,
+                220f + row * 18f,
+                353f + column * 18f,
+                228f + row * 18f,
+                Paint().apply { color = if ((row + column) % 2 == 0) Color.WHITE else Color.BLACK },
+            )
+        } }
+
+        val result = CardImageNormalizer.normalize(source)
+
+        assertNotNull("landscape normalization failed: ${result.quality}", result.bitmap)
+        val normalized = result.bitmap!!
+        val top = normalized.getPixel(normalized.width / 2, normalized.height / 24)
+        val bottom = normalized.getPixel(normalized.width / 2, normalized.height * 23 / 24)
+        assertTrue("printed top was not rotated to the OCR top", Color.red(top) > Color.blue(top))
+        assertTrue("printed bottom did not remain opposite the top", Color.blue(bottom) > Color.red(bottom))
+    }
+
+    @Test fun completesSmallInterruptionsInLowContrastOuterBorder() {
+        val source = Bitmap.createBitmap(900, 1_200, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(source)
+        val background = Color.rgb(31, 43, 58)
+        canvas.drawColor(background)
+        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(92, 112, 137); strokeWidth = 8f }
+        val left = 155f; val top = 110f; val right = 745f; val bottom = 1_020f; val gap = 7f
+        canvas.drawLine(left + gap, top, right - gap, top, border)
+        canvas.drawLine(right, top + gap, right, bottom - gap, border)
+        canvas.drawLine(right - gap, bottom, left + gap, bottom, border)
+        canvas.drawLine(left, bottom - gap, left, top + gap, border)
+        repeat(30) { row -> canvas.drawLine(205f, 205f + row * 22f, 695f, 205f + row * 22f, Paint().apply {
+            color = if (row % 2 == 0) Color.rgb(55, 78, 103) else Color.rgb(39, 57, 77); strokeWidth = 4f
+        }) }
+        repeat(42) { row -> repeat(25) { column ->
+            canvas.drawRect(
+                210f + column * 19f,
+                145f + row * 19f,
+                218f + column * 19f,
+                153f + row * 19f,
+                Paint().apply { color = if ((row + column) % 2 == 0) Color.rgb(105, 125, 148) else Color.rgb(22, 31, 43) },
+            )
+        } }
+
+        val result = CardImageNormalizer.normalize(source)
+
+        assertNotNull("interrupted foil-like border was not completed: ${result.quality}", result.bitmap)
+        assertTrue(result.quality.cardDetected)
     }
 }

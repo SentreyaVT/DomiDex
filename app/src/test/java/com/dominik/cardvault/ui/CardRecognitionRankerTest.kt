@@ -30,4 +30,19 @@ class CardRecognitionRankerTest {
 
         assertTrue(CardRecognitionRanker.score(analysis, accented) >= 90)
     }
+
+    @Test fun printedTotalKeepsExactCandidateWhenSetCodeIsUnreadable() {
+        val analysis = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Flamara"),
+            preferredNameText = "amar",
+            preferredNumberText = "087/086",
+            preferredSetText = "RÌM 087/086",
+        )
+        val matching = CatalogSearchResult(
+            1, "Flamara", "me04", null, null,
+            collectorNumber = "087", mainSetSize = 86, setCode = "CRI",
+        )
+
+        assertTrue(CardRecognitionRanker.score(analysis, matching) >= ScannerDecisionPolicy.MIN_CANDIDATE_SCORE)
+    }
 }

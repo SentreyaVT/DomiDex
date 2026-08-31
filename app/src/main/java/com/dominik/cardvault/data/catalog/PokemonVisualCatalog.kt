@@ -3,6 +3,9 @@ package com.dominik.cardvault.data.catalog
 import com.dominik.cardvault.data.WachsendesChaosMasterSet
 import com.squareup.moshi.JsonReader
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okio.buffer
 import okio.source
@@ -151,6 +154,25 @@ class PokemonVisualCatalog {
                 .filter { it.number.toIntOrNull() == number }
                 .forEach { candidate -> add(withDeclaredPrintVariants(candidate)) }
         }
+    }
+
+    /**
+     * Safe fallback when glare hides only the printed three-letter set code. The denominator is
+     * still physical lower-border evidence and is used solely to reduce the source catalogue.
+     * Name/artwork scoring must disambiguate the returned cards; this method never declares a
+     * match and never searches sets whose official printed total differs.
+     */
+    suspend fun findByPrintedTotalAndCollectorNumber(collectorNumber: String): List<PokemonVisualCard> = coroutineScope {
+        val parts = Regex("(\\d{1,4})\\s*/\\s*(\\d{1,4})").find(collectorNumber)
+            ?: return@coroutineScope emptyList()
+        val number = parts.groupValues[1].toIntOrNull() ?: return@coroutineScope emptyList()
+        val printedTotal = parts.groupValues[2].toIntOrNull() ?: return@coroutineScope emptyList()
+        sets().filter { it.printedTotal == printedTotal }.take(8).map { set ->
+            async(Dispatchers.IO) {
+                cards(set).filter { it.number.toIntOrNull() == number }
+                    .map { candidate -> withDeclaredPrintVariants(candidate) }
+            }
+        }.awaitAll().flatten()
     }
 
     private fun <T> read(url: String, block: (JsonReader) -> T): T {

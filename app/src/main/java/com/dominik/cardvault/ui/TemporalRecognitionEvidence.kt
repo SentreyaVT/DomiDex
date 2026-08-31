@@ -9,7 +9,10 @@ internal object TemporalRecognitionEvidence {
         if (analyses.isEmpty()) return null
         val valid = analyses.filter { it.imageQuality.cardDetected && it.normalizedCard != null }
         val pool = valid.ifEmpty { analyses }
-        val visualBest = pool.maxByOrNull { it.imageQuality.frameQualityScore }
+        val visualBest = pool.maxWithOrNull(
+            compareBy<CardTextAnalysis> { it.imageQuality.sharpness }
+                .thenBy { it.imageQuality.frameQualityScore },
+        )
             ?: return analyses.first()
         val numberBest = pool.filter { !it.collectorNumber.isNullOrBlank() }
             .maxByOrNull(CardTextAnalysis::numberConfidence)
@@ -44,6 +47,9 @@ internal object TemporalRecognitionEvidence {
             usedDynamicOcr = pool.any(CardTextAnalysis::usedDynamicOcr),
             usedMultiFrameEvidence = analyses.size > 1,
             visualDescriptors = pool.flatMap(CardTextAnalysis::visualDescriptors).take(4),
+            imageQuality = visualBest.imageQuality.copy(selectedBestFrame = analyses.indexOf(visualBest).coerceAtLeast(0)),
+            ocrDurationMillis = analyses.maxOfOrNull(CardTextAnalysis::ocrDurationMillis) ?: visualBest.ocrDurationMillis,
+            descriptorDurationMillis = analyses.sumOf(CardTextAnalysis::descriptorDurationMillis),
         )
     }
 }

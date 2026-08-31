@@ -8,11 +8,16 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.opencv.android.Utils
+import org.opencv.core.Mat
+import org.opencv.imgproc.Imgproc
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeoutException
@@ -45,15 +50,26 @@ internal data class CardTextAnalysis(
     val usedMultiFrameEvidence: Boolean = false,
     /** Compact in-memory descriptors; raw temporal frames are discarded immediately. */
     val visualDescriptors: List<ArtworkDescriptor> = emptyList(),
+    /** Local diagnostic timings only; no image or account data is persisted. */
+    val ocrDurationMillis: Long = 0L,
+    val descriptorDurationMillis: Long = 0L,
 )
+
+/** Ensures a timeout and a late OCR completion can never parse/release the same bitmap twice. */
+internal class SingleAnalysisDeliveryGate {
+    private val claimed = AtomicBoolean(false)
+    fun <T> claim(block: () -> T): T? = if (claimed.compareAndSet(false, true)) block() else null
+}
 
 /** Parses only lower-border-like number pairs; HP/KP and attack damage are excluded. */
 internal object CardNumberParser {
-    internal data class Evidence(val value: String, val confidence: Float)
+    internal data class Evidence(val value: String, val confidence: Float, val supportingReads: Int = 1)
     // The lower border is the only place where these additional OCR repairs are
     // accepted. Z/2 and G/6 are common on foiled German cards; accepting them
     // in ordinary body text would make attack damage unsafe evidence.
-    private val pair = Regex("(?i)(?<![A-Z0-9])([0-9OIlSBZg]{1,4})\\s*[/|]\\s*([0-9OIlSBZg]{1,4})(?![A-Z0-9])")
+    // ML Kit repeatedly reads the tiny printed slash as V or Y on real 12 MP captures.
+    // This repair is deliberately confined to two numeric groups inside an identity ROI.
+    private val pair = Regex("(?i)(?<![A-Z0-9])([0-9OIlSBZg]{1,4})\\s*[/|VY]\\s*([0-9OIlSBZg]{1,4})(?![A-Z0-9])")
     private val setBoundSingle = Regex("(?i)(?:^|\\s)[A-Z]{3}(?:[-_ ]+DE)?[-_ ]+([0-9OIlSBZg]{1,4})(?:\\s|$)")
 
     fun find(text: String): Evidence? {
@@ -61,22 +77,78 @@ internal object CardNumberParser {
         .map { it.trim() }
         .filterNot { line -> line.contains(Regex("(?i)\\b(?:hp|kp)\\b")) }
         .toList()
-        return lines.asSequence().mapNotNull { line -> pair.find(line)?.let { match ->
-            val left = normalize(match.groupValues[1]); val right = normalize(match.groupValues[2])
-            if (left.isBlank() || right.isBlank()) null
-            else Evidence("${left.padStart(3, '0')}/${right.padStart(3, '0')}", if (line.any { it in "OolISBZzGg" }) .84f else .96f)
-        } }
-        .firstOrNull()
-            ?: lines.asSequence().mapNotNull { line -> setBoundSingle.find(line)?.groupValues?.get(1)?.let(::normalize)?.takeIf(String::isNotBlank) }
+        val pairEvidence = pairCandidates(lines)
+        // Multiple independent ROI/preprocessing reads are evidence. A single early OCR mistake
+        // must not beat the collector pair repeated by the other lower-border variants.
+        val consensus = pairEvidence.groupBy(Evidence::value).values.maxWithOrNull(
+            compareBy<List<Evidence>> { it.size }
+                .thenBy { evidence -> evidence.count { it.confidence >= .95f } }
+                .thenBy { evidence -> evidence.maxOf(Evidence::confidence) },
+        )
+        return consensus?.let { evidence ->
+            Evidence(
+                value = evidence.first().value,
+                confidence = (evidence.maxOf(Evidence::confidence) + (evidence.size - 1) * .01f).coerceAtMost(.99f),
+                supportingReads = evidence.size,
+            )
+        } ?: lines.asSequence().mapNotNull { line -> setBoundSingle.find(line)?.groupValues?.get(1)?.let(::normalize)?.takeIf(String::isNotBlank) }
                 .map { number -> Evidence(number.padStart(3, '0'), .64f) }
                 .firstOrNull()
     }
+
+    internal fun pairCandidates(text: String): List<Evidence> = pairCandidates(
+        text.lineSequence().map(String::trim).filter(String::isNotBlank).toList(),
+    )
+
+    private fun pairCandidates(lines: List<String>): List<Evidence> = lines.flatMap { line ->
+            pair.findAll(line).mapNotNull { match ->
+                val left = normalize(match.groupValues[1]); val right = normalize(match.groupValues[2])
+                if (left.isBlank() || right.isBlank()) null
+                else Evidence("${left.padStart(3, '0')}/${right.padStart(3, '0')}", if (match.value.any { it in "OolISBZzGg" }) .84f else .96f)
+            }.toList()
+        }
 
     private fun normalize(value: String): String = value
         .replace('O', '0').replace('o', '0').replace('I', '1').replace('l', '1')
         .replace('S', '5').replace('s', '5').replace('B', '8')
         .replace('Z', '2').replace('z', '2').replace('G', '6').replace('g', '6')
         .filter(Char::isDigit)
+}
+
+internal data class IdentityNumberReading(val text: String, val isTightIdentityStrip: Boolean)
+
+/**
+ * A shallow lower-left identity strip excludes rule text and therefore outranks broad lower-card
+ * crops only when at least two preprocessing variants independently agree. A single sharp-looking
+ * OCR mistake is never promoted. If the tight strip is empty or disagrees internally, the existing
+ * all-ROI consensus remains the safe fallback.
+ */
+internal fun selectIdentityNumberText(readings: List<IdentityNumberReading>): String {
+    val all = readings.map(IdentityNumberReading::text).filter(String::isNotBlank)
+    val tight = readings.filter(IdentityNumberReading::isTightIdentityStrip)
+        .map(IdentityNumberReading::text)
+        .filter(String::isNotBlank)
+    if (tight.isEmpty()) return all.joinToString("\n")
+    val tightEvidence = CardNumberParser.find(tight.joinToString("\n"))
+    val allEvidence = CardNumberParser.find(all.joinToString("\n"))
+    val tightPairs = tight.flatMap(CardNumberParser::pairCandidates)
+    val numeratorConsensus = tightPairs.groupingBy { it.value.substringBefore('/') }.eachCount()
+        .maxByOrNull(Map.Entry<String, Int>::value)
+    val denominatorConsensus = tightPairs.groupingBy { it.value.substringAfter('/') }.eachCount()
+        .maxByOrNull(Map.Entry<String, Int>::value)
+    val componentCorroboratedPair = if (
+        (numeratorConsensus?.value ?: 0) >= 2 && (denominatorConsensus?.value ?: 0) >= 2
+    ) {
+        tightPairs.firstOrNull {
+            it.value.substringBefore('/') == numeratorConsensus?.key &&
+                it.value.substringAfter('/') == denominatorConsensus?.key
+        }
+    } else null
+    if (componentCorroboratedPair != null) return componentCorroboratedPair.value
+    val tightIsCorroborated = tightEvidence != null && (
+        tightEvidence.supportingReads >= 2 || tightEvidence.value == allEvidence?.value
+    )
+    return if (tightIsCorroborated) tight.joinToString("\n") else all.joinToString("\n")
 }
 
 internal object CardTextParser {
@@ -93,6 +165,9 @@ internal object CardTextParser {
     // title or attack text can never become a set marker.
     private val compactThreeLetterBorderSetCodePattern = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})(?![A-Z0-9])[-_]?\\s*(?=[0-9OIlSBZg]{1,4}\\s*[/|])")
     private val threeLetterSetCodeBeforeSingleNumber = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})(?![A-Z0-9])[-_ ]+(?=[0-9OIlSBZg]{1,4}(?:\\s|$))")
+    // Foil glare can attach one stray OCR letter to the printed code (e.g. CRIm). Only a
+    // source-verified three-letter prefix directly followed by the collector number is usable.
+    private val noisyFourLetterSetPrefixBeforeNumber = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})[A-Z](?![A-Z0-9])[-_ ]+(?=[0-9OIlSBZg]{1,4}(?:\\s*[/|oO]\\s*[0-9OIlSBZg]{1,4})?)")
     // Language/market abbreviations often sit beside the lower-border set code.
     // They identify the card's language, never its expansion.
     // Scanner scope is deliberately German. "DE" can be printed with or without
@@ -140,12 +215,7 @@ internal object CardTextParser {
         val collectorNumber = numberEvidence?.value
         // The set marker follows the same geometrical rule. It is read only from
         // the lower identification band, never from names, attacks or rule text.
-        val lowerBorderLines = if (preferredSetText != null || preferredNumberText != null) {
-            preferredSetText.orEmpty().lineSequence().toList() + preferredNumberText.orEmpty().lineSequence().toList()
-        } else {
-            legacyStructuredText.lineSequence().toList()
-        }
-        val setIdentifier = lowerBorderLines.asSequence().mapNotNull { line ->
+        fun setCodeFrom(line: String): String? {
             // German cards may read "CRI DE", "DE CRI", or "CRI-DE". Treat DE
             // as the language marker in all three forms; no missing marker is an
             // error because the app's scan scope is German by design.
@@ -153,14 +223,41 @@ internal object CardTextParser {
                 .replace(Regex("[-_]+\\s*"), " ")
                 .replace(Regex("\\s+"), " ")
                 .trim()
-            threeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1)
-                ?: compactThreeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1)
-                ?: threeLetterSetCodeBeforeSingleNumber.find(lowerBorder)?.groupValues?.get(1)
+            val printedCandidates = listOfNotNull(
+                threeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1),
+                compactThreeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1),
+                threeLetterSetCodeBeforeSingleNumber.find(lowerBorder)?.groupValues?.get(1),
+                printedSetCodeBeforeNumber(lowerBorder),
+                noisyFourLetterSetPrefixBeforeNumber.find(lowerBorder)?.groupValues?.get(1),
+            )
+            val verifiedPrintedCode = printedCandidates.firstOrNull(PokemonSetRegistry::isVerifiedPrintedCode)
+            return verifiedPrintedCode
                 // Older cards can use an established alpha-numeric series marker
                 // such as SV3. This fallback still never accepts H/J as a set ID.
                 ?: setIdentifierPattern.find(lowerBorder)?.value
-                ?: printedSetCodeBeforeNumber(lowerBorder)
-        }.firstOrNull()?.replace(Regex("[- ]"), "")?.uppercase()
+        }
+        val setRoiLines = preferredSetText.orEmpty().lineSequence().filter(String::isNotBlank).toList()
+        val numberRoiLines = preferredNumberText.orEmpty().lineSequence().filter(String::isNotBlank).toList()
+        fun mostFrequentCode(lines: List<String>): String? = lines.mapNotNull(::setCodeFrom)
+            .map { it.replace(Regex("[- ]"), "").uppercase() }
+            .groupingBy { it }
+            .eachCount()
+            .maxWithOrNull(compareBy<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            ?.key
+        // Real holo capture showed why independent ROI order is unsafe: a set-only crop read
+        // SRI, while the same printed lower-border line correctly read GRI + 087 together.
+        // A code physically bound to the selected collector number is therefore stronger than
+        // any standalone set crop. No fuzzy code or missing digit is invented here.
+        val numberBoundSetLines = numberRoiLines.filter { line ->
+            CardNumberParser.find(line)?.value == collectorNumber
+        }
+        val fallbackLowerBorderLines = if (preferredSetText != null || preferredNumberText != null) {
+            setRoiLines + numberRoiLines
+        } else {
+            legacyStructuredText.lineSequence().toList()
+        }
+        val setIdentifier = mostFrequentCode(numberBoundSetLines)
+            ?: mostFrequentCode(fallbackLowerBorderLines)
         // Name lookup is intentionally restricted to the top name ROI. Attack
         // names and rules text may look like Pokémon names but cannot identify a
         // printing without the lower-border evidence above.
@@ -231,33 +328,72 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
         }
         val raritySymbolEvidence = CardRaritySymbolAnalyzer.analyze(bitmap)
         val inputs = buildOcrInputs(bitmap, normalized.recognitionBitmap)
+        val ocrStarted = SystemClock.elapsedRealtime()
         normalized.recognitionBitmap?.recycle()
         normalized.originalCrop?.recycle()
         // Keep the read order deterministic. Each region has explicit variants; full-card OCR is
         // intentionally absent so attack text and KP never become primary identity evidence.
         val results = mutableMapOf<CardScript, MutableMap<Int, String>>()
         val failures = mutableListOf<Throwable>()
-        val delivered = AtomicBoolean(false)
+        val deliveryGate = SingleAnalysisDeliveryGate()
+        val inputBitmapsReleased = AtomicBoolean(false)
         val timeoutHandler = Handler(Looper.getMainLooper())
-        fun deliver(outcome: Result<CardTextAnalysis>) {
-            if (delivered.compareAndSet(false, true)) {
+        fun releaseInputBitmaps() {
+            if (inputBitmapsReleased.compareAndSet(false, true)) {
+                inputs.map(OcrInput::bitmap).distinct().forEach { inputBitmap ->
+                    if (!inputBitmap.isRecycled) inputBitmap.recycle()
+                }
+            }
+        }
+        fun deliver(buildOutcome: () -> Result<CardTextAnalysis>) {
+            val claimed = deliveryGate.claim {
                 timeoutHandler.removeCallbacksAndMessages(null)
-                // ML Kit may complete on a worker; all screen state is deliberately updated on
-                // the main dispatcher, preserving the scan item's own id/state association.
+                true
+            } ?: return
+            if (!claimed) return
+            // Descriptor sampling is CPU work and must not run on ML Kit's main-thread callback.
+            preprocessingExecutor.execute {
+                val outcome = try { buildOutcome() } catch (error: Throwable) {
+                    if (!bitmap.isRecycled) bitmap.recycle()
+                    Result.failure(error)
+                }
+                // All screen state is deliberately updated on the main dispatcher, preserving
+                // the scan item's own id/state association.
                 timeoutHandler.post { onComplete(outcome) }
             }
         }
         fun parseSnapshot(snapshot: Map<CardScript, Map<Int, String>>): CardTextAnalysis {
             val texts = snapshot.mapValues { (_, readings) -> readings.toSortedMap().values.joinToString("\n") }
             val latin = snapshot[CardScript.LATIN].orEmpty()
-            fun values(region: CardOcrRegion) = inputs.mapIndexedNotNull { index, input -> latin[index]?.takeIf { input.region == region } }
+            fun values(region: CardOcrRegion) = inputs.mapIndexedNotNull { index, input -> latin[index]?.takeIf { region in input.regions } }
             val names = values(CardOcrRegion.NAME)
             val sets = values(CardOcrRegion.SET)
             val numbers = values(CardOcrRegion.NUMBER)
+            val numberReadings = inputs.mapIndexedNotNull { index, input ->
+                latin[index]?.takeIf { CardOcrRegion.NUMBER in input.regions }?.let { reading ->
+                    IdentityNumberReading(reading, input.isTightIdentityStrip)
+                }
+            }
+            val selectedNumberText = selectIdentityNumberText(numberReadings)
+            if (com.dominik.cardvault.BuildConfig.DEBUG) {
+                inputs.forEachIndexed { index, input ->
+                    val reading = latin[index].orEmpty()
+                    if (CardOcrRegion.NUMBER in input.regions && reading.isNotBlank()) {
+                        ScannerDiagnosticLog.event(
+                            "ocr_identity_roi",
+                            file.nameWithoutExtension,
+                            "profile" to input.profileId,
+                            "variant" to input.variantId,
+                            "tight" to input.isTightIdentityStrip,
+                            "text" to reading,
+                        )
+                    }
+                }
+            }
             val parsed = CardTextParser.parse(
                 texts,
                 preferredNameText = names.joinToString("\n"),
-                preferredNumberText = numbers.joinToString("\n"),
+                preferredNumberText = selectedNumberText,
                 preferredSetText = sets.joinToString("\n"),
             )
             val evidence = listOf(
@@ -268,13 +404,17 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
             val dynamicEvidenceUsed = inputs.mapIndexedNotNull { index, input ->
                 latin[index]?.takeIf { input.dynamic && it.isNotBlank() }
             }.isNotEmpty()
+            val descriptorStarted = SystemClock.elapsedRealtime()
+            val descriptor = CardArtworkVerifier.describe(bitmap)
             return parsed.copy(
                 raritySymbolEvidence = raritySymbolEvidence,
                 imageQuality = normalized.quality,
                 roiEvidence = evidence,
                 normalizedCard = bitmap,
                 usedDynamicOcr = dynamicEvidenceUsed,
-                visualDescriptors = listOf(CardArtworkVerifier.describe(bitmap)),
+                visualDescriptors = listOf(descriptor),
+                ocrDurationMillis = SystemClock.elapsedRealtime() - ocrStarted,
+                descriptorDurationMillis = SystemClock.elapsedRealtime() - descriptorStarted,
             )
         }
         var remaining = recognizers.size * inputs.size
@@ -286,8 +426,10 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
             val partial = synchronized(lock) {
                 results.mapValues { (_, readings) -> readings.toMap() }
             }
-            if (partial.isNotEmpty()) deliver(Result.success(parseSnapshot(partial)))
-            else deliver(Result.failure(TimeoutException("Lokale Texterkennung hat kein Ergebnis geliefert.")))
+            deliver {
+                if (partial.isNotEmpty()) Result.success(parseSnapshot(partial))
+                else Result.failure(TimeoutException("Lokale Texterkennung hat kein Ergebnis geliefert."))
+            }
         }, 9_000L)
         recognizers.forEach { (script, recognizer) -> inputs.forEachIndexed { imageIndex, input ->
             recognizer.process(input.image)
@@ -298,13 +440,18 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
                     synchronized(lock) { failures += error }
                 }
                 .addOnCompleteListener {
-                    val outcome = synchronized(lock) {
+                    val terminalSnapshot = synchronized(lock) {
                         remaining -= 1
                         if (remaining != 0) null
-                        else if (results.isNotEmpty()) Result.success(parseSnapshot(results.mapValues { (_, readings) -> readings.toMap() }))
-                        else Result.failure(failures.firstOrNull() ?: IllegalStateException("Texterkennung ohne Ergebnis beendet."))
+                        else results.mapValues { (_, readings) -> readings.toMap() }
                     }
-                    outcome?.let(::deliver)
+                    if (terminalSnapshot != null) {
+                        releaseInputBitmaps()
+                        deliver {
+                            if (terminalSnapshot.isNotEmpty()) Result.success(parseSnapshot(terminalSnapshot))
+                            else Result.failure(failures.firstOrNull() ?: IllegalStateException("Texterkennung ohne Ergebnis beendet."))
+                        }
+                    }
                 }
         } }
     }
@@ -315,15 +462,46 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
     }
 }
 
-private data class OcrInput(val region: CardOcrRegion, val image: InputImage, val dynamic: Boolean)
+private data class OcrInput(
+    val regions: Set<CardOcrRegion>,
+    val image: InputImage,
+    val dynamic: Boolean,
+    val bitmap: Bitmap,
+    val profileId: String,
+    val variantId: String,
+    val isTightIdentityStrip: Boolean,
+)
 
 private fun buildOcrInputs(bitmap: Bitmap, recognitionBitmap: Bitmap?): List<OcrInput> {
-    fun variants(region: CardOcrRegion, roi: CardRoi, dynamic: Boolean, inverted: Boolean = false): List<OcrInput> {
-        val crop = roi.crop(bitmap)
-        val enhanced = recognitionBitmap?.let(roi::crop) ?: enhanceForOcr(crop)
-        val result = mutableListOf(OcrInput(region, InputImage.fromBitmap(crop, 0), dynamic))
-        if (enhanced !== crop) result += OcrInput(region, InputImage.fromBitmap(enhanced, 0), dynamic)
-        if (inverted) result += OcrInput(region, InputImage.fromBitmap(invertForOcr(enhanced), 0), dynamic)
+    fun cropAtReadableScale(source: Bitmap, roi: CardRoi): Bitmap {
+        val crop = roi.crop(source)
+        if (roi.bottom - roi.top > .12f) return crop
+        // The collector line on ACE SPEC/full-art cards is physically tiny. Upscaling the
+        // already perspective-corrected ROI does not invent pixels; it gives ML Kit a stable
+        // glyph size while keeping rule text and the rest of the card excluded.
+        val scale = if (roi.bottom - roi.top <= .10f) 3 else 2
+        return Bitmap.createScaledBitmap(crop, crop.width * scale, crop.height * scale, true).also { crop.recycle() }
+    }
+    fun variants(
+        regions: Set<CardOcrRegion>,
+        roi: CardRoi,
+        dynamic: Boolean,
+        profileId: String,
+        inverted: Boolean = false,
+    ): List<OcrInput> {
+        val crop = cropAtReadableScale(bitmap, roi)
+        val enhanced = recognitionBitmap?.let { cropAtReadableScale(it, roi) } ?: enhanceForOcr(crop)
+        val tightIdentity = CardOcrRegion.NUMBER in regions && roi.bottom - roi.top <= .10f
+        val result = mutableListOf(OcrInput(regions, InputImage.fromBitmap(crop, 0), dynamic, crop, profileId, "original", tightIdentity))
+        if (enhanced !== crop) result += OcrInput(regions, InputImage.fromBitmap(enhanced, 0), dynamic, enhanced, profileId, "enhanced", tightIdentity)
+        if (roi.bottom - roi.top <= .12f) {
+            val thresholded = thresholdForOcr(enhanced)
+            result += OcrInput(regions, InputImage.fromBitmap(thresholded, 0), dynamic, thresholded, profileId, "threshold", tightIdentity)
+        }
+        if (inverted) {
+            val invertedBitmap = invertForOcr(enhanced)
+            result += OcrInput(regions, InputImage.fromBitmap(invertedBitmap, 0), dynamic, invertedBitmap, profileId, "inverted", tightIdentity)
+        }
         return result
     }
     val primary = CardOcrRois.profiles.take(3)
@@ -332,13 +510,27 @@ private fun buildOcrInputs(bitmap: Bitmap, recognitionBitmap: Bitmap?): List<Ocr
     // centre, right and a full-width strip so special-card print can move without enabling unsafe
     // whole-card OCR.
     return buildList {
-        primary.map(CardOcrLayoutProfile::name).distinct().forEach { addAll(variants(CardOcrRegion.NAME, it, false)) }
+        primary.forEach { profile ->
+            addAll(variants(setOf(CardOcrRegion.NAME), profile.name, false, "${profile.id}_name"))
+        }
         (primary + dynamic).forEachIndexed { index, profile ->
             val isDynamic = index >= primary.size
-            addAll(variants(CardOcrRegion.SET, profile.set, isDynamic, inverted = true))
-            addAll(variants(CardOcrRegion.NUMBER, profile.number, isDynamic, inverted = true))
+            // Set and collector number occupy the same tiny printed band. Reading their union once
+            // preserves their physical relationship, halves ML Kit work and improves consensus.
+            addAll(variants(setOf(CardOcrRegion.SET, CardOcrRegion.NUMBER), profile.set.union(profile.number), isDynamic, profile.id, inverted = true))
         }
     }
+}
+
+private fun thresholdForOcr(source: Bitmap): Bitmap {
+    val rgba = Mat(); val gray = Mat(); val binary = Mat()
+    return try {
+        Utils.bitmapToMat(source, rgba)
+        Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+        Imgproc.GaussianBlur(gray, gray, org.opencv.core.Size(3.0, 3.0), 0.0)
+        Imgproc.threshold(gray, binary, 0.0, 255.0, Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU)
+        Bitmap.createBitmap(binary.cols(), binary.rows(), Bitmap.Config.ARGB_8888).also { Utils.matToBitmap(binary, it) }
+    } finally { rgba.release(); gray.release(); binary.release() }
 }
 
 /** Small, allocation-bounded ROI enhancement for glare/low-contrast lower print. */

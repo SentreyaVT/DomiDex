@@ -1,6 +1,8 @@
 package com.dominik.cardvault.ui
 
-import android.media.MediaActionSound
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -25,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -34,8 +35,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -54,6 +56,7 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.min
+import kotlin.math.sin
 import org.opencv.android.OpenCVLoader
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
@@ -62,7 +65,101 @@ internal object LatestCardCapture {
     var path by mutableStateOf<String?>(null)
 }
 
-private data class FrameQuality(val level: QualityLevel, val guidance: QualityGuidance, val exposure: Float, val sharpness: Float, val stability: Float, val coverage: Float, val perspective: Float, val contourStability: Float = 0f, val stableFrames: Int = 0, val corners: List<Pair<Float, Float>> = emptyList(), val glare: Float = 0f, val frameQualityScore: Float = 0f)
+/** A short, low-amplitude two-tone confirmation with an envelope that avoids click transients. */
+internal fun buildSoftConfirmationPcm(sampleRate: Int = 16_000): ShortArray {
+    val toneMillis = 82
+    val gapMillis = 78
+    val tailMillis = 18
+    val toneSamples = sampleRate * toneMillis / 1_000
+    val gapSamples = sampleRate * gapMillis / 1_000
+    val tailSamples = sampleRate * tailMillis / 1_000
+    val output = ShortArray(toneSamples * 2 + gapSamples + tailSamples)
+    fun writeTone(start: Int, frequency: Double) {
+        val attack = (sampleRate * .018).toInt().coerceAtLeast(1)
+        val release = (sampleRate * .026).toInt().coerceAtLeast(1)
+        repeat(toneSamples) { index ->
+            val envelope = minOf(
+                1.0,
+                index.toDouble() / attack,
+                (toneSamples - 1 - index).coerceAtLeast(0).toDouble() / release,
+            )
+            val phase = 2.0 * Math.PI * frequency * index / sampleRate
+            // A quiet fundamental plus a tiny second harmonic sounds warmer and less piercing
+            // than Android's system shutter or notification tones.
+            val wave = sin(phase) * .085 + sin(phase * 2.0) * .012
+            output[start + index] = (Short.MAX_VALUE * envelope * wave).toInt().toShort()
+        }
+    }
+    writeTone(0, 360.0)
+    writeTone(toneSamples + gapSamples, 410.0)
+    return output
+}
+
+private class SoftConfirmationSound {
+    private val handler = Handler(Looper.getMainLooper())
+    private val pcm = buildSoftConfirmationPcm()
+    private var activeTrack: AudioTrack? = null
+
+    fun play() {
+        releaseTrack()
+        runCatching {
+            AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build(),
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(16_000)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build(),
+                )
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .setBufferSizeInBytes(pcm.size * Short.SIZE_BYTES)
+                .build()
+        }.onSuccess { track ->
+            activeTrack = track
+            val written = track.write(pcm, 0, pcm.size)
+            if (written > 0) {
+                track.play()
+                handler.postDelayed({ if (activeTrack === track) releaseTrack() }, 420L)
+            } else releaseTrack()
+        }
+    }
+
+    fun release() {
+        handler.removeCallbacksAndMessages(null)
+        releaseTrack()
+    }
+
+    private fun releaseTrack() {
+        activeTrack?.let { track ->
+            runCatching { if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop() }
+            track.release()
+        }
+        activeTrack = null
+    }
+}
+
+private data class FrameQuality(
+    val level: QualityLevel,
+    val guidance: QualityGuidance,
+    val exposure: Float,
+    val sharpness: Float,
+    val stability: Float,
+    val coverage: Float,
+    val perspective: Float,
+    val contourStability: Float = 0f,
+    val stableFrames: Int = 0,
+    val corners: List<Pair<Float, Float>> = emptyList(),
+    val glare: Float = 0f,
+    val frameQualityScore: Float = 0f,
+    val cardPresent: Boolean = false,
+    val fingerprint: IntArray? = null,
+)
 internal enum class QualityLevel { RED, YELLOW, GREEN }
 internal enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS, FIND_CARD, MOVE_CLOSER, MOVE_AWAY, ALIGN_PARALLEL, READY }
 internal enum class AutoScanState { SEARCHING, CARD_DETECTED, STABILIZING, READY, CAPTURING, READING, MATCHING, CONFIRMED, NOT_FOUND, AMBIGUOUS }
@@ -115,7 +212,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val haptics = LocalHapticFeedback.current
-    val confirmationSound = remember { MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) } }
+    val confirmationSound = remember { SoftConfirmationSound() }
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     val captureTimeoutHandler = remember { Handler(Looper.getMainLooper()) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -135,7 +232,6 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     val autoCaptureGate = remember { AutoCaptureGate() }
     // This transition exists only while the scanner composable is visible.
     val scannerMotion = rememberInfiniteTransition(label = "scanner-overlay")
-    val scanPosition by scannerMotion.animateFloat(0f, 1f, infiniteRepeatable(tween(1_800, easing = LinearEasing), RepeatMode.Restart), label = "scan-line")
     val idleGlow by scannerMotion.animateFloat(.35f, .75f, infiniteRepeatable(tween(1_900), RepeatMode.Reverse), label = "scanner-glow")
     val controller = remember {
         LifecycleCameraController(context).apply {
@@ -167,13 +263,16 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     }
     fun capture(auto: Boolean) {
         if (captureInProgress) return
-        captureInProgress = true; captureMessage = null; autoCaptureGate.disarm()
+        captureInProgress = true; captureMessage = null; autoCaptureGate.disarm(quality.fingerprint)
         onCaptureStarted(auto)
         val captureId = System.nanoTime()
+        val captureStartedAt = SystemClock.elapsedRealtime()
         val contributionEligible = quality.level == QualityLevel.GREEN && quality.corners.size == 4
         activeCaptureId = captureId
         val files = mutableListOf<File>()
-        val frameCount = if (auto) 2 else 1
+        // Automatic rapid scan uses the already stable green frame and releases the camera after
+        // one maximum-quality still. A manual capture keeps the two-frame safety net.
+        val frameCount = if (auto) 1 else 2
         fun finishSuccessful() {
             if (activeCaptureId != captureId || files.isEmpty()) return
             activeCaptureId = 0L
@@ -182,12 +281,40 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
             LatestCardCapture.path = primary.absolutePath
             captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            confirmationSound.play(MediaActionSound.SHUTTER_CLICK)
+            confirmationSound.play()
+            captureTimeoutHandler.postDelayed({
+                if (activeCaptureId == 0L && latestCapture == primary && captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) {
+                    captureMessage = null
+                }
+            }, 1_050L)
+            ScannerDiagnosticLog.event(
+                event = "CAPTURE_SAVED",
+                scanId = primary.name,
+                "captureTimestamp" to System.currentTimeMillis(),
+                "captureLatencyMs" to (SystemClock.elapsedRealtime() - captureStartedAt),
+                "frameCount" to files.size,
+                "auto" to auto,
+                "selectedBestFrame" to 0,
+                "sharpnessScore" to quality.sharpness,
+                "glarePercentage" to quality.glare,
+                "clippingPercentage" to quality.glare,
+                "motionScore" to (1f - quality.stability),
+                "cardCoverage" to quality.coverage,
+                "perspectiveScore" to quality.perspective,
+                "cornerConfidence" to quality.contourStability,
+                "frameQualityScore" to quality.frameQualityScore,
+            )
             onCaptureSaved(primary, contributionEligible, files.drop(1))
         }
         fun failCapture() {
             if (activeCaptureId != captureId) return
             activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed
+            ScannerDiagnosticLog.event(
+                event = "CAPTURE_FAILED",
+                scanId = "capture-$captureId",
+                "captureLatencyMs" to (SystemClock.elapsedRealtime() - captureStartedAt),
+                "savedFrames" to files.size,
+            )
             files.forEach(File::delete); onCaptureFailed()
         }
         captureTimeoutHandler.postDelayed({
@@ -221,7 +348,12 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         takeFrame(0)
     }
     LaunchedEffect(quality, autoCaptureEnabled, captureInProgress, torchSettlingUntil) {
-        if (autoCaptureEnabled && !captureInProgress && SystemClock.elapsedRealtime() >= torchSettlingUntil && autoCaptureGate.onFrame(quality.level, quality.guidance)) capture(true)
+        if (
+            autoCaptureEnabled &&
+            !captureInProgress &&
+            SystemClock.elapsedRealtime() >= torchSettlingUntil &&
+            autoCaptureGate.onFrame(quality.level, quality.guidance, quality.cardPresent, quality.fingerprint)
+        ) capture(true)
     }
     Box(modifier.fillMaxSize().background(Color.Black)) {
         Box(Modifier.matchParentSize()) {
@@ -230,12 +362,18 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
             AndroidView(factory = { PreviewView(it).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; this.controller = controller } }, modifier = Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .08f)))
             DomiStatusBanner(
-                message = captureMessage?.let { stringResource(it) },
-                tone = if (captureMessage == R.string.capture_failed) DomiStatusTone.ERROR else DomiStatusTone.SUCCESS,
-                modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
-                action = if (latestCapture != null) {
-                    { TextButton(onClick = { latestCapture?.delete(); latestCapture = null; captureMessage = R.string.capture_undone }) { Text(stringResource(R.string.action_undo)) } }
-                } else null,
+                message = when {
+                    captureMessage != null -> captureMessage?.let { stringResource(it) }
+                    captureInProgress -> "Aufnahme läuft …"
+                    else -> "Karte ruhig halten"
+                },
+                tone = when {
+                    captureMessage == R.string.capture_failed -> DomiStatusTone.ERROR
+                    captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically) -> DomiStatusTone.SUCCESS
+                    else -> DomiStatusTone.WARNING
+                },
+                modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 16.dp).padding(top = 76.dp),
+                accentColor = if (captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) VaultPositive else null,
             )
             Canvas(Modifier.matchParentSize()) {
                 // CameraX rotates the landscape analysis stream into a portrait 3:4 preview.
@@ -260,23 +398,36 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                         val x = offsetX + point.first * contentWidth; val y = offsetY + point.second * contentHeight
                         if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                     }
-                    path.close(); drawPath(path, quality.level.color, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 7f))
-                    if (quality.level == QualityLevel.GREEN) {
-                        // Success is a short, calm visual acknowledgement; no capture or state changes here.
-                        drawCircle(VaultPositive.copy(alpha = .14f + idleGlow * .10f), radius = min(contentWidth, contentHeight) * (.16f + idleGlow * .04f), center = androidx.compose.ui.geometry.Offset(offsetX + contentWidth * .5f, offsetY + contentHeight * .5f))
-                        drawCircle(VaultPositive.copy(alpha = .80f), radius = 4f + idleGlow * 3f, center = androidx.compose.ui.geometry.Offset(offsetX + contentWidth * .5f, offsetY + contentHeight * .5f))
-                    } else {
-                        val y = offsetY + contentHeight * scanPosition
-                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, MewRose.copy(alpha = .90f), MewIce.copy(alpha = .78f), Color.Transparent)), topLeft = androidx.compose.ui.geometry.Offset(offsetX, y - 2f), size = androidx.compose.ui.geometry.Size(contentWidth, 4f))
+                    path.close()
+                    // The preview remains useful for positioning, but once Module 1 has a
+                    // plausible quadrilateral every pixel outside the physical card is visibly
+                    // excluded. The captured analysis uses the same four-corner gate and never
+                    // sends this surrounding scene to OCR or artwork matching.
+                    clipPath(path, clipOp = ClipOp.Difference) {
+                        drawRect(Color.Black.copy(alpha = .68f))
                     }
-                } else {
-                    val idleColor = if (quality.level == QualityLevel.RED) MewRose else quality.level.color
-                    drawRoundRect(idleColor.copy(alpha = .58f + idleGlow * .25f), topLeft = androidx.compose.ui.geometry.Offset(size.width * .09f, size.height * .08f), size = androidx.compose.ui.geometry.Size(size.width * .82f, size.height * .82f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(18.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6f))
-                    repeat(4) { index ->
-                        val x = size.width * (.18f + index * .21f)
-                        val y = size.height * (.18f + ((scanPosition + index * .17f) % .62f))
-                        drawCircle(MewRose.copy(alpha = .20f + idleGlow * .18f), radius = 2f, center = androidx.compose.ui.geometry.Offset(x, y))
-                    }
+                }
+                if (captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) {
+                    // Confirmation stays centred even if the person removes the card immediately
+                    // after the shutter; it represents the saved still, not live detector state.
+                    val center = androidx.compose.ui.geometry.Offset(offsetX + contentWidth * .5f, offsetY + contentHeight * .5f)
+                    val radius = 27.dp.toPx()
+                    drawCircle(VaultPositive.copy(alpha = .12f + idleGlow * .08f), radius = radius + 8.dp.toPx() * idleGlow, center = center)
+                    drawCircle(VaultPositive.copy(alpha = .96f), radius = radius, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4.dp.toPx()))
+                    drawLine(
+                        color = VaultPositive,
+                        start = center + androidx.compose.ui.geometry.Offset(-12.dp.toPx(), 0f),
+                        end = center + androidx.compose.ui.geometry.Offset(-3.dp.toPx(), 9.dp.toPx()),
+                        strokeWidth = 4.dp.toPx(),
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                    )
+                    drawLine(
+                        color = VaultPositive,
+                        start = center + androidx.compose.ui.geometry.Offset(-3.dp.toPx(), 9.dp.toPx()),
+                        end = center + androidx.compose.ui.geometry.Offset(14.dp.toPx(), -11.dp.toPx()),
+                        strokeWidth = 4.dp.toPx(),
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                    )
                 }
             }
         }
@@ -289,7 +440,14 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                 TextButton(onClick = { setTorch(!torchEnabled) }, enabled = torchCameraId != null) { Text(if (torchEnabled) "☀ Blitz an" else "☼ Blitz aus", color = if (torchEnabled) MewIce else Color.White, fontSize = 12.sp) }
                 TextButton(onClick = { detailsExpanded = !detailsExpanded }) { Text(if (detailsExpanded) "Details aus" else "Details", color = Color.White, fontSize = 12.sp) }
                 Text("Automatik", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Switch(checked = autoCaptureEnabled, onCheckedChange = { autoCaptureEnabled = it }, modifier = Modifier.height(28.dp))
+                Switch(
+                    checked = autoCaptureEnabled,
+                    onCheckedChange = { enabled ->
+                        autoCaptureEnabled = enabled
+                        if (enabled) autoCaptureGate.arm() else autoCaptureGate.disarm()
+                    },
+                    modifier = Modifier.height(28.dp),
+                )
                 Button(onClick = { capture(false) }, enabled = !captureInProgress, shape = CardVaultShapes.card, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) { Text(if (captureInProgress) "…" else "Aufnahme", maxLines = 1) }
                 }
             }
@@ -320,20 +478,104 @@ internal fun selectBestScannerCamera(cameraManager: CameraManager): CameraSelect
         })
     }.build()
 
-internal class AutoCaptureGate(private val missingFramesToRearm: Int = 3, private val readyFramesToCapture: Int = 2) {
+internal fun cardFingerprintDifference(first: IntArray, second: IntArray): Float {
+    if (first.isEmpty() || first.size != second.size) return Float.POSITIVE_INFINITY
+    val firstMean = first.average()
+    val secondMean = second.average()
+    return first.indices.sumOf { index ->
+        abs((first[index] - firstMean) - (second[index] - secondMean))
+    }.toFloat() / first.size
+}
+
+internal class AutoCaptureGate(
+    private val missingFramesToRearm: Int = 3,
+    private val readyFramesToCapture: Int = 1,
+    private val minimumNewCardDifference: Float = 13f,
+) {
     private var armed = true
-    private var missingFrames = 0
+    private var transitionFrames = 0
     private var readyFrames = 0
-    fun onFrame(level: QualityLevel, guidance: QualityGuidance): Boolean {
+    private var capturedFingerprint: IntArray? = null
+
+    fun onFrame(
+        level: QualityLevel,
+        guidance: QualityGuidance,
+        cardPresent: Boolean = guidance != QualityGuidance.FIND_CARD,
+        fingerprint: IntArray? = null,
+    ): Boolean {
+        val ready = level == QualityLevel.GREEN && guidance == QualityGuidance.READY
         if (!armed) {
-            missingFrames = if (guidance == QualityGuidance.FIND_CARD) missingFrames + 1 else 0
-            if (missingFrames >= missingFramesToRearm) { armed = true; missingFrames = 0 }
+            // A replacement must visibly move through a non-ready phase and its normalized card
+            // interior must differ from the last capture. Merely shaking/refocusing the same card
+            // can therefore never create a duplicate automatic scan.
+            if (!ready || !cardPresent) transitionFrames += 1
+            val previous = capturedFingerprint
+            val differentCard = when {
+                fingerprint == null -> previous == null
+                previous == null -> true
+                else -> cardFingerprintDifference(previous, fingerprint) >= minimumNewCardDifference
+            }
+            if (ready && transitionFrames >= missingFramesToRearm && differentCard) {
+                armed = true
+                transitionFrames = 0
+            }
         }
-        readyFrames = if (armed && level == QualityLevel.GREEN && guidance == QualityGuidance.READY) readyFrames + 1 else 0
-        if (readyFrames >= readyFramesToCapture) { armed = false; readyFrames = 0; return true }
+        readyFrames = if (armed && ready) readyFrames + 1 else 0
+        if (readyFrames >= readyFramesToCapture) {
+            armed = false
+            readyFrames = 0
+            transitionFrames = 0
+            capturedFingerprint = fingerprint?.copyOf()
+            return true
+        }
         return false
     }
-    fun disarm() { armed = false; missingFrames = 0; readyFrames = 0 }
+    fun arm() { armed = true; transitionFrames = 0; readyFrames = 0; capturedFingerprint = null }
+    fun disarm(fingerprint: IntArray? = null) {
+        armed = false
+        transitionFrames = 0
+        readyFrames = 0
+        if (fingerprint != null) capturedFingerprint = fingerprint.copyOf()
+    }
+}
+
+/**
+ * Keeps raw detector precision out of the preview animation. Small contour jitter is ignored,
+ * larger movement advances in bounded steps, and READY locks the last guide until capture.
+ * Detection/OCR always continue to use the unsmoothed source geometry.
+ */
+internal class OverlayCornerStabilizer(
+    private val smoothing: Float = .20f,
+    private val deadZone: Float = .004f,
+    private val maxStep: Float = .018f,
+    private val missingFramesToClear: Int = 3,
+) {
+    private var displayed = emptyList<Pair<Float, Float>>()
+    private var missingFrames = 0
+
+    fun update(corners: List<Pair<Float, Float>>, locked: Boolean): List<Pair<Float, Float>> {
+        if (corners.size != 4) {
+            missingFrames += 1
+            if (missingFrames >= missingFramesToClear) displayed = emptyList()
+            return displayed
+        }
+        missingFrames = 0
+        if (displayed.size != 4) {
+            displayed = corners.map { (x, y) -> x.coerceIn(0f, 1f) to y.coerceIn(0f, 1f) }
+            return displayed
+        }
+        if (locked) return displayed
+        displayed = displayed.zip(corners) { old, target ->
+            smoothCoordinate(old.first, target.first) to smoothCoordinate(old.second, target.second)
+        }
+        return displayed
+    }
+
+    private fun smoothCoordinate(old: Float, target: Float): Float {
+        val delta = target.coerceIn(0f, 1f) - old
+        if (abs(delta) <= deadZone) return old
+        return (old + (delta * smoothing).coerceIn(-maxStep, maxStep)).coerceIn(0f, 1f)
+    }
 }
 
 /** Keeps a tiny quality window so auto capture waits for a near-best stable holo frame. */
@@ -365,8 +607,6 @@ private val QualityGuidance.stringResource: Int get() = when (this) {
     QualityGuidance.READY -> R.string.capture_ready
 }
 
-private val QualityLevel.color: Color get() = when (this) { QualityLevel.RED -> Color(0xFFE86E78); QualityLevel.YELLOW -> Color(0xFFFFC857); QualityLevel.GREEN -> Color(0xFF65D6A6) }
-
 private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit) : ImageAnalysis.Analyzer {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var previous: IntArray? = null
@@ -377,10 +617,11 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
     private var priorDetectedFrame: CardFrame? = null
     private val detector = CardFrameDetector()
     private val qualityWindow = FrameQualityWindow()
+    private val overlayCorners = OverlayCornerStabilizer()
 
     override fun analyze(image: ImageProxy) {
         try {
-            val now = System.currentTimeMillis(); if (now - lastPublished < 250) return
+            val now = System.currentTimeMillis(); if (now - lastPublished < 180) return
             val plane = image.planes.first(); val buffer = plane.buffer; val width = image.width; val height = image.height
             val samples = IntArray(16 * 20); var index = 0; var bright = 0; var dark = 0; var total = 0.0; var detail = 0.0; var centerDetail = 0.0; var centerPairs = 0
             for (gy in 0 until 20) for (gx in 0 until 16) {
@@ -413,14 +654,18 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             // The former thresholds effectively required a close-up, so an otherwise
             // clearly visible card in the wide scanner view could never auto-capture.
             val hasCardEvidence = detectedFrame.found && detectedFrame.coverage in .11f..1.12f && detectedFrame.perspective >= .54f
+            val cardFingerprint = if (hasCardEvidence) {
+                sampleCardFingerprint(buffer, width, height, plane.rowStride, plane.pixelStride, detectedFrame.corners)
+            } else null
             // A textured background alone must never arm auto capture.  Centre
             // detail remains a guidance fallback, while capture requires an actual
             // stable four-corner proposal across consecutive analysis frames.
             val stableQuality = if (hasCardEvidence && stabilityScore >= .47f) qualityWindow.add(frameQualityScore) else { qualityWindow.clear(); false }
             val baseReady = mean in 45.0..225.0 && clippedBright <= .32f && clippedDark <= .48f && stabilityScore >= .47f && sharpnessScore >= .15f && contourStability >= .60f && frameQualityScore >= .52f && stableQuality && hasCardEvidence
             stableReadyFrames = if (baseReady) stableReadyFrames + 1 else 0
-            val guidance = when { mean < 45 || clippedDark > .48f -> QualityGuidance.MORE_LIGHT; mean > 225 || clippedBright > .32f -> QualityGuidance.LESS_GLARE; stabilityScore < .47f || (frame.found && contourStability < .60f) -> QualityGuidance.HOLD_STILL; sharpnessScore < .15f -> QualityGuidance.FOCUS; !frame.found && centeredCardEvidence < .30f -> QualityGuidance.FIND_CARD; frame.found && frame.coverage < .11f -> QualityGuidance.MOVE_CLOSER; frame.found && frame.coverage > .96f -> QualityGuidance.MOVE_AWAY; frame.found && frame.perspective < .54f -> QualityGuidance.ALIGN_PARALLEL; stableReadyFrames >= 3 -> QualityGuidance.READY; else -> QualityGuidance.HOLD_STILL }
+            val guidance = when { mean < 45 || clippedDark > .48f -> QualityGuidance.MORE_LIGHT; mean > 225 || clippedBright > .32f -> QualityGuidance.LESS_GLARE; stabilityScore < .47f || (frame.found && contourStability < .60f) -> QualityGuidance.HOLD_STILL; sharpnessScore < .15f -> QualityGuidance.FOCUS; !frame.found && centeredCardEvidence < .30f -> QualityGuidance.FIND_CARD; frame.found && frame.coverage < .11f -> QualityGuidance.MOVE_CLOSER; frame.found && frame.coverage > .96f -> QualityGuidance.MOVE_AWAY; frame.found && frame.perspective < .54f -> QualityGuidance.ALIGN_PARALLEL; stableReadyFrames >= 2 -> QualityGuidance.READY; else -> QualityGuidance.HOLD_STILL }
             val level = when { guidance == QualityGuidance.READY -> QualityLevel.GREEN; guidance in setOf(QualityGuidance.FIND_CARD, QualityGuidance.MOVE_CLOSER, QualityGuidance.MOVE_AWAY, QualityGuidance.ALIGN_PARALLEL) || baseReady -> QualityLevel.YELLOW; else -> QualityLevel.RED }
+            val displayedCorners = overlayCorners.update(frame.corners, locked = level == QualityLevel.GREEN)
             val scanState = when {
                 !frame.found -> AutoScanState.SEARCHING
                 guidance == QualityGuidance.READY -> AutoScanState.READY
@@ -442,9 +687,45 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                     usedMultiFrameEvidence = qualityWindow.hasTemporalEvidence,
                     reason = if (ScannerDebugState.snapshot.scanId.isBlank()) guidance.name else ScannerDebugState.snapshot.reason,
                 )
-                onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, frame.corners, clippedBright, frameQualityScore))
+                onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, displayedCorners, clippedBright, frameQualityScore, hasCardEvidence, cardFingerprint))
             }
         } finally { image.close() }
+    }
+
+    private fun sampleCardFingerprint(
+        buffer: java.nio.ByteBuffer,
+        width: Int,
+        height: Int,
+        rowStride: Int,
+        pixelStride: Int,
+        corners: List<Pair<Float, Float>>,
+    ): IntArray? {
+        if (corners.size != 4) return null
+        val ordered = corners.sortedBy { it.second }.let { vertical ->
+            val top = vertical.take(2).sortedBy { it.first }
+            val bottom = vertical.takeLast(2).sortedByDescending { it.first }
+            top + bottom
+        }
+        val output = IntArray(6 * 8)
+        var index = 0
+        for (row in 0 until 8) {
+            val v = (row + .5f) / 8f
+            val leftX = ordered[0].first + (ordered[3].first - ordered[0].first) * v
+            val leftY = ordered[0].second + (ordered[3].second - ordered[0].second) * v
+            val rightX = ordered[1].first + (ordered[2].first - ordered[1].first) * v
+            val rightY = ordered[1].second + (ordered[2].second - ordered[1].second) * v
+            for (column in 0 until 6) {
+                val u = (column + .5f) / 6f
+                val previewX = leftX + (rightX - leftX) * u
+                val previewY = leftY + (rightY - leftY) * u
+                // CardFrameDetector maps the landscape analysis buffer into portrait preview
+                // coordinates as (1-y, x); invert that mapping for luma sampling.
+                val x = (previewY * (width - 1)).toInt().coerceIn(0, width - 1)
+                val y = ((1f - previewX) * (height - 1)).toInt().coerceIn(0, height - 1)
+                output[index++] = buffer.get(y * rowStride + x * pixelStride).toInt() and 0xFF
+            }
+        }
+        return output
     }
 
     private fun contourStability(current: CardFrame): Float {

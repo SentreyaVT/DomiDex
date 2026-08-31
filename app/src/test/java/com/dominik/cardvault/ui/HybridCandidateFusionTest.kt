@@ -112,4 +112,35 @@ class HybridCandidateFusionTest {
 
         assertEquals(ArtworkMatch.INCONCLUSIVE, combined.match)
     }
+
+    @Test fun `printed denominator safely replaces unreadable set code after catalogue reduction`() {
+        val noSetCode = analysis.copy(setIdentifier = null)
+        val sourceCandidate = candidate(1).copy(mainSetSize = 84)
+        val ranked = HybridCandidateFusion.rank(noSetCode, listOf(ScanCandidate(sourceCandidate, 95)), emptyMap())
+
+        assertEquals(65, ranked.single().evidence?.setScore)
+        assertEquals(ScannerDecision.ACCEPTED, HybridCandidateFusion.decide(ranked).decision)
+    }
+
+    @Test fun `wrong printed denominator never becomes set evidence`() {
+        val noSetCode = analysis.copy(setIdentifier = null)
+        val wrongSet = candidate(1).copy(mainSetSize = 86)
+        val ranked = HybridCandidateFusion.rank(noSetCode, listOf(ScanCandidate(wrongSet, 80)), emptyMap())
+
+        assertEquals(0, ranked.single().evidence?.setScore)
+        assertEquals(ScannerDecision.AMBIGUOUS, HybridCandidateFusion.decide(ranked).decision)
+    }
+
+    @Test fun `verified set and collector use canonical catalogue identity despite denominator ocr`() {
+        val noisyPrintedTotal = analysis.copy(collectorNumber = "117/080")
+        val canonicalSourceCard = candidate(1).copy(mainSetSize = 84, collectorNumber = "117")
+        val ranked = HybridCandidateFusion.rank(
+            noisyPrintedTotal,
+            listOf(ScanCandidate(canonicalSourceCard, 95)),
+            emptyMap(),
+        )
+
+        assertEquals(100, ranked.single().evidence?.setScore)
+        assertEquals(ScannerDecision.ACCEPTED, HybridCandidateFusion.decide(ranked).decision)
+    }
 }

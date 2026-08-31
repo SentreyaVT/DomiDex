@@ -49,11 +49,18 @@ object PokemonSetRegistry {
     private val legacyOfflineSets = listOf(
         PokemonSet(
             id = "me04", name = "Wachsendes Chaos", series = "Mega-Entwicklung",
-            printedTotal = 122, total = 122, releaseDate = "2026/05/22",
+            printedTotal = 86, total = 122, releaseDate = "2026/05/22",
             logoUrl = "https://www.pokemon.com/static-assets/content-assets/cms2-de-de/img/trading-card-game/series/me_series/me04/me04_logo_169_de.png",
             ptcgoCode = "CRI",
         ),
     )
+
+    /** Scanner safety gate: only source-verified printed codes may identify a set. */
+    fun isVerifiedPrintedCode(value: String): Boolean {
+        val candidate = value.uppercase().filter(Char::isLetterOrDigit)
+        return verifiedExternalCodeByNormalizedSourceId.values.any { it.equals(candidate, ignoreCase = true) } ||
+            legacyOfflineSets.any { it.ptcgoCode.equals(candidate, ignoreCase = true) }
+    }
 
     fun metadata(set: PokemonSet): PokemonSetMetadata = PokemonSetMetadata(
         setId = set.id,

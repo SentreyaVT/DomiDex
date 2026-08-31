@@ -69,8 +69,9 @@ internal fun DomiStatusBanner(
     tone: DomiStatusTone,
     modifier: Modifier = Modifier,
     action: (@Composable () -> Unit)? = null,
+    accentColor: Color? = null,
 ) {
-    val color = when (tone) {
+    val color = accentColor ?: when (tone) {
         DomiStatusTone.SUCCESS -> MewIce
         DomiStatusTone.INFO -> MewPlum
         DomiStatusTone.WARNING -> VaultGold

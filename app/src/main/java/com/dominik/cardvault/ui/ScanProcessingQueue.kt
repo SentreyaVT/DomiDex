@@ -76,10 +76,11 @@ internal object CardScanCandidateResolver {
         if (!analysis.imageQuality.cardDetected || analysis.imageQuality.reason.isNotBlank()) {
             return ScanCandidateResolution(emptyList(), ScannerDecisionResult(ScannerDecision.REJECTED, reason = analysis.imageQuality.reason.ifBlank { "card_frame_missing" }))
         }
-        val setCode = analysis.setIdentifier ?: return ScanCandidateResolution(emptyList(), ScannerDecisionResult(ScannerDecision.REJECTED, reason = "set_identifier_missing"))
         val number = analysis.collectorNumber ?: return ScanCandidateResolution(emptyList(), ScannerDecisionResult(ScannerDecision.REJECTED, reason = "collector_number_missing"))
         val found = linkedMapOf<Long, CatalogSearchResult>()
-        visualCatalog.findExact(setCode, number).forEach { visualCard ->
+        val visualMatches = analysis.setIdentifier?.let { setCode -> visualCatalog.findExact(setCode, number) }
+            ?: visualCatalog.findByPrintedTotalAndCollectorNumber(number)
+        visualMatches.forEach { visualCard ->
             val products = repository.searchCatalog(visualCard.name, 40)
             visualCard.printVariants.forEach { printing ->
                 val exactProducts = products.filter { product ->
