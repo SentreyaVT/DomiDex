@@ -158,22 +158,29 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                 activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; file.delete(); onCaptureFailed()
             }
         }, 12_000L)
-        controller.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), mainExecutor, object : ImageCapture.OnImageSavedCallback {
-            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                if (activeCaptureId != captureId) { file.delete(); return }
-                activeCaptureId = 0L
-                latestCapture = file; captureInProgress = false
-                LatestCardCapture.path = file.absolutePath
-                captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
-                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                confirmationSound.play(MediaActionSound.SHUTTER_CLICK)
-                onCaptureSaved(file, contributionEligible)
-            }
-            override fun onError(exception: ImageCaptureException) {
-                if (activeCaptureId != captureId) return
-                activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; file.delete(); onCaptureFailed()
-            }
-        })
+        try {
+            controller.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), mainExecutor, object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    if (activeCaptureId != captureId) { file.delete(); return }
+                    activeCaptureId = 0L
+                    latestCapture = file; captureInProgress = false
+                    LatestCardCapture.path = file.absolutePath
+                    captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    confirmationSound.play(MediaActionSound.SHUTTER_CLICK)
+                    onCaptureSaved(file, contributionEligible)
+                }
+                override fun onError(exception: ImageCaptureException) {
+                    if (activeCaptureId != captureId) return
+                    activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; file.delete(); onCaptureFailed()
+                }
+            })
+        } catch (_: IllegalStateException) {
+            // Some emulators and a temporarily unavailable physical camera expose the scanner UI
+            // before CameraX has an initialized lens. A tap must report a recoverable capture
+            // failure, never terminate the whole collection app.
+            activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; file.delete(); onCaptureFailed()
+        }
     }
     LaunchedEffect(quality, autoCaptureEnabled, captureInProgress, torchSettlingUntil) {
         if (autoCaptureEnabled && !captureInProgress && SystemClock.elapsedRealtime() >= torchSettlingUntil && autoCaptureGate.onFrame(quality.level, quality.guidance)) capture(true)

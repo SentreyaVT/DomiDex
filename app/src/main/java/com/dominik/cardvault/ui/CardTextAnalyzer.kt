@@ -12,9 +12,12 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 
 internal enum class CardScript { LATIN, JAPANESE, CHINESE }
 
@@ -189,8 +192,20 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
     private val recognizers: Map<CardScript, TextRecognizer> = mapOf(
         CardScript.LATIN to TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS),
     )
+    // Module 1 uses OpenCV and must never run in the camera callback or Compose main dispatcher.
+    // Two slots match the scanner queue's bounded worker count, keeping memory and native work
+    // predictable even when a collector captures a series quickly.
+    private val preprocessingExecutor = Executors.newFixedThreadPool(2)
 
     fun analyze(file: File, onComplete: (Result<CardTextAnalysis>) -> Unit) {
+        preprocessingExecutor.execute { analyzeNormalized(file, onComplete) }
+    }
+
+    suspend fun analyzeAwait(file: File): Result<CardTextAnalysis> = suspendCancellableCoroutine { continuation ->
+        analyze(file) { result -> if (continuation.isActive) continuation.resume(result) }
+    }
+
+    private fun analyzeNormalized(file: File, onComplete: (Result<CardTextAnalysis>) -> Unit) {
         val normalized = CardImageNormalizer.normalize(file)
         val bitmap = normalized.bitmap
         if (bitmap == null) {
@@ -210,7 +225,9 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
         fun deliver(outcome: Result<CardTextAnalysis>) {
             if (delivered.compareAndSet(false, true)) {
                 timeoutHandler.removeCallbacksAndMessages(null)
-                onComplete(outcome)
+                // ML Kit may complete on a worker; all screen state is deliberately updated on
+                // the main dispatcher, preserving the scan item's own id/state association.
+                timeoutHandler.post { onComplete(outcome) }
             }
         }
         fun parseSnapshot(snapshot: Map<CardScript, Map<Int, String>>): CardTextAnalysis {
@@ -265,7 +282,10 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
         } }
     }
 
-    override fun close() = recognizers.values.forEach(TextRecognizer::close)
+    override fun close() {
+        preprocessingExecutor.shutdownNow()
+        recognizers.values.forEach(TextRecognizer::close)
+    }
 }
 
 private data class OcrInput(val region: CardOcrRegion, val image: InputImage)
@@ -281,9 +301,13 @@ private fun buildOcrInputs(bitmap: Bitmap): List<OcrInput> {
         if (inverted) result += OcrInput(region, InputImage.fromBitmap(invertForOcr(enhanced), 0))
         return result
     }
-    return variants(CardOcrRegion.NAME, CardOcrRois.name) +
-        variants(CardOcrRegion.SET, CardOcrRois.set, inverted = true) +
-        variants(CardOcrRegion.NUMBER, CardOcrRois.number, inverted = true)
+    // Try a small set of layout profiles only after a card has been normalised. This retains the
+    // speed/safety benefit of targeted OCR without assuming one fixed lower-border position.
+    return CardOcrRois.profiles.flatMap { profile ->
+        variants(CardOcrRegion.NAME, profile.name) +
+            variants(CardOcrRegion.SET, profile.set, inverted = true) +
+            variants(CardOcrRegion.NUMBER, profile.number, inverted = true)
+    }
 }
 
 /** Small, allocation-bounded ROI enhancement for glare/low-contrast lower print. */

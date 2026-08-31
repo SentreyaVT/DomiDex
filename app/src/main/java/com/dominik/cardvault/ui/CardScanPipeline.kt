@@ -54,12 +54,27 @@ internal data class CardRoi(val left: Float, val top: Float, val right: Float, v
     }
 }
 
+internal data class CardOcrLayoutProfile(
+    val id: String,
+    val name: CardRoi,
+    val set: CardRoi,
+    val number: CardRoi,
+)
+
 internal object CardOcrRois {
-    // The regions retain a little surrounding artwork/border so modern EX and full-art layouts
-    // are still readable, while attacks, HP and rules text remain outside the primary OCR path.
-    val name = CardRoi(.055f, .055f, .945f, .245f)
-    val set = CardRoi(.035f, .805f, .500f, .985f)
-    val number = CardRoi(.180f, .805f, .735f, .985f)
+    /**
+     * Layout candidates are relative to Module 1's perspective-corrected card, not to the camera
+     * photo. They deliberately overlap at the lower identification band: older borders and modern
+     * full-art layouts move the printed number slightly, while attack text remains excluded.
+     */
+    val profiles = listOf(
+        CardOcrLayoutProfile("modern", CardRoi(.055f, .055f, .945f, .245f), CardRoi(.035f, .805f, .500f, .985f), CardRoi(.180f, .805f, .735f, .985f)),
+        CardOcrLayoutProfile("legacy", CardRoi(.050f, .045f, .950f, .285f), CardRoi(.030f, .755f, .530f, .965f), CardRoi(.130f, .755f, .760f, .965f)),
+        CardOcrLayoutProfile("extended_lower_border", CardRoi(.050f, .050f, .950f, .270f), CardRoi(.025f, .830f, .565f, .995f), CardRoi(.105f, .830f, .805f, .995f)),
+    )
+    val name get() = profiles.first().name
+    val set get() = profiles.first().set
+    val number get() = profiles.first().number
 }
 
 internal enum class CardOcrRegion { NAME, SET, NUMBER }

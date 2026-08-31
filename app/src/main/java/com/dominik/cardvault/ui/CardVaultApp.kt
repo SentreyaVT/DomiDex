@@ -124,6 +124,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.StateFlow
 import com.google.firebase.auth.FirebaseAuth
 
@@ -2475,6 +2477,8 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     var artworkLoading by remember { mutableStateOf(false) }
     var candidatesLoading by remember { mutableStateOf(false) }
     var recentResults by remember { mutableStateOf<List<ScanRailResult>>(emptyList()) }
+    var queuedScans by remember { mutableStateOf<List<QueuedCardScan>>(emptyList()) }
+    var selectedScanId by remember { mutableStateOf<String?>(null) }
     var selectedCandidate by remember { mutableStateOf<CatalogSearchResult?>(null) }
     var manualEvidence by rememberSaveable { mutableStateOf(false) }
     var latestScanFile by remember { mutableStateOf<File?>(null) }
@@ -2487,7 +2491,13 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     var contributionPromptHandled by remember { mutableStateOf(false) }
     val textAnalyzer = remember(context) { CardTextAnalyzer(context) }
     val visualCatalog = remember { PokemonVisualCatalog() }
+    // The camera captures independently. Two bounded workers are enough to overlap OCR/artwork
+    // while preventing a fast scan series from exhausting native OpenCV/ML Kit memory.
+    val processingSlots = remember { Semaphore(permits = 2) }
     DisposableEffect(textAnalyzer) { onDispose { textAnalyzer.close() } }
+    fun updateQueuedScan(id: String, change: (QueuedCardScan) -> QueuedCardScan) {
+        queuedScans = queuedScans.map { scan -> if (scan.id == id) change(scan) else scan }
+    }
     LaunchedEffect(analysis) {
         val current = analysis ?: return@LaunchedEffect
         if (!current.imageQuality.cardDetected || current.imageQuality.reason.isNotBlank()) {
@@ -2627,25 +2637,76 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             LiveCameraScanner(
                 modifier = Modifier.fillMaxSize(),
                 onCaptureStarted = {
-                    analysisRunning = true; analysis = null; analysisFailed = false; candidates = emptyList(); candidateScores = emptyMap(); artworkScores = emptyMap(); artworkLoading = false; latestScanFile = null; feedbackConsentPending = false; feedbackEditorPath = null
+                    // Capture is intentionally independent from prior work items. Do not clear an
+                    // ongoing queue entry here: the camera is free as soon as its JPEG is saved.
                     ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(state = AutoScanState.CAPTURING, reason = "capture_started")
                 },
                 onCaptureSaved = { file, qualityEligible ->
-                    latestScanFile = file
-                    contributionEligible = qualityEligible; contributionMarkedLocal = false; contributionPromptHandled = false
-                    ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(state = AutoScanState.READING, reason = "roi_ocr")
-                    textAnalyzer.analyze(file) { result ->
-                        analysisRunning = false
-                        result.onSuccess { analysis = it }.onFailure {
-                            // Still provide the same exact manual continuation for a
-                            // readable photo whose OCR happened to fail completely.
-                            analysis = CardTextAnalysis(emptyList(), null, null, null, emptyList())
-                            manualEvidence = false
-                            feedbackConsentPending = true
+                    val scan = QueuedCardScan(file = file, qualityEligible = qualityEligible)
+                    queuedScans = listOf(scan) + queuedScans
+                    ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(state = AutoScanState.READING, reason = "queued:${scan.id.take(8)}")
+                    scope.launch {
+                        processingSlots.withPermit {
+                            fun stage(next: ScanPipelineStage, message: String = next.label) {
+                                updateQueuedScan(scan.id) { current ->
+                                    if (current.stage.canTransitionTo(next) || current.stage == next) current.copy(stage = next, message = message) else current
+                                }
+                            }
+                            stage(ScanPipelineStage.PREPROCESSING)
+                            val textResult = textAnalyzer.analyzeAwait(file)
+                            val currentAnalysis = textResult.getOrElse { error ->
+                                updateQueuedScan(scan.id) { it.copy(stage = ScanPipelineStage.FAILED, message = "Texterkennung fehlgeschlagen: ${error.javaClass.simpleName}") }
+                                return@withPermit
+                            }
+                            stage(ScanPipelineStage.OCR)
+                            updateQueuedScan(scan.id) { it.copy(analysis = currentAnalysis, message = ScanPipelineStage.OCR.label) }
+                            if (!currentAnalysis.imageQuality.cardDetected || currentAnalysis.imageQuality.reason.isNotBlank()) {
+                                updateQueuedScan(scan.id) { it.copy(stage = ScanPipelineStage.MANUAL_REVIEW, message = "Kartenfläche nicht sicher erkannt") }
+                                return@withPermit
+                            }
+                            stage(ScanPipelineStage.SET_ANALYSIS)
+                            if (currentAnalysis.setIdentifier == null || currentAnalysis.collectorNumber == null) {
+                                updateQueuedScan(scan.id) { it.copy(stage = ScanPipelineStage.MANUAL_REVIEW, message = "Set-Kennung oder Nummer fehlt") }
+                                return@withPermit
+                            }
+                            stage(ScanPipelineStage.CANDIDATE_SEARCH)
+                            val resolution = withContext(Dispatchers.IO) { CardScanCandidateResolver.resolve(currentAnalysis, repository, visualCatalog) }
+                            updateQueuedScan(scan.id) { it.copy(candidates = resolution.candidates, decision = resolution.decision) }
+                            if (resolution.candidates.isEmpty() || resolution.decision.decision == ScannerDecision.REJECTED) {
+                                updateQueuedScan(scan.id) { it.copy(stage = ScanPipelineStage.MANUAL_REVIEW, message = "Kein eindeutiger Katalogtreffer") }
+                                return@withPermit
+                            }
+                            stage(ScanPipelineStage.ARTWORK_VERIFICATION)
+                            val artwork = currentAnalysis.normalizedCard?.let { captured ->
+                                withContext(Dispatchers.IO) {
+                                    resolution.candidates.take(4).filter { !it.card.imageUrl.isNullOrBlank() }
+                                        .associate { candidate -> candidate.card.productId to CardArtworkVerifier.verify(captured, candidate.card.imageUrl) }
+                                }
+                            }.orEmpty()
+                            updateQueuedScan(scan.id) { it.copy(artwork = artwork) }
+                            stage(ScanPipelineStage.VARIANT_ANALYSIS)
+                            stage(ScanPipelineStage.PRICE_LOOKUP)
+                            val finalStage = if (resolution.decision.decision == ScannerDecision.ACCEPTED) ScanPipelineStage.MATCHED else ScanPipelineStage.AMBIGUOUS
+                            updateQueuedScan(scan.id) { it.copy(
+                                analysis = currentAnalysis.copy(normalizedCard = null),
+                                stage = finalStage,
+                                message = if (finalStage == ScanPipelineStage.MATCHED) "Treffer bereit · Preis wird angezeigt, falls vorhanden" else ScanPipelineStage.AMBIGUOUS.label,
+                            ) }
+                            val bestArtwork = artwork[resolution.candidates.first().card.productId]
+                            ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
+                                state = if (finalStage == ScanPipelineStage.MATCHED) AutoScanState.CONFIRMED else AutoScanState.AMBIGUOUS,
+                                candidateCount = resolution.candidates.size,
+                                finalConfidence = resolution.decision.bestScore,
+                                secondBestConfidence = resolution.decision.secondScore ?: 0,
+                                decision = resolution.decision.decision.name,
+                                reason = resolution.decision.reason,
+                                artworkMatch = bestArtwork?.match?.name.orEmpty(),
+                                artworkConfidence = bestArtwork?.confidence ?: 0f,
+                            )
                         }
                     }
                 },
-                onCaptureFailed = { analysisRunning = false; analysisFailed = true },
+                onCaptureFailed = { analysisFailed = true },
             )
         } else {
             Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -2719,7 +2780,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 }
             }
         }
-        if (recentResults.isNotEmpty()) {
+        if (queuedScans.isNotEmpty() || recentResults.isNotEmpty()) {
             Surface(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 14.dp, vertical = 92.dp),
                 color = VaultNightRaised.copy(alpha = .96f),
@@ -2728,11 +2789,58 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             ) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                     Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Erkannte deutsche Karten", color = VaultText, fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        Text("${recentResults.size} bereit", color = MewIce, fontSize = 11.sp)
-                        TextButton(onClick = { recentResults = emptyList() }) { Text("Leeren", fontSize = 11.sp) }
+                        Text("Scan-Warteschlange", color = VaultText, fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text("${queuedScans.size} aktiv", color = MewIce, fontSize = 11.sp)
+                        TextButton(onClick = { queuedScans = emptyList(); recentResults = emptyList() }) { Text("Leeren", fontSize = 11.sp) }
                     }
                     LazyRow(contentPadding = PaddingValues(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(queuedScans, key = { it.id }) { scan ->
+                            val best = scan.candidates.firstOrNull()
+                            val actionable = scan.stage in setOf(ScanPipelineStage.MATCHED, ScanPipelineStage.AMBIGUOUS, ScanPipelineStage.MANUAL_REVIEW)
+                            OutlinedCard(
+                                onClick = {
+                                    if (!actionable) return@OutlinedCard
+                                    selectedScanId = scan.id
+                                    latestScanFile = scan.file
+                                    contributionEligible = scan.qualityEligible; contributionMarkedLocal = false; contributionPromptHandled = false
+                                    when (scan.stage) {
+                                        ScanPipelineStage.MATCHED -> best?.let { selectedCandidate = it.card }
+                                        ScanPipelineStage.AMBIGUOUS -> {
+                                            analysis = scan.analysis
+                                            candidates = scan.candidates.map(ScanCandidate::card)
+                                            candidateScores = scan.candidates.associate { it.card.productId to it.score }
+                                            artworkScores = scan.artwork
+                                        }
+                                        ScanPipelineStage.MANUAL_REVIEW -> {
+                                            analysis = scan.analysis ?: CardTextAnalysis(emptyList(), null, null, null, emptyList())
+                                            manualEvidence = true
+                                        }
+                                        else -> Unit
+                                    }
+                                },
+                                modifier = Modifier.width(176.dp),
+                                enabled = actionable,
+                                colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface),
+                            ) {
+                                Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    AsyncImage(
+                                        model = scan.file,
+                                        contentDescription = "Lokale Vorschau der aufgenommenen Karte",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(8.dp)).background(VaultNight),
+                                    )
+                                    Text(best?.card?.name ?: "Karte wird verarbeitet", color = VaultText, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(best?.card?.let { "${it.visualSetName ?: it.expansionId} · ${it.collectorNumber ?: "Nr. prüfen"}" } ?: scan.message, color = VaultTextMuted, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text(scan.stage.label, color = if (scan.stage == ScanPipelineStage.FAILED) VaultGold else MewIce, fontSize = 10.sp)
+                                    best?.let { candidate ->
+                                        Text("Abgleich: ${CardRecognitionRanker.label(candidate.score)}", color = MewIce, fontSize = 10.sp)
+                                        candidate.card.trendPriceEur?.let { price -> Text("Cardmarket: ${euro(price)}", color = MewIce, fontSize = 10.sp) }
+                                    }
+                                    if (scan.stage == ScanPipelineStage.AMBIGUOUS) Text("Antippen zum Prüfen", color = MewRoseSoft, fontSize = 10.sp)
+                                    if (scan.stage == ScanPipelineStage.MANUAL_REVIEW) Text("Antippen für Set + Nummer", color = MewRoseSoft, fontSize = 10.sp)
+                                }
+                            }
+                        }
                         items(recentResults, key = { "${it.candidate.productId}-${it.candidate.collectorNumber}-${it.candidate.finish}" }) { result ->
                             OutlinedCard(
                                 onClick = { selectedCandidate = result.candidate },
@@ -2753,8 +2861,16 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     }
     selectedCandidate?.let { candidate ->
         ScanAddDialog(candidate, onDismiss = { selectedCandidate = null }) { input ->
-            scope.launch { repository.addManualCard(input) }
+            scope.launch {
+                repository.addManualCard(input)
+                selectedScanId?.let { scanId ->
+                    updateQueuedScan(scanId) { scan ->
+                        if (scan.stage == ScanPipelineStage.MATCHED) scan.copy(stage = ScanPipelineStage.SAVED, message = ScanPipelineStage.SAVED.label) else scan
+                    }
+                }
+            }
             selectedCandidate = null
+            selectedScanId = null
         }
     }
     if (manualEvidence) {
