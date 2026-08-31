@@ -6,6 +6,5 @@
         <item name="android:navigationBarColor">@color/launch_night</item>
         <item name="android:statusBarColor">@color/launch_night</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

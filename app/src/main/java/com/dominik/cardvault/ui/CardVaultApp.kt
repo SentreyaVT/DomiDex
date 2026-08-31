@@ -18,6 +18,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
@@ -81,6 +82,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.pm.PackageInfoCompat
 import com.dominik.cardvault.R
 import com.dominik.cardvault.auth.FirebaseGoogleAuthGateway
 import com.dominik.cardvault.auth.FirebaseGitHubAuthGateway
@@ -130,9 +132,13 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.StateFlow
 import com.google.firebase.auth.FirebaseAuth
 
-private enum class Destination(@param:StringRes val label: Int, val glyph: String) {
-    DASHBOARD(R.string.nav_portfolio, "⌂"), SCANNER(R.string.nav_scanner, "▣"),
-    BINDER(R.string.nav_binder, "▥"), GRADING(R.string.nav_grading, "◇"), SETTINGS(R.string.nav_settings, "⚙")
+private enum class Destination(@param:StringRes val label: Int, val icon: DomiIconKind, val showInNavigation: Boolean = true) {
+    DASHBOARD(R.string.nav_portfolio, DomiIconKind.HOME),
+    SCANNER(R.string.nav_scanner, DomiIconKind.SCAN),
+    BINDER(R.string.nav_binder, DomiIconKind.BINDER),
+    COLLECTION(R.string.nav_collection, DomiIconKind.COLLECTION),
+    SETTINGS(R.string.nav_settings, DomiIconKind.SETTINGS),
+    GRADING(R.string.nav_grading, DomiIconKind.CARD, showInNavigation = false),
 }
 
 private data class TutorialStep(val title: String, val body: String, val destination: Destination)
@@ -163,16 +169,17 @@ private val relaxedTutorialSteps = listOf(
         // The launch moment is deliberately the only visible surface. Navigation
         // appears only after local warm-up has completed.
         if (!showArrival && destination != Destination.SCANNER) DomiDexBottomNavigation(destination) { destination = it }
-    }) { padding -> Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(VaultNight, Color(0xFF121024), VaultNight))).padding(padding)) {
+    }) { padding -> DomiDexBackdrop(Modifier.padding(padding)) {
         AnimatedContent(
             targetState = destination,
             transitionSpec = { (fadeIn(tween(DomiMotion.Fast)) + slideInHorizontally(tween(DomiMotion.Fast)) { it / 12 }) togetherWith (fadeOut(tween(DomiMotion.Fast)) + slideOutHorizontally(tween(DomiMotion.Fast)) { -it / 16 }) },
             label = "domidex-destination",
         ) { shownDestination ->
             when (shownDestination) {
-                Destination.DASHBOARD -> DashboardScreen(portfolio, binders, contentUpdates, focusChoice, { choice -> focusChoice = choice; preferences.edit().putString("dashboard_focus", choice).apply() }, openBinder = { destination = Destination.BINDER }, openScanner = { destination = Destination.SCANNER })
+                Destination.DASHBOARD -> DashboardScreen(portfolio, binders, contentUpdates, focusChoice, { choice -> focusChoice = choice; preferences.edit().putString("dashboard_focus", choice).apply() }, openBinder = { destination = Destination.BINDER }, openScanner = { destination = Destination.SCANNER }, openGrading = { destination = Destination.GRADING })
                 Destination.SCANNER -> ScannerScreen(repository) { destination = Destination.DASHBOARD }
                 Destination.BINDER -> BinderScreen(portfolio.cards, repository)
+                Destination.COLLECTION -> CollectionScreen(portfolio.cards, repository)
                 Destination.GRADING -> GradingScreen()
                 Destination.SETTINGS -> SettingsScreen(repository, portfolio, refreshCatalog)
             }
@@ -217,40 +224,39 @@ private val relaxedTutorialSteps = listOf(
 /** GPU-friendly, screen-local navigation; the Binder remains the visual center action. */
 @Composable private fun DomiDexBottomNavigation(selected: Destination, onSelected: (Destination) -> Unit) {
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-        color = VaultNightRaised.copy(alpha = .96f),
-        shape = RoundedCornerShape(28.dp),
-        border = BorderStroke(1.dp, MewPlum.copy(alpha = .42f)),
-        shadowElevation = 12.dp,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = CardVaultSpacing.navHorizontal, vertical = CardVaultSpacing.navVertical),
+        color = VaultGlassHigh,
+        shape = RoundedCornerShape(22.dp),
+        border = BorderStroke(1.dp, VaultOutline.copy(alpha = .72f)),
+        shadowElevation = 8.dp,
     ) {
-        Row(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-            Destination.entries.forEach { item ->
+        Row(Modifier.fillMaxWidth().height(CardVaultSpacing.bottomNavHeight).padding(horizontal = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+            Destination.entries.filter { it.showInNavigation }.forEach { item ->
                 val active = selected == item
-                val iconLift by animateFloatAsState(if (active) -3f else 0f, tween(DomiMotion.Fast), label = "nav-lift-${item.name}")
-                val iconScale by animateFloatAsState(if (active) if (item == Destination.BINDER) 1.16f else 1.06f else 1f, tween(DomiMotion.Fast), label = "nav-scale-${item.name}")
-                val tint by animateFloatAsState(if (active) 1f else .55f, tween(DomiMotion.Fast), label = "nav-tint-${item.name}")
+                val iconLift by animateFloatAsState(if (active) -2f else 0f, tween(DomiMotion.Fast), label = "nav-lift-${item.name}")
+                val iconScale by animateFloatAsState(if (active) if (item == Destination.BINDER) 1.1f else 1.04f else 1f, tween(DomiMotion.Fast), label = "nav-scale-${item.name}")
                 val interaction = remember { MutableInteractionSource() }
                 Box(
                     Modifier.weight(1f).fillMaxHeight().clickable(interactionSource = interaction, indication = null) { onSelected(item) },
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (item == Destination.BINDER) {
-                        val borderAlpha = if (active) {
-                            rememberInfiniteTransition(label = "binder-nav-pulse").animateFloat(.40f, .78f, infiniteRepeatable(tween(2_600), RepeatMode.Reverse), label = "binder-nav-glow").value
-                        } else .25f
-                        Surface(
-                            modifier = Modifier.size(56.dp).graphicsLayer { scaleX = iconScale; scaleY = iconScale; translationY = iconLift },
-                            color = if (active) MewPlumDeep else VaultPlumSurface,
-                            shape = RoundedCornerShape(22.dp),
-                            border = BorderStroke(1.dp, MewRose.copy(alpha = borderAlpha)),
-                            shadowElevation = if (active) 10.dp else 0.dp,
-                        ) { Box(contentAlignment = Alignment.Center) { Text(item.glyph, color = if (active) MewRose else VaultTextMuted, fontSize = 23.sp, fontWeight = FontWeight.Black) } }
-                    } else {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, modifier = Modifier.graphicsLayer { translationY = iconLift }) {
-                            Text(item.glyph, modifier = Modifier.clearAndSetSemantics { }, color = if (active) MewRose.copy(alpha = tint) else VaultTextMuted.copy(alpha = tint), fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            Text(stringResource(item.label), color = if (active) VaultText else VaultTextMuted, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Box(Modifier.padding(top = 3.dp).width(if (active) 18.dp else 4.dp).height(2.dp).background(if (active) MewIce else Color.Transparent, RoundedCornerShape(2.dp)))
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, modifier = Modifier.graphicsLayer { translationY = iconLift }) {
+                        val iconBox = if (item == Destination.BINDER) 38.dp else 30.dp
+                        Box(
+                            Modifier.size(iconBox).graphicsLayer { scaleX = iconScale; scaleY = iconScale }
+                                .background(
+                                    if (active) MewPlumDeep.copy(alpha = .82f) else Color.Transparent,
+                                    RoundedCornerShape(if (item == Destination.BINDER) 13.dp else 10.dp),
+                                )
+                                .then(
+                                    if (active) Modifier.border(1.dp, MewRose.copy(alpha = .48f), RoundedCornerShape(if (item == Destination.BINDER) 13.dp else 10.dp))
+                                    else Modifier,
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            DomiLineIcon(item.icon, if (active) MewRose else VaultTextMuted, Modifier.size(if (item == Destination.BINDER) 21.dp else 18.dp))
                         }
+                        Text(stringResource(item.label), color = if (active) VaultText else VaultTextMuted, fontSize = 8.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -285,22 +291,52 @@ private val relaxedTutorialSteps = listOf(
     var betaPassword by rememberSaveable { mutableStateOf("") }
     var adminUnlocked by rememberSaveable { mutableStateOf(false) }
     val accountActive = remember { FirebaseAuth.getInstance().currentUser != null }
-    val categories = listOf(
-        "Konto" to if (accountActive) "Google-Anmeldung auf diesem Gerät aktiv" else "Optional · Sammlung bleibt lokal nutzbar",
-        "App" to "Sprache, lokale Inhalte und Updates",
-        "Update" to "Aktuellste DomiDex-Version sicher prüfen",
-        "Scanner" to "Kamera, Fotos und Erkennung verständlich erklärt",
-        "Binder & Sync" to "Lokale Sammlung und Katalogstatus",
-        "Preise" to "Cardmarket-Quelle und Aktualität",
-        "Sammlung & Backup" to "Lokale Sicherung als DomiDex-Datei",
-        "Datenschutz" to "Deine Daten, Einwilligungen und DSGVO-Hinweise",
-        "Hilfe" to "Schnellstart, Korrekturen und Support",
-        "Über DomiDex" to "Wofür DomiDex steht – und wofür nicht",
+    data class SettingEntry(val title: String, val subtitle: String, val icon: DomiIconKind, val value: String? = null)
+    val groups = listOf(
+        "Konto" to listOf(
+            SettingEntry("Konto", if (accountActive) "Google-Anmeldung auf diesem Gerät aktiv" else "Optional · Sammlung bleibt lokal nutzbar", DomiIconKind.PROFILE, if (accountActive) "Aktiv" else null),
+        ),
+        "DomiDex" to listOf(
+            SettingEntry("App", "Sprache und lokale Inhalte", DomiIconKind.HOME, "Deutsch"),
+            SettingEntry("Update", "Aktuellste DomiDex-Version sicher prüfen", DomiIconKind.SYNC),
+            SettingEntry("Scanner", "Kamera, Fotos und Erkennung", DomiIconKind.SCAN),
+        ),
+        "Sammlung" to listOf(
+            SettingEntry("Binder & Sync", "Lokale Sammlung und Katalogstatus", DomiIconKind.BINDER, when (sync.state) {
+                "SUCCESS" -> "Aktuell"
+                "RUNNING" -> "Läuft"
+                "ERROR" -> "Prüfen"
+                else -> "Lokal"
+            }),
+            SettingEntry("Preise", "Cardmarket-Quelle und Aktualität", DomiIconKind.MARKET, "Cardmarket"),
+            SettingEntry("Sammlung & Backup", "Lokale Sicherung als DomiDex-Datei", DomiIconKind.COLLECTION),
+        ),
+        "Sicherheit & Hilfe" to listOf(
+            SettingEntry("Datenschutz", "Deine Daten und Einwilligungen", DomiIconKind.SHIELD),
+            SettingEntry("Hilfe", "Schnellstart, Korrekturen und Support", DomiIconKind.INFO),
+            SettingEntry("Über DomiDex", "Wofür DomiDex steht", DomiIconKind.CARD),
+        ),
     )
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { ScreenHeader("Einstellungen", "Dein DomiDex", "Verstehen, steuern, bei dir behalten.") }
-        items(categories, key = { it.first }) { (title, subtitle) -> OutlinedCard(onClick = { detail = title }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised)) { Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) { Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, color = VaultTextMuted, fontSize = 11.sp) }; Text("›", color = MewRose, fontSize = 24.sp) } } }
-        item { OutlinedButton(onClick = { passwordDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("Admin / Entwickler") } }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
+        item { DomiScreenTitle("Einstellungen", eyebrow = "DomiDex", subtitle = "Ruhig, verständlich und vollständig bei dir.") }
+        groups.forEach { (groupTitle, entries) ->
+            item(key = "header-$groupTitle") { DomiSectionTitle(groupTitle) }
+            item(key = "group-$groupTitle") {
+                DomiGlassCard(Modifier.fillMaxWidth()) {
+                    Column {
+                        entries.forEachIndexed { index, entry ->
+                            DomiSettingRow(entry.icon, entry.title, entry.subtitle, entry.value) { detail = entry.title }
+                            if (index != entries.lastIndex) HorizontalDivider(color = VaultOutlineSoft, modifier = Modifier.padding(start = 60.dp))
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            DomiGlassCard(Modifier.fillMaxWidth()) {
+                DomiSettingRow(DomiIconKind.SHIELD, "Admin / Entwickler", "Interne Werkzeuge bleiben geschützt") { passwordDialog = true }
+            }
+        }
     }
     detail?.let { section ->
         if (section == "Konto") AccountSettingsDialog(onDismiss = { detail = null })
@@ -625,7 +661,7 @@ private fun readDomiDexBackup(input: InputStream): BackupImportPayload {
     var showDevUpdateDialog by rememberSaveable { mutableStateOf(false) }
     val log = remember(portfolio.totalCards, sync.state, online) { buildString {
         appendLine("DomiDex Support Log")
-        appendLine("App-Version: ${packageInfo.versionName} (${packageInfo.longVersionCode})")
+        appendLine("App-Version: ${packageInfo.versionName} (${PackageInfoCompat.getLongVersionCode(packageInfo)})")
         appendLine("Android: ${android.os.Build.VERSION.RELEASE} · ${android.os.Build.MODEL}")
         appendLine("Online: ${if (online) "OK" else "EINGESCHRÄNKT"}")
         appendLine("Google-Anmeldung: ${if (FirebaseAuth.getInstance().currentUser == null) "nicht aktiv" else "aktiv"}")
@@ -642,7 +678,7 @@ private fun readDomiDexBackup(input: InputStream): BackupImportPayload {
     val scope = rememberCoroutineScope()
     val packageInfo = remember { context.packageManager.getPackageInfo(context.packageName, 0) }
     val version = remember(packageInfo) { packageInfo.versionName ?: "Unbekannt" }
-    val buildNumber = remember(packageInfo) { packageInfo.longVersionCode }
+    val buildNumber = remember(packageInfo) { PackageInfoCompat.getLongVersionCode(packageInfo) }
     var note by rememberSaveable { mutableStateOf("") }
     var screenshots by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var video by remember { mutableStateOf<Uri?>(null) }
@@ -716,15 +752,21 @@ private fun isDebuggableBuild(context: Context): Boolean =
     // live portfolio state so a just-added card immediately replaces its shadow slot.
     var selectedSetName by remember { mutableStateOf<String?>(null) }
     var openingBinder by remember { mutableStateOf<String?>(null) }
+    var openingStage by remember { mutableStateOf(BinderPresentationStage.IDLE) }
+    val motionEnabled = rememberDomiMotionEnabled()
     var adding by remember { mutableStateOf(false) }
     var choosingCatalog by remember { mutableStateOf(false) }
     var catalogDraft by remember { mutableStateOf<CatalogSearchResult?>(null) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(openingBinder) {
+    LaunchedEffect(openingBinder, motionEnabled) {
         openingBinder?.let { pendingSetName ->
-            delay(DomiMotion.Fast.toLong()) // UI-only cover opening beat; collection data is untouched.
+            binderPresentationBeats(motionEnabled).forEach { beat ->
+                openingStage = beat.stage
+                if (beat.durationMillis > 0L) delay(beat.durationMillis)
+            }
             selectedSetName = pendingSetName
             openingBinder = null
+            openingStage = BinderPresentationStage.IDLE
         }
     }
     LaunchedEffect(Unit) {
@@ -786,33 +828,44 @@ private fun isDebuggableBuild(context: Context): Boolean =
         )
         return
     }
-    LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item { ScreenHeader("DomiDex Binder", "Deine Binder", "Sets, Cover und freie Plätze auf einen Blick.") }
-        item { BinderFocusHero() }
-        item { Button(onClick = { choosingCatalog = true }, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card) { Text("Karte zum Binder hinzufügen", fontWeight = FontWeight.Bold) } }
-        grouped.forEach { (setName, setCards) ->
-            val capacity = cardCapacityFor(setName, setCards)
-            val binderPages = (capacity + 8) / 9
-            val progress = if (isWachsendesChaosSet(setName)) setCards.distinctBy { "${it.number}|${it.finish}|${it.variant}" }.size else setCards.distinctBy { it.number }.size
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            item { DomiScreenTitle("Deine Binder", eyebrow = "DomiDex Binder", subtitle = "Sammeln, öffnen und wie in einem echten Album blättern.") }
+            item { BinderFocusHero() }
             item {
-                OutlinedCard(onClick = { openingBinder = setName }, shape = CardVaultShapes.card, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), border = BorderStroke(1.dp, if (openingBinder == setName) MewRose else MewPlum.copy(alpha = .42f))) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            DomiBinderCover(setName, coverFor(setName), openingBinder == setName)
-                            Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                                val pricedCards = setCards.filter { it.priceUpdatedAtEpochMillis != null }
-                                Text(setName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                Text("DomiDex-Sammelalbum · $binderPages Kartenseiten für $capacity Karten", color = VaultTextMuted, fontSize = 12.sp)
-                                Text("Fortschritt: $progress/$capacity · ${setCards.sumOf { it.quantity }} im Besitz", color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                Text("Cardmarket-Trendwert: ${if (pricedCards.isEmpty()) "Kein Trendpreis verfügbar" else euro(pricedCards.sumOf { it.currentValueEur * it.quantity })} · ${pricedCards.sumOf { it.quantity }}/${setCards.sumOf { it.quantity }} bepreist", color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                                Text("Öffnen und durchblättern ›", color = MewRoseSoft, fontSize = 11.sp)
-                            }
-                            MasterSetProgressRing(progress, capacity)
-                        }
-                    }
+                Button(onClick = { choosingCatalog = true }, modifier = Modifier.fillMaxWidth().height(CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card, colors = ButtonDefaults.buttonColors(containerColor = MewPlumDeep, contentColor = VaultText), border = BorderStroke(1.dp, MewRose.copy(alpha = .72f))) {
+                    DomiLineIcon(DomiIconKind.ADD, MaterialTheme.colorScheme.onPrimary, Modifier.size(17.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Karte zum Binder hinzufügen", fontWeight = FontWeight.Bold)
+                }
+            }
+            if (grouped.isEmpty()) item {
+                DomiEmptyState(
+                    title = "Noch kein Binder",
+                    body = "Sobald du eine Karte hinzufügst, entsteht ihr Set-Binder automatisch.",
+                    actionLabel = "Karte hinzufügen",
+                    onAction = { choosingCatalog = true },
+                )
+            }
+            grouped.forEach { (setName, setCards) ->
+                val capacity = cardCapacityFor(setName, setCards)
+                val progress = if (isWachsendesChaosSet(setName)) setCards.distinctBy { "${it.number}|${it.finish}|${it.variant}" }.size else setCards.distinctBy { it.number }.size
+                item(key = "binder-$setName") {
+                    val pricedCards = setCards.filter { it.priceUpdatedAtEpochMillis != null }
+                    DomiBinderShelfCard(
+                        title = setName,
+                        owned = progress,
+                        total = capacity,
+                        cardCount = setCards.sumOf { it.quantity },
+                        marketValue = if (pricedCards.isEmpty()) "Kein Trendpreis verfügbar" else "Binderwert ${euro(pricedCards.sumOf { it.currentValueEur * it.quantity })}",
+                        logoUrl = coverFor(setName),
+                        selected = openingBinder == setName,
+                        onClick = { if (openingBinder == null) openingBinder = setName },
+                    )
                 }
             }
         }
+        openingBinder?.let { setName -> BinderOpeningOverlay(setName, openingStage) }
     }
     if (choosingCatalog) CatalogProductPicker(repository, onDismiss = { choosingCatalog = false }, onSelected = { result ->
         // Never shortcut a catalog tap into a fixed normal-card insertion. The existing dialog
@@ -826,21 +879,19 @@ private fun isDebuggableBuild(context: Context): Boolean =
 }
 
 @Composable private fun BinderFocusHero() {
-    val motion = rememberInfiniteTransition(label = "binder-focus")
-    val pulse by motion.animateFloat(.92f, 1.08f, infiniteRepeatable(tween(1_900, easing = LinearEasing), RepeatMode.Reverse), label = "binder-glow")
-    OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().height(112.dp), contentAlignment = Alignment.CenterStart) {
+    DomiGlassCard(Modifier.fillMaxWidth(), highlighted = true) {
+        Box(Modifier.fillMaxWidth().height(152.dp), contentAlignment = Alignment.CenterStart) {
             Canvas(Modifier.matchParentSize().clearAndSetSemantics { }) {
                 val center = Offset(size.width * .83f, size.height * .5f)
-                drawCircle(MewRose.copy(alpha = .10f), size.minDimension * .72f * pulse, center)
-                drawCircle(MewIce.copy(alpha = .13f), size.minDimension * .42f * pulse, center, style = Stroke(3f))
-                repeat(7) { index -> drawCircle(MewIce.copy(alpha = .46f), 3f, Offset(center.x + (index - 3) * 14f, center.y + kotlin.math.sin(index.toDouble()).toFloat() * 24f)) }
+                drawCircle(MewRose.copy(alpha = .08f), size.minDimension * .72f, center)
+                drawCircle(MewIce.copy(alpha = .10f), size.minDimension * .42f, center, style = Stroke(2f))
             }
-            Column(Modifier.padding(18.dp).fillMaxWidth(.7f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("DEIN FOKUS", color = MewRoseSoft, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.4.sp)
-                Text("Binder zuerst.", color = VaultText, fontWeight = FontWeight.Black, fontSize = 23.sp)
-                Text("Sammeln, Fortschritt sehen, Karte öffnen.", color = VaultTextMuted, fontSize = 12.sp)
+            Column(Modifier.padding(18.dp).fillMaxWidth(.62f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("DEIN FOKUS", color = MewRose, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.4.sp)
+                Text("Binder zuerst.", color = VaultText, style = MaterialTheme.typography.headlineMedium)
+                Text("Deine Karten bleiben sichtbar, greifbar und nach Sets geordnet.", color = VaultTextMuted, fontSize = 11.sp, lineHeight = 15.sp)
             }
+            DomiPhysicalBinder("DomiDex", 0f, Modifier.align(Alignment.CenterEnd).padding(end = 13.dp).size(112.dp, 112.dp))
         }
     }
 }
@@ -960,37 +1011,84 @@ private fun isDebuggableBuild(context: Context): Boolean =
     val pricedBinderCards = remember(cards) { cards.filter { it.priceUpdatedAtEpochMillis != null }.sumOf { it.quantity } }
     val binderCards = remember(cards) { cards.sumOf { it.quantity } }
     var binderDeletionStage by rememberSaveable { mutableIntStateOf(0) }
+    var pageDragFraction by remember { mutableFloatStateOf(0f) }
+    var insertionCard by remember { mutableStateOf<CollectionCard?>(null) }
+    var readerStage by remember { mutableStateOf(BinderPresentationStage.READY) }
+    val motionEnabled = rememberDomiMotionEnabled()
     val scope = rememberCoroutineScope()
-    Column(Modifier.fillMaxSize().padding(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("‹ Sammelalben") }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(setName, color = VaultText, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("Seite ${page + 1} von ${faces.size} · ${arrangedCards.size} Sammelplätze", color = VaultTextMuted, fontSize = 11.sp)
-                if (referencesLoading) Text("Deutsche Setvarianten werden geprüft …", color = MewIce, fontSize = 10.sp)
-                Text("Binderwert: ${if (pricedBinderCards == 0) "Kein Marktwert verfügbar" else euro(binderValue)} · $pricedBinderCards/$binderCards bepreist", color = MewIce, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-            }
-            TextButton(onClick = { refreshVersion++ }, enabled = !referencesLoading) { Text("↻", color = MewIce, fontSize = 18.sp) }
-            if (coverUrl != null) AsyncImage(coverUrl, "Set-Umschlag", Modifier.size(58.dp, 34.dp)) else Text("DM", color = MewRose, fontWeight = FontWeight.Black)
+    fun closeBinder() {
+        if (readerStage in setOf(BinderPresentationStage.CLOSING, BinderPresentationStage.RETURNING)) return
+        if (!motionEnabled) onBack() else scope.launch {
+            readerStage = BinderPresentationStage.CLOSING
+            delay(230)
+            readerStage = BinderPresentationStage.RETURNING
+            delay(120)
+            onBack()
         }
-        if (ownedBinderId != null || onHideReferenceBinder != null) TextButton(onClick = { binderDeletionStage = 1 }, modifier = Modifier.align(Alignment.End)) {
-            Text("Binder löschen", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+    }
+    BackHandler(onBack = ::closeBinder)
+    Box(Modifier.fillMaxSize()) {
+      Column(Modifier.fillMaxSize().padding(CardVaultSpacing.screenCompact), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Surface(onClick = ::closeBinder, color = VaultNightRaised, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, VaultOutlineSoft)) {
+                Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.BACK, VaultText, Modifier.size(18.dp)) }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(setName, color = VaultText, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    when (page) {
+                        0 -> "Vorderseite · ${arrangedCards.size} Sammelplätze"
+                        faces.lastIndex -> "Rückseite · ${arrangedCards.size} Sammelplätze"
+                        else -> "Kartenseite $page von $binderPageCount"
+                    },
+                    color = VaultTextMuted,
+                    fontSize = 10.sp,
+                )
+            }
+            Surface(onClick = { refreshVersion++ }, enabled = !referencesLoading, color = VaultNightRaised, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, VaultOutlineSoft)) {
+                Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.SYNC, if (referencesLoading) VaultTextMuted else MewIce, Modifier.size(18.dp)) }
+            }
+            if (coverUrl != null) AsyncImage(coverUrl, "Set-Umschlag", Modifier.size(52.dp, 30.dp)) else DomiDexBrandMark(size = 34.dp)
+        }
+        DomiGlassCard(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(if (pricedBinderCards == 0) "Kein Marktwert verfügbar" else euro(binderValue), color = if (pricedBinderCards == 0) VaultTextMuted else VaultText, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("Cardmarket-Trendwert · $pricedBinderCards/$binderCards bepreist", color = VaultTextMuted, fontSize = 9.sp)
+                    if (referencesLoading) Text("Deutsche Setvarianten werden geprüft …", color = MewIce, fontSize = 9.sp)
+                }
+                if (ownedBinderId != null || onHideReferenceBinder != null) TextButton(onClick = { binderDeletionStage = 1 }) {
+                    Text("Verwalten", color = VaultTextMuted, fontSize = 10.sp)
+                }
+            }
         }
         AnimatedContent(targetState = page, modifier = Modifier.weight(1f), transitionSpec = {
             if (targetState > initialState) (slideInHorizontally(tween(DomiMotion.Normal)) { it } + fadeIn(tween(DomiMotion.Fast))) togetherWith (slideOutHorizontally(tween(DomiMotion.Normal)) { -it } + fadeOut(tween(DomiMotion.Fast)))
             else (slideInHorizontally(tween(DomiMotion.Normal)) { -it } + fadeIn(tween(DomiMotion.Fast))) togetherWith (slideOutHorizontally(tween(DomiMotion.Normal)) { it } + fadeOut(tween(DomiMotion.Fast)))
         }, label = "Vollbild-Sammelalbumseite") { index ->
-            val pageModifier = Modifier.fillMaxSize().pointerInput(page) {
+            val pageModifier = Modifier.fillMaxSize().graphicsLayer {
+                rotationY = -pageDragFraction * 16f
+                transformOrigin = TransformOrigin(if (pageDragFraction < 0f) 1f else 0f, .5f)
+                cameraDistance = 18f * density
+                shadowElevation = kotlin.math.abs(pageDragFraction) * 14.dp.toPx()
+            }.pointerInput(page) {
                 var horizontalTravel = 0f
                 detectDragGestures(
-                    onDragStart = { horizontalTravel = 0f },
-                    onDrag = { change, amount -> change.consume(); horizontalTravel += amount.x },
+                    onDragStart = { horizontalTravel = 0f; readerStage = BinderPresentationStage.PAGE_TURNING },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        horizontalTravel += amount.x
+                        pageDragFraction = (horizontalTravel / size.width).coerceIn(-1f, 1f)
+                    },
                     onDragEnd = {
                         when {
                             horizontalTravel < -80f && page < faces.lastIndex -> page++
                             horizontalTravel > 80f && page > 0 -> page--
                         }
+                        pageDragFraction = 0f
+                        readerStage = BinderPresentationStage.READY
                     },
+                    onDragCancel = { pageDragFraction = 0f; readerStage = BinderPresentationStage.READY },
                 )
             }.clickable { if (page < faces.lastIndex) page++ }
             FullBinderFace(
@@ -1003,9 +1101,18 @@ private fun isDebuggableBuild(context: Context): Boolean =
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = { page-- }, enabled = page > 0) { Text("‹ Zurück") }
-            Text("DOMIDEX", color = MewRoseSoft, fontWeight = FontWeight.Black, fontSize = 11.sp, letterSpacing = 2.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                val visibleDots = minOf(faces.size, 9)
+                repeat(visibleDots) { dot ->
+                    val represented = if (faces.size <= visibleDots) dot else (dot * faces.lastIndex / (visibleDots - 1))
+                    Box(Modifier.size(if (represented == page) 14.dp else 4.dp, 4.dp).background(if (represented == page) MewRose else VaultOutline, RoundedCornerShape(99.dp)))
+                }
+            }
             Button(onClick = { page++ }, enabled = page < faces.lastIndex) { Text("Weiter ›") }
         }
+      }
+      insertionCard?.let { BinderInsertionOverlay(it) }
+      if (readerStage in setOf(BinderPresentationStage.CLOSING, BinderPresentationStage.RETURNING)) BinderOpeningOverlay(setName, readerStage)
     }
     selectedCard?.let { card ->
         CardPreviewDialog(
@@ -1042,6 +1149,11 @@ private fun isDebuggableBuild(context: Context): Boolean =
                         )
                     }.onSuccess {
                         selectedCard = null
+                        readerStage = BinderPresentationStage.CARD_INSERTING
+                        insertionCard = card
+                        delay(850)
+                        insertionCard = null
+                        readerStage = BinderPresentationStage.READY
                     }
                     addingReferenceId = null
                 }
@@ -1344,60 +1456,29 @@ private fun physicalBinderSpreads(cards: List<CollectionCard>): List<BinderSprea
 
 @Composable
 private fun ArrivalMoment(onContinue: () -> Unit) {
-    val motion = rememberInfiniteTransition(label = "launch-motion")
-    val orbit by motion.animateFloat(0f, 1f, infiniteRepeatable(tween(4_800, easing = LinearEasing), RepeatMode.Restart), label = "orbit")
-    val pulse by motion.animateFloat(.88f, 1.12f, infiniteRepeatable(tween(1_200, easing = LinearEasing), RepeatMode.Reverse), label = "pulse")
-    val glow by motion.animateFloat(.18f, .74f, infiniteRepeatable(tween(1_750, easing = LinearEasing), RepeatMode.Reverse), label = "glow")
-    var loading by remember { mutableFloatStateOf(.03f) }
-    val progress by animateFloatAsState(loading, animationSpec = tween(3_000, easing = LinearEasing), label = "launch-load")
+    var loading by remember { mutableFloatStateOf(.04f) }
+    val progress by animateFloatAsState(loading, animationSpec = tween(850, easing = LinearEasing), label = "launch-load")
     LaunchedEffect(Unit) {
         loading = 1f
-        delay(3_250)
+        delay(1_050)
         onContinue()
     }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(VaultNight, Color(0xFF151326), VaultNight)))
-            // Deliberately consume every tap while local startup work settles.
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { },
-        contentAlignment = Alignment.Center,
+    DomiDexBackdrop(
+        Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { },
     ) {
-        Canvas(Modifier.matchParentSize().clearAndSetSemantics { }) {
-            val center = Offset(size.width / 2f, size.height / 2f)
-            val unit = size.minDimension
-            drawCircle(MewIce.copy(alpha = .04f + glow * .05f), radius = unit * (.44f + glow * .12f), center = center)
-            drawCircle(MewRose.copy(alpha = .06f), radius = unit * .66f, center = Offset(size.width * .12f, size.height * .90f))
-            repeat(3) { ring -> drawCircle(MewIce.copy(alpha = (.10f - ring * .02f).coerceAtLeast(.02f)), radius = unit * (.16f + ring * .085f + glow * .025f), center = center, style = Stroke(2.2f)) }
-            repeat(20) { index ->
-                val angle = (index / 20f + orbit) * (Math.PI * 2.0)
-                val radius = unit * (.20f + (index % 4) * .055f)
-                val x = center.x + kotlin.math.cos(angle).toFloat() * radius
-                val y = center.y + kotlin.math.sin(angle).toFloat() * radius
-                drawCircle(if (index % 2 == 0) MewIce else MewRose, radius = 2.5f + (index % 3), center = Offset(x, y), alpha = .45f + glow * .38f)
-            }
-        }
         Box(Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier.align(Alignment.Center),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Surface(
-                    color = MewRose.copy(alpha = .14f + glow * .12f),
-                    shape = RoundedCornerShape(32.dp),
-                    border = BorderStroke(1.dp, MewIce.copy(alpha = .45f)),
-                    modifier = Modifier.graphicsLayer(scaleX = pulse, scaleY = pulse),
-                ) {
-                    Text("DOMIDEX", modifier = Modifier.padding(horizontal = 25.dp, vertical = 15.dp), color = Color(0xFFFFE3EF), fontSize = 29.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                DomiDexBrandMark(size = 92.dp)
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("DomiDex", color = VaultText, fontSize = 36.sp, fontWeight = FontWeight.Black, letterSpacing = (-.6).sp)
+                    Text("DEINE KARTEN. DEIN BINDER.", color = MewRose, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
                 }
-                Text("DEIN BINDER. DEIN FOKUS.", color = MewIce.copy(alpha = .82f), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.1.sp)
             }
             LinearProgressIndicator(
                 progress = { progress },
-                modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 44.dp, vertical = 54.dp).fillMaxWidth().height(4.dp).clip(RoundedCornerShape(99.dp)),
-                color = MewRose,
-                trackColor = Color.White.copy(alpha = .10f),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 58.dp, vertical = 50.dp).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(99.dp)),
+                color = MewPlum,
+                trackColor = VaultOutlineSoft,
                 strokeCap = StrokeCap.Round,
             )
         }
@@ -1415,23 +1496,37 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
     Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-@Composable private fun DashboardScreen(portfolio: PortfolioSummary, binders: List<BinderSummary>, contentUpdates: ContentUpdateState, focusChoice: String, onFocusChoice: (String) -> Unit, openBinder: () -> Unit, openScanner: () -> Unit) {
+@Composable private fun DashboardScreen(portfolio: PortfolioSummary, binders: List<BinderSummary>, contentUpdates: ContentUpdateState, focusChoice: String, onFocusChoice: (String) -> Unit, openBinder: () -> Unit, openScanner: () -> Unit, openGrading: () -> Unit) {
     val context = LocalContext.current
     LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
-    item { ScreenHeader(stringResource(R.string.dashboard_eyebrow), stringResource(R.string.dashboard_title), stringResource(R.string.dashboard_subtitle)) }
+    item { DomiScreenTitle(stringResource(R.string.dashboard_title), eyebrow = stringResource(R.string.dashboard_eyebrow), subtitle = stringResource(R.string.dashboard_subtitle), trailing = { DomiDexBrandMark(size = 42.dp) }) }
     item { PortfolioHero(portfolio, focusChoice, onFocusChoice) }
+    item {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            DashboardQuickAction("Scannen", DomiIconKind.SCAN, Modifier.weight(1f), openScanner)
+            DashboardQuickAction("Binder", DomiIconKind.BINDER, Modifier.weight(1f), openBinder, highlighted = true)
+            DashboardQuickAction("Zustand", DomiIconKind.CARD, Modifier.weight(1f), openGrading)
+        }
+    }
     item { CurrentBinderValueCard(binders, openBinder) }
     item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { StatCard(stringResource(R.string.stat_cards), portfolio.totalCards.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_unique), portfolio.cards.size.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_languages), portfolio.cards.map { it.language }.distinct().size.toString(), Modifier.weight(1f)) } }
-    // Keep the official community entry within the initial Home viewport, while
-    // the Binder remains the main visual action directly beneath it.
-    item { DiscordSupportCard(context) }
-    item { Button(openBinder, Modifier.fillMaxWidth().height(68.dp), shape = RoundedCornerShape(22.dp), colors = ButtonDefaults.buttonColors(containerColor = MewRose, contentColor = VaultNight)) { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) { Text("▥", fontSize = 26.sp, fontWeight = FontWeight.Black); Column { Text("Mein Binder", fontWeight = FontWeight.Black, fontSize = 18.sp); Text("Sammlung ansehen und verwalten", fontSize = 11.sp) } } } }
-    item { OutlinedButton(openScanner, Modifier.fillMaxWidth().height(CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card) { Text(stringResource(R.string.scan_card), fontWeight = FontWeight.Bold) } }
     if (portfolio.cards.isNotEmpty()) {
-        item { Text(stringResource(R.string.recent_cards), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+        item { DomiSectionTitle(stringResource(R.string.recent_cards)) }
         items(portfolio.cards.take(3)) { CardRow(it) }
     }
+    item { DiscordSupportCard(context) }
     item { Text(stringResource(R.string.catalog_growth_note, contentUpdates.revision), color = VaultTextMuted, fontSize = 10.sp, lineHeight = 14.sp) }
+    }
+}
+
+@Composable private fun DashboardQuickAction(label: String, icon: DomiIconKind, modifier: Modifier, onClick: () -> Unit, highlighted: Boolean = false) {
+    DomiGlassCard(modifier, highlighted = highlighted, onClick = onClick) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Box(Modifier.size(34.dp).background(if (highlighted) MewPlumDeep else VaultNightRaised, RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) {
+                DomiLineIcon(icon, if (highlighted) MewRose else MewIce, Modifier.size(18.dp))
+            }
+            Text(label, color = VaultText, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
     }
 }
 
@@ -1440,14 +1535,14 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
     val bindersWithCards = binders.filter { it.ownedCards > 0 }
     val pricedBinders = bindersWithCards.filter { it.lastPriceUpdatedAtEpochMillis != null }
     val currentValue = pricedBinders.sumOf { it.marketValueEur }
-    OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised), shape = CardVaultShapes.card) {
+    DomiGlassCard(Modifier.fillMaxWidth(), onClick = openBinder) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(CardVaultSpacing.card),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("AKTUELLER BINDERWERT", color = MewIce, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+                Text("AKTUELLER BINDERWERT", color = MewRose, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
                 when {
                     bindersWithCards.isEmpty() -> Text("Noch keine Karten im Binder", color = VaultTextMuted, fontSize = 13.sp)
                     pricedBinders.isEmpty() -> Text("Trendpreise werden noch synchronisiert", color = VaultTextMuted, fontSize = 13.sp)
@@ -1462,7 +1557,9 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
                     )
                 }
             }
-            TextButton(onClick = openBinder) { Text("Binder") }
+            Box(Modifier.size(40.dp).background(MewPlumDeep.copy(alpha = .65f), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                DomiLineIcon(DomiIconKind.BINDER, MewRose, Modifier.size(20.dp))
+            }
         }
     }
 }
@@ -1596,19 +1693,15 @@ private fun openDiscordCommunity(context: Context) {
     val automatic = portfolio.cards.maxByOrNull { it.currentValueEur }
     val manual = focusChoice.removePrefix("entry:").toLongOrNull()?.let { id -> portfolio.cards.firstOrNull { it.entryId == id } }
     val focusCard = if (focusChoice == "auto") automatic else manual ?: automatic
-    ElevatedCard(
-        shape = CardVaultShapes.feature,
-        colors = CardDefaults.elevatedCardColors(containerColor = Color.Transparent),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 8.dp),
-    ) {
-        Box(Modifier.fillMaxWidth().height(CardVaultSpacing.heroHeight).background(Brush.linearGradient(listOf(Color(0xFF382442), Color(0xFF242348), Color(0xFF173647))))) {
+    DomiGlassCard(Modifier.fillMaxWidth(), highlighted = true) {
+        Box(Modifier.fillMaxWidth().height(CardVaultSpacing.heroHeight).background(Brush.linearGradient(listOf(Color(0xFF161124), Color(0xFF0D0D18), Color(0xFF0A131B))))) {
             Canvas(Modifier.matchParentSize().clearAndSetSemantics { }) {
                 drawCircle(MewIce.copy(alpha = .10f), radius = size.minDimension * .52f, center = Offset(size.width * .84f, size.height * .20f))
                 drawCircle(MewRose.copy(alpha = .08f), radius = size.minDimension * .34f, center = Offset(size.width * .60f, size.height * .92f))
             }
             Row(Modifier.fillMaxSize().padding(start = 20.dp, end = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Surface(color = MewRose.copy(alpha = .16f), shape = CardVaultShapes.field) { Text(stringResource(R.string.portfolio_private_badge), Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = Color(0xFFFFD8E5), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    Surface(color = MewPlumDeep.copy(alpha = .72f), shape = CardVaultShapes.pill, border = BorderStroke(1.dp, MewRose.copy(alpha = .32f))) { Text(stringResource(R.string.portfolio_private_badge), Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = VaultText, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                     Text("Gesamtportfolio · alle Binder", color = VaultTextMuted, fontSize = 13.sp)
                     Text(if (portfolio.hasPricedCards) euro(portfolio.totalValue) else "Kein Trendpreis verfügbar", fontSize = if (portfolio.hasPricedCards) 30.sp else 18.sp, fontWeight = FontWeight.Black, color = VaultText, maxLines = 1)
                     Text(
@@ -1623,7 +1716,7 @@ private fun openDiscordCommunity(context: Context) {
                         color = VaultTextMuted,
                         fontSize = 10.sp,
                     )
-                    TextButton(onClick = { choosingFocus = true }, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)) { Text(stringResource(if (focusChoice == "auto") R.string.focus_automatic else R.string.focus_manual), fontSize = 11.sp) }
+                    TextButton(onClick = { choosingFocus = true }, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)) { Text(stringResource(if (focusChoice == "auto") R.string.focus_automatic else R.string.focus_manual), color = MewRose, fontSize = 10.sp) }
                 }
                 InteractiveFocusCard(focusCard, Modifier.size(116.dp, 164.dp))
             }
@@ -1647,7 +1740,6 @@ private fun openDiscordCommunity(context: Context) {
     val effect = remember(card?.id, card?.finish, card?.variant) { CardEffectResolver.resolve(card) }
     var sensorX by remember { mutableFloatStateOf(0f) }; var sensorY by remember { mutableFloatStateOf(0f) }
     var dragX by remember { mutableFloatStateOf(0f) }; var dragY by remember { mutableFloatStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
     val settledDragX by animateFloatAsState(dragX, spring(stiffness = androidx.compose.animation.core.Spring.StiffnessLow), label = "card-tilt-x")
     val settledDragY by animateFloatAsState(dragY, spring(stiffness = androidx.compose.animation.core.Spring.StiffnessLow), label = "card-tilt-y")
     DisposableEffect(context, interactive, effect.profile) {
@@ -1670,9 +1762,9 @@ private fun openDiscordCommunity(context: Context) {
     Box(modifier.graphicsLayer { rotationX = -tiltY * 10f; rotationY = tiltX * 10f; cameraDistance = 14 * density }
         .pointerInput(interactive, effect.profile) {
             if (interactive && effect.profile != CardEffectProfile.NONE) detectDragGestures(
-                onDragStart = { isDragging = true },
-                onDragEnd = { isDragging = false; dragX = 0f; dragY = 0f },
-                onDragCancel = { isDragging = false; dragX = 0f; dragY = 0f },
+                onDragStart = { },
+                onDragEnd = { dragX = 0f; dragY = 0f },
+                onDragCancel = { dragX = 0f; dragY = 0f },
             ) { change, _ ->
                 change.consume()
                 dragX = ((change.position.x / size.width) - .5f).coerceIn(-.5f, .5f) * 2f
@@ -1681,7 +1773,7 @@ private fun openDiscordCommunity(context: Context) {
         }
         .background(VaultNightRaised, CardVaultShapes.card).border(1.dp, MewIce.copy(alpha = .65f), CardVaultShapes.card)) {
         if (card?.imageUrl != null) AsyncImage(card.imageUrl, stringResource(R.string.focus_card_description, card.name), Modifier.fillMaxSize()) else NeutralCardFace(Modifier.fillMaxSize())
-        if (interactive) HoloEffectLayer(effect, tiltX, tiltY, isDragging, Modifier.matchParentSize().clearAndSetSemantics { })
+        if (interactive) HoloEffectLayer(effect, tiltX, tiltY, interactive, Modifier.matchParentSize().clearAndSetSemantics { })
         else StaticCardEffectLayer(effect, Modifier.matchParentSize().clearAndSetSemantics { })
     }
 }
@@ -1693,7 +1785,12 @@ private fun openDiscordCommunity(context: Context) {
     drawPath(gem, MewIce.copy(alpha = .72f), style = Stroke(4f)); drawLine(VaultOutline, Offset(size.width * .2f, size.height * .72f), Offset(size.width * .8f, size.height * .72f), 3f); drawLine(VaultOutline.copy(alpha = .6f), Offset(size.width * .28f, size.height * .8f), Offset(size.width * .72f, size.height * .8f), 3f)
 }
 
-@Composable private fun StatCard(label: String, value: String, modifier: Modifier) = OutlinedCard(modifier, shape = CardVaultShapes.card, colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised)) { Column(Modifier.padding(CardVaultSpacing.card)) { Text(value, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MewIce); Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+@Composable private fun StatCard(label: String, value: String, modifier: Modifier) = DomiGlassCard(modifier) {
+    Column(Modifier.padding(horizontal = 10.dp, vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(value, fontSize = 19.sp, fontWeight = FontWeight.Bold, color = VaultText, maxLines = 1)
+        Text(label, fontSize = 9.sp, color = VaultTextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
 
 @Composable private fun ValueHistoryChart(points: List<PortfolioPoint>, modifier: Modifier) { Canvas(modifier) {
     if (points.size < 2) return@Canvas
@@ -1831,18 +1928,45 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     val scope = rememberCoroutineScope()
     val filtered = cards.filter { (selectedBinderId == null || it.binderId == selectedBinderId) && (it.name.contains(query, true) || it.set.contains(query, true)) }
     LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.card)) {
-    item { val count = cards.sumOf { it.quantity }; ScreenHeader(stringResource(R.string.collection_eyebrow), if (selectedBinderId == null) stringResource(R.string.binder_title) else binders.firstOrNull { it.id == selectedBinderId }?.name ?: stringResource(R.string.binder_title), pluralStringResource(R.plurals.collection_cards_count, count, count) + " · " + pluralStringResource(R.plurals.collection_entries_count, cards.size, cards.size)) }
-    if (selectedBinderId == null) item { LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) { items(binders, key = { it.id }) { binder -> OutlinedCard(onClick = { selectedBinderId = binder.id }, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface)) { Column(Modifier.padding(14.dp).widthIn(min = 155.dp, max = 220.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { Text(binder.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.binder_progress, binder.ownedCards, binder.uniqueCards), color = VaultTextMuted, fontSize = 11.sp); Text(stringResource(R.string.binder_market_value, euro(binder.marketValueEur)), color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } } } } }
+    item {
+        val count = cards.sumOf { it.quantity }
+        DomiScreenTitle(
+            title = if (selectedBinderId == null) "Sammlung" else binders.firstOrNull { it.id == selectedBinderId }?.name ?: "Sammlung",
+            eyebrow = stringResource(R.string.collection_eyebrow),
+            subtitle = pluralStringResource(R.plurals.collection_cards_count, count, count) + " · " + pluralStringResource(R.plurals.collection_entries_count, cards.size, cards.size),
+            trailing = { DomiDexBrandMark(size = 40.dp) },
+        )
+    }
+    if (selectedBinderId == null && binders.isNotEmpty()) item {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            DomiSectionTitle("Nach Binder")
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(binders, key = { it.id }) { binder ->
+                    DomiGlassCard(Modifier.widthIn(min = 166.dp, max = 220.dp), onClick = { selectedBinderId = binder.id }) {
+                        Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(Modifier.size(34.dp).background(MewPlumDeep.copy(alpha = .65f), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.BINDER, MewRose, Modifier.size(18.dp)) }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text(binder.name, color = VaultText, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(stringResource(R.string.binder_progress, binder.ownedCards, binder.uniqueCards), color = VaultTextMuted, fontSize = 10.sp)
+                                Text(stringResource(R.string.binder_market_value, euro(binder.marketValueEur)), color = MewIce, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     else item {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { selectedBinderId = null }) { Text(stringResource(R.string.action_back) + " · " + stringResource(R.string.binder_all)) }
             TextButton(onClick = { binderDeletionStage = 1 }) { Text(stringResource(R.string.binder_manage)) }
         }
     }
-    item { Button(onClick = { choosingAddMode = true }, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.card) { Text(stringResource(R.string.collection_add), fontWeight = FontWeight.Bold) } }
+    item { Button(onClick = { choosingAddMode = true }, modifier = Modifier.fillMaxWidth().height(CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card) { DomiLineIcon(DomiIconKind.ADD, MaterialTheme.colorScheme.onPrimary, Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.collection_add), fontWeight = FontWeight.Bold) } }
     addOutcome?.let { outcome -> item { Text(stringResource(if (outcome == AddCardOutcome.QUANTITY_INCREMENTED) R.string.add_outcome_incremented else R.string.add_outcome_created), color = VaultPositive, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } }
-    item { OutlinedTextField(query, { query = it }, label = { Text(stringResource(R.string.collection_search)) }, singleLine = true, shape = CardVaultShapes.field, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MewRose, cursorColor = MewRose, focusedLabelColor = MewRose, unfocusedContainerColor = VaultNightRaised, focusedContainerColor = VaultNightRaised), modifier = Modifier.fillMaxWidth()) }
-    if (filtered.isEmpty()) item { Text(stringResource(R.string.collection_empty), modifier = Modifier.padding(vertical = 30.dp)) }
+    item { OutlinedTextField(query, { query = it }, leadingIcon = { DomiLineIcon(DomiIconKind.SEARCH, VaultTextMuted, Modifier.size(18.dp)) }, placeholder = { Text(stringResource(R.string.collection_search), color = VaultTextMuted) }, singleLine = true, shape = CardVaultShapes.field, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MewRose, cursorColor = MewRose, unfocusedBorderColor = VaultOutlineSoft, unfocusedContainerColor = VaultNightRaised, focusedContainerColor = VaultNightRaised), modifier = Modifier.fillMaxWidth()) }
+    if (filtered.isEmpty()) item { DomiEmptyState("Keine Karten gefunden", if (cards.isEmpty()) "Füge deine erste Karte über Set-Auswahl, Suche oder Scanner hinzu." else "Passe deine Suche oder die Binder-Auswahl an.") }
+    else item { DomiSectionTitle(if (selectedBinderId == null) "Alle Karten" else "Karten im Binder") }
     items(filtered, key = { it.entryId }) { card -> CardRow(card) { viewing = card } }; item { DataNote() }
     }
     if (choosingAddMode) AddModeDialog(onDismiss = { choosingAddMode = false }, onCatalog = { choosingAddMode = false; choosingCatalogCard = true }, onManual = { choosingAddMode = false; catalogDraft = null; adding = true })
@@ -1899,39 +2023,47 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     val preferredMarketProduct = defaultBinderCardmarketProduct(card, referenceProducts)
         ?.takeIf { it.trendPriceEur != null }
     val storedTrendPrice = card.currentValueEur.takeIf { card.priceUpdatedAtEpochMillis != null && it > 0.0 }
+    val displayedTrendPrice = storedTrendPrice ?: preferredMarketProduct?.trendPriceEur ?: referenceTrendPrices.firstOrNull()
     val priceDate = card.priceUpdatedAtEpochMillis?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, Locale.GERMANY).format(java.util.Date(it)) }
     val isReferenceAdd = onAdd != null
-    AlertDialog(onDismissRequest = { if (!addInProgress) onDismiss() }, title = { Text(card.name) }, text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = if (isReferenceAdd) 390.dp else 570.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    AlertDialog(
+        onDismissRequest = { if (!addInProgress) onDismiss() },
+        containerColor = VaultNightRaised,
+        shape = CardVaultShapes.feature,
+        title = { DomiScreenTitle(card.name, eyebrow = "Kartendetails", subtitle = "${card.set} · ${card.number}") },
+        text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = if (isReferenceAdd) 430.dp else 590.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { InteractiveFocusCard(card, Modifier.size(174.dp, 246.dp), interactive = true) }
+        item {
+            DomiGlassCard(Modifier.fillMaxWidth(), highlighted = displayedTrendPrice != null) {
+                Row(Modifier.fillMaxWidth().padding(13.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.size(36.dp).background(MewPlumDeep.copy(alpha = .68f), RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.MARKET, MewRose, Modifier.size(19.dp)) }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("CARDMARKET-TRENDPREIS", color = VaultTextMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
+                        Text(displayedTrendPrice?.let(::euro) ?: "Wird abgeglichen …", color = if (displayedTrendPrice != null) VaultText else VaultTextMuted, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                    }
+                    if (displayedTrendPrice != null) DomiLineIcon(DomiIconKind.CHECK, VaultPositive, Modifier.size(18.dp))
+                }
+            }
+        }
         if (isReferenceAdd) {
             item {
-                Text(
-                    preferredMarketProduct?.trendPriceEur?.let { "Cardmarket-Trendpreis: ${euro(it)}" }
-                        ?: "Cardmarket-Trendpreis wird geladen …",
-                    color = if (preferredMarketProduct?.trendPriceEur != null) MewIce else VaultTextMuted,
-                    fontWeight = FontWeight.Bold,
-                )
+                Text("Nach dem Hinzufügen kannst du Zustand, Menge und weitere Angaben bearbeiten.", color = VaultTextMuted, fontSize = 11.sp, textAlign = TextAlign.Center)
             }
         } else {
-            item { Text("${card.set} · ${card.number}", fontWeight = FontWeight.Bold) }
-            when {
-                storedTrendPrice != null -> item { Text("Cardmarket-Trendpreis: ${euro(storedTrendPrice)}", color = MewIce, fontWeight = FontWeight.Bold) }
-                referenceTrendPrices.size == 1 -> item { Text("Cardmarket-Trendpreis: ${euro(referenceTrendPrices.first())}", color = MewIce, fontWeight = FontWeight.Bold) }
-                referenceTrendPrices.size >= 2 -> item { Text("Cardmarket-Trendpreise: ${euro(referenceTrendPrices.first())} – ${euro(referenceTrendPrices.last())}", color = MewIce, fontWeight = FontWeight.Bold) }
-            }
             item { Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
-            item { Text("Karteneffekt automatisch: ${effect.profile.label}", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+            item { Text("Visueller Effekt: ${effect.profile.label}", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
             item { HorizontalDivider(color = VaultOutline) }
-            item { CardPriceHistorySection(card, priceHistory, storedTrendPrice ?: referenceTrendPrices.singleOrNull()) }
+            item { CardPriceHistorySection(card, priceHistory, displayedTrendPrice) }
             item { PriceSourcesSection(card, priceDate, context) }
         }
     } }, confirmButton = {
         Row {
-            if (onAdd != null) TextButton(enabled = preferredMarketProduct != null && !addInProgress, onClick = { onAdd(preferredMarketProduct!!) }) { Text("Zum Binder hinzufügen") }
+            if (onAdd != null) Button(enabled = preferredMarketProduct != null && !addInProgress, onClick = { onAdd(preferredMarketProduct!!) }) { Text(if (addInProgress) "Wird hinzugefügt …" else "Zum Binder hinzufügen") }
             if (onDelete != null) TextButton(onClick = onDelete) { Text("Aus Binder entfernen", color = MaterialTheme.colorScheme.error) }
             if (onEdit != null) TextButton(onClick = onEdit) { Text(stringResource(R.string.card_preview_edit)) }
         }
-    }, dismissButton = { TextButton(onClick = onDismiss, enabled = !addInProgress) { Text(stringResource(R.string.action_cancel)) } })
+    }, dismissButton = { TextButton(onClick = onDismiss, enabled = !addInProgress) { Text(stringResource(R.string.action_cancel)) } },
+    )
 }
 
 private fun isExactBinderPriceMatch(reference: CollectionCard, product: CatalogSearchResult): Boolean {
@@ -1994,14 +2126,17 @@ private fun openOfficialPage(context: Context, url: String) {
     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
-@Composable private fun CardRow(card: CollectionCard, onClick: (() -> Unit)? = null) = ElevatedCard(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier), shape = CardVaultShapes.card, colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) { Row(Modifier.padding(CardVaultSpacing.card), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CardVaultSpacing.card)) {
+@Composable private fun CardRow(card: CollectionCard, onClick: (() -> Unit)? = null) {
+    val effect = remember(card.id, card.finish, card.variant, card.effectOverride) { CardEffectResolver.resolve(card) }
+    DomiGlassCard(Modifier.fillMaxWidth(), onClick = onClick) { Row(Modifier.padding(CardVaultSpacing.card), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CardVaultSpacing.card)) {
     Box(Modifier.size(54.dp, 75.dp).background(Color(card.accent), CardVaultShapes.thumbnail), contentAlignment = Alignment.Center) {
         if (card.imageUrl != null) AsyncImage(model = card.imageUrl, contentDescription = stringResource(R.string.collection_card_image_description, card.name, card.number), modifier = Modifier.fillMaxSize())
         else Text(card.name.take(1), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black)
+        StaticCardEffectLayer(effect, Modifier.matchParentSize().clearAndSetSemantics { })
     }
     Column(Modifier.weight(1f)) { Text(card.name, fontWeight = FontWeight.Bold); Text("${card.set} · ${card.number}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.card_metadata, card.language.label, card.condition, card.quantity), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp); if (card.externalProductId != null) Text(stringResource(R.string.catalog_linked_badge), color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
     Column(horizontalAlignment = Alignment.End) { Text(if (card.priceUpdatedAtEpochMillis == null) stringResource(R.string.no_market_price) else euro(card.currentValueEur * card.quantity), fontWeight = FontWeight.Bold, fontSize = if (card.priceUpdatedAtEpochMillis == null) 11.sp else 14.sp); if (card.priceUpdatedAtEpochMillis != null) Text((if (card.changePercent >= 0) "+" else "") + "%.1f%%".format(Locale.US, card.changePercent), color = if (card.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error, fontSize = 12.sp) }
-} }
+} } }
 
 @Composable private fun AddModeDialog(onDismiss: () -> Unit, onCatalog: () -> Unit, onManual: () -> Unit) = AlertDialog(
     onDismissRequest = onDismiss, title = { Text(stringResource(R.string.add_mode_title)) },
@@ -2900,11 +3035,17 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 Button({ launcher.launch(Manifest.permission.CAMERA) }) { Text(stringResource(if (denied) R.string.camera_permission_retry else R.string.camera_permission_allow)) }
             }
         }
-        Surface(modifier = Modifier.align(Alignment.TopStart).padding(12.dp), color = VaultNight.copy(alpha = .78f), shape = CardVaultShapes.card) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("‹ Übersicht", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
-                if (isDebuggableBuild(context)) TextButton(onClick = { testImageLauncher.launch("image/*") }) {
-                    Text("Testbild", color = MewIce, fontSize = 12.sp)
+        Surface(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(12.dp), color = VaultGlassHigh, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, VaultOutlineSoft)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(onClick = onBack, color = Color.Transparent, shape = RoundedCornerShape(10.dp)) {
+                    Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.BACK, VaultText, Modifier.size(18.dp)) }
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("SCANNER", color = VaultText, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+                    Text("Karte ruhig und vollständig im Rahmen halten", color = VaultTextMuted, fontSize = 9.sp)
+                }
+                if (isDebuggableBuild(context)) Surface(onClick = { testImageLauncher.launch("image/*") }, color = MewPlumDeep.copy(alpha = .62f), shape = RoundedCornerShape(10.dp)) {
+                    Text("Testbild", Modifier.padding(horizontal = 10.dp, vertical = 8.dp), color = MewIce, fontSize = 10.sp)
                 }
             }
         }
@@ -3000,7 +3141,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                             Text("Scan-Warteschlange", color = VaultText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             Text("$matchedCount erkannt · $processingCount in Analyse · $reviewCount prüfen", color = MewIce, fontSize = 10.sp, maxLines = 1)
                         }
-                        Text(if (queueExpanded) "▼" else "▲", color = MewRoseSoft, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        DomiLineIcon(DomiIconKind.CHEVRON, MewRose, Modifier.size(15.dp).graphicsLayer { rotationZ = if (queueExpanded) 90f else -90f })
                     }
                     AnimatedVisibility(visible = queueExpanded) {
                         Column(Modifier.fillMaxWidth().padding(bottom = 5.dp)) {

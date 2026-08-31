@@ -1,15 +1,8 @@
 package com.dominik.cardvault.ui
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -168,11 +161,11 @@ internal fun HoloEffectLayer(config: CardEffectConfig, tiltX: Float, tiltY: Floa
     val depthStops = remember(config.profile, config.intensity) {
         listOf(Color.Transparent, MewPlum.copy(alpha = .24f * config.intensity), Color.Transparent)
     }
-    val idle = rememberInfiniteTransition(label = "holo-${config.profile}")
-    val idlePhase by idle.animateFloat(0f, 1f, infiniteRepeatable(tween(if (config.profile in setOf(CardEffectProfile.SPECIAL, CardEffectProfile.SPECIAL_ILLUSTRATION_RARE)) 5_200 else 7_000, easing = LinearEasing), RepeatMode.Restart), label = "holo-idle")
     Canvas(modifier.fillMaxSize()) {
-        val motionX = (if (interacting) tiltX else (idlePhase - .5f) * .22f) * config.parallax
-        val motionY = (if (interacting) tiltY else (idlePhase - .5f) * .12f) * config.parallax
+        // The resting card stays optically still. Spectral movement is earned by a
+        // real tilt/drag, which keeps lists calm and respects reduced-motion users.
+        val motionX = (if (interacting) tiltX else 0f) * config.parallax
+        val motionY = (if (interacting) tiltY else 0f) * config.parallax
         config.zones.forEach { zoneKind ->
             val zone = when (zoneKind) {
                 CardEffectZone.ARTWORK -> Rect(size.width * .08f, size.height * .10f, size.width * .92f, size.height * .54f)

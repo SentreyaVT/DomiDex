@@ -16,10 +16,12 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.CameraSelector
 import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
@@ -27,13 +29,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Path
@@ -230,9 +228,6 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     var torchStrength by rememberSaveable { mutableIntStateOf(1) }
     var torchSettlingUntil by remember { mutableLongStateOf(0L) }
     val autoCaptureGate = remember { AutoCaptureGate() }
-    // This transition exists only while the scanner composable is visible.
-    val scannerMotion = rememberInfiniteTransition(label = "scanner-overlay")
-    val idleGlow by scannerMotion.animateFloat(.35f, .75f, infiniteRepeatable(tween(1_900), RepeatMode.Reverse), label = "scanner-glow")
     val controller = remember {
         LifecycleCameraController(context).apply {
             setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
@@ -407,12 +402,33 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                         drawRect(Color.Black.copy(alpha = .68f))
                     }
                 }
+                // A fixed presentation guide gives the eye one calm target. It does not feed
+                // Module 1 and therefore cannot alter detection, crop or OCR coordinates.
+                val guideWidth = contentWidth * .76f
+                val preferredGuideHeight = guideWidth * (88f / 63f)
+                val guideHeight = minOf(preferredGuideHeight, contentHeight * .72f)
+                val fittedGuideWidth = guideHeight * (63f / 88f)
+                val guideLeft = offsetX + (contentWidth - fittedGuideWidth) / 2f
+                val guideTop = offsetY + (contentHeight - guideHeight) / 2f
+                val guideRight = guideLeft + fittedGuideWidth
+                val guideBottom = guideTop + guideHeight
+                val corner = 25.dp.toPx()
+                val guideColor = if (captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) VaultPositive else MewRose.copy(alpha = .76f)
+                val guideStroke = 2.dp.toPx()
+                drawLine(guideColor, Offset(guideLeft, guideTop + corner), Offset(guideLeft, guideTop), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(guideColor, Offset(guideLeft, guideTop), Offset(guideLeft + corner, guideTop), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(guideColor, Offset(guideRight - corner, guideTop), Offset(guideRight, guideTop), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(guideColor, Offset(guideRight, guideTop), Offset(guideRight, guideTop + corner), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(guideColor, Offset(guideLeft, guideBottom - corner), Offset(guideLeft, guideBottom), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(guideColor, Offset(guideLeft, guideBottom), Offset(guideLeft + corner, guideBottom), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(guideColor, Offset(guideRight - corner, guideBottom), Offset(guideRight, guideBottom), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(guideColor, Offset(guideRight, guideBottom), Offset(guideRight, guideBottom - corner), guideStroke, androidx.compose.ui.graphics.StrokeCap.Round)
                 if (captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) {
                     // Confirmation stays centred even if the person removes the card immediately
                     // after the shutter; it represents the saved still, not live detector state.
                     val center = androidx.compose.ui.geometry.Offset(offsetX + contentWidth * .5f, offsetY + contentHeight * .5f)
                     val radius = 27.dp.toPx()
-                    drawCircle(VaultPositive.copy(alpha = .12f + idleGlow * .08f), radius = radius + 8.dp.toPx() * idleGlow, center = center)
+                    drawCircle(VaultPositive.copy(alpha = .16f), radius = radius + 5.dp.toPx(), center = center)
                     drawCircle(VaultPositive.copy(alpha = .96f), radius = radius, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4.dp.toPx()))
                     drawLine(
                         color = VaultPositive,
@@ -431,24 +447,44 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                 }
             }
         }
-        Surface(modifier = Modifier.align(Alignment.BottomCenter).padding(18.dp), color = VaultNight.copy(alpha = .82f), shape = RoundedCornerShape(50)) {
-            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Surface(modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp), color = VaultGlassHigh, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, VaultOutlineSoft), shadowElevation = 10.dp) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (detailsExpanded) Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     QualityMetric("Licht", quality.exposure, Modifier.width(60.dp)); QualityMetric("Schärfe", quality.sharpness, Modifier.width(60.dp)); QualityMetric("Karte", quality.coverage, Modifier.width(60.dp))
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { setTorch(!torchEnabled) }, enabled = torchCameraId != null) { Text(if (torchEnabled) "☀ Blitz an" else "☼ Blitz aus", color = if (torchEnabled) MewIce else Color.White, fontSize = 12.sp) }
-                TextButton(onClick = { detailsExpanded = !detailsExpanded }) { Text(if (detailsExpanded) "Details aus" else "Details", color = Color.White, fontSize = 12.sp) }
-                Text("Automatik", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Switch(
-                    checked = autoCaptureEnabled,
-                    onCheckedChange = { enabled ->
-                        autoCaptureEnabled = enabled
-                        if (enabled) autoCaptureGate.arm() else autoCaptureGate.disarm()
-                    },
-                    modifier = Modifier.height(28.dp),
-                )
-                Button(onClick = { capture(false) }, enabled = !captureInProgress, shape = CardVaultShapes.card, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) { Text(if (captureInProgress) "…" else "Aufnahme", maxLines = 1) }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceAround) {
+                    TextButton(onClick = { setTorch(!torchEnabled) }, enabled = torchCameraId != null) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            DomiLineIcon(DomiIconKind.LIGHTNING, if (torchEnabled) MewIce else VaultTextMuted, Modifier.size(17.dp))
+                            Text(if (torchEnabled) "Blitz an" else "Blitz", color = if (torchEnabled) MewIce else VaultTextMuted, fontSize = 9.sp)
+                        }
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Switch(
+                            checked = autoCaptureEnabled,
+                            onCheckedChange = { enabled ->
+                                autoCaptureEnabled = enabled
+                                if (enabled) autoCaptureGate.arm() else autoCaptureGate.disarm()
+                            },
+                            modifier = Modifier.height(27.dp),
+                        )
+                        Text("Automatik", color = VaultText, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = { capture(false) },
+                        enabled = !captureInProgress,
+                        modifier = Modifier.size(58.dp),
+                        shape = RoundedCornerShape(29.dp),
+                        contentPadding = PaddingValues(0.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MewPlumDeep, contentColor = VaultText),
+                        border = BorderStroke(2.dp, MewRose),
+                    ) { if (captureInProgress) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else DomiLineIcon(DomiIconKind.SCAN, VaultText, Modifier.size(25.dp)) }
+                    TextButton(onClick = { detailsExpanded = !detailsExpanded }) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            DomiLineIcon(DomiIconKind.MORE, if (detailsExpanded) MewRose else VaultTextMuted, Modifier.size(17.dp))
+                            Text(if (detailsExpanded) "Weniger" else "Details", color = VaultTextMuted, fontSize = 9.sp)
+                        }
+                    }
                 }
             }
         }
@@ -461,6 +497,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
  * back safely instead of failing the scanner.  We deliberately never promote an ultrawide/front
  * lens over a normal rear camera simply because it has a larger advertised stream.
  */
+@androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
 internal fun selectBestScannerCamera(cameraManager: CameraManager): CameraSelector =
     CameraSelector.Builder().addCameraFilter { cameras ->
         cameras.sortedWith(compareByDescending<androidx.camera.core.CameraInfo> { info ->
