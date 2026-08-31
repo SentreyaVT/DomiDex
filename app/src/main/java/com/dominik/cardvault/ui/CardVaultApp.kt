@@ -2706,6 +2706,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     var contributionPromptHandled by remember { mutableStateOf(false) }
     val textAnalyzer = remember(context) { CardTextAnalyzer(context) }
     val visualCatalog = remember { PokemonVisualCatalog() }
+    // Warm the small German set index as soon as the scanner opens so printed
+    // totals are immediately available for safe cross-set fallback. Official
+    // abbreviations are registered when the corresponding set detail is read.
+    LaunchedEffect(visualCatalog) { runCatching { visualCatalog.sets() } }
     // The camera captures independently. Two bounded workers are enough to overlap OCR/artwork
     // while preventing a fast scan series from exhausting native OpenCV/ML Kit memory.
     val processingSlots = remember { Semaphore(permits = ScanQueuePolicy.MAX_PARALLEL_WORKERS) }
@@ -2747,62 +2751,13 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
         candidatesLoading = true
         artworkScores = emptyMap()
         artworkLoading = false
-        val found = linkedMapOf<Long, CatalogSearchResult>()
-        runCatching {
-            current.setIdentifier?.let { setCode -> current.collectorNumber?.let { number ->
-                visualCatalog.findExact(setCode, number).forEach { visualCard ->
-                    val products = repository.searchCatalog(visualCard.name, 40)
-                    visualCard.printVariants.forEach { printing ->
-                        // The public Cardmarket download does not provide a printed number or
-                        // finish per product. Only use it when both are actually present; a
-                        // same-name normal card must never be linked to an ex, holo or full-art.
-                        val exactProducts = products.filter { product ->
-                            product.collectorNumber?.isNotBlank() == true &&
-                                normalizeCardName(product.name) == normalizeCardName(visualCard.name) &&
-                                normalizedCollectorNumber(product.collectorNumber) == normalizedCollectorNumber(visualCard.number) &&
-                                (product.finish.isNullOrBlank() || normalizeBinderMetadata(product.finish) == normalizeBinderMetadata(printing.finish))
-                        }
-                        if (exactProducts.isNotEmpty()) {
-                            exactProducts.forEach { product ->
-                                found.putIfAbsent(product.productId, product.copy(name = visualCard.name, visualSetName = visualCard.set.name, collectorNumber = visualCard.number, imageUrl = visualCard.largeImageUrl, finish = printing.finish, variant = printing.variant, rarity = visualCard.rarity, mainSetSize = visualCard.set.printedTotal, setCode = PokemonSetRegistry.metadata(visualCard.set).setCode, marketSearchName = visualCard.marketSearchName))
-                            }
-                        } else {
-                            // Set + printed number identifies the card. The finish remains a
-                            // deliberate user choice when several legitimate printings share it.
-                            val localId = -(("${visualCard.set.id}|${visualCard.id}|${visualCard.number}|${printing.id}".hashCode().toLong() and 0x7fff_ffffL) + 1L)
-                            found.putIfAbsent(localId, CatalogSearchResult(
-                                productId = localId,
-                                name = visualCard.name,
-                                expansionId = visualCard.set.id,
-                                trendPriceEur = null,
-                                currency = null,
-                                visualSetName = visualCard.set.name,
-                                collectorNumber = visualCard.number,
-                                imageUrl = visualCard.largeImageUrl,
-                                finish = printing.finish,
-                                variant = printing.variant,
-                                rarity = visualCard.rarity,
-                                hasMarketProduct = false,
-                                mainSetSize = visualCard.set.printedTotal,
-                                setCode = PokemonSetRegistry.metadata(visualCard.set).setCode,
-                                marketSearchName = visualCard.marketSearchName,
-                            ))
-                        }
-                    }
-                }
-            } }
-            // Never use arbitrary OCR lines as card names. Attack names, abilities and
-            // rules text are common OCR hits; a candidate needs both a printed number
-            // and a matching set marker before it may be proposed.
-        }
-        val ranked = found.values
-            .distinctBy { "${normalizeCardName(it.name)}|${it.visualSetName ?: it.expansionId}|${it.collectorNumber.orEmpty()}|${it.finish.orEmpty()}|${it.variant.orEmpty()}" }
-            .map { it to CardRecognitionRanker.score(current, it) }
-            // A readable German name that contradicts the numbered candidate is
-            // intentionally withheld. This is safer than a confident wrong card.
-            .filter { (_, score) -> score >= 65 }
-            .sortedByDescending { it.second }
-            .take(8)
+        // Manual evidence correction re-enters exactly the same source-backed
+        // resolver as a fresh queued scan. This keeps cross-set denominator
+        // fallback, source-code learning and language fallback consistent.
+        val resolution = runCatching {
+            withContext(Dispatchers.IO) { CardScanCandidateResolver.resolve(current, repository, visualCatalog) }
+        }.getOrNull()
+        val ranked = resolution?.candidates.orEmpty().map { it.card to it.score }
         candidates = ranked.map { it.first }
         candidateScores = ranked.associate { it.first.productId to it.second }
         candidatesLoading = false
@@ -3119,7 +3074,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 }
                 Column(Modifier.weight(1f)) {
                     Text("SCANNER", color = VaultText, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
-                    Text("Karte ruhig und vollständig im Rahmen halten", color = VaultTextMuted, fontSize = 9.sp)
+                    Text("Karte ruhig und vollständig ins Bild halten", color = VaultTextMuted, fontSize = 9.sp)
                 }
                 if (isDebuggableBuild(context)) Surface(onClick = { testImageLauncher.launch("image/*") }, color = MewPlumDeep.copy(alpha = .62f), shape = RoundedCornerShape(10.dp)) {
                     Text("Testbild", Modifier.padding(horizontal = 10.dp, vertical = 8.dp), color = MewIce, fontSize = 10.sp)

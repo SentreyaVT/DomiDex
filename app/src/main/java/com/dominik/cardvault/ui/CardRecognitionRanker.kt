@@ -6,14 +6,17 @@ import java.text.Normalizer
 /** Explainable ranking for candidates that already passed the set + printed-number gate. */
 internal object CardRecognitionRanker {
     fun score(analysis: CardTextAnalysis, candidate: CatalogSearchResult): Int {
-        val readNumber = analysis.collectorNumber?.substringBefore('/')?.trimStart('0')
-        val catalogNumber = candidate.collectorNumber?.substringBefore('/')?.trimStart('0')
+        val readNumber = analysis.collectorNumber?.let(::canonicalNumber)
+        val catalogNumber = candidate.collectorNumber?.let(::canonicalNumber)
         val numberMatch = readNumber != null && readNumber == catalogNumber
         val readPrintedTotal = analysis.collectorNumber?.substringAfter('/', "")?.filter(Char::isDigit)?.toIntOrNull()
         val printedTotalMatch = readPrintedTotal != null && candidate.mainSetSize == readPrintedTotal
         val name = normalize(candidate.name)
-        val nameEvidence = analysis.searchQueries.maxOfOrNull { similarity(normalize(it), name) } ?: 0f
-        val hasReadableName = analysis.hasNameRoiEvidence && analysis.searchQueries.any { normalize(it).length >= 3 }
+        val localizedNameComparable = candidate.language != SOURCE_FALLBACK_LANGUAGE
+        val nameEvidence = if (localizedNameComparable) {
+            analysis.searchQueries.maxOfOrNull { similarity(normalize(it), name) } ?: 0f
+        } else 0f
+        val hasReadableName = localizedNameComparable && analysis.hasNameRoiEvidence && analysis.searchQueries.any { normalize(it).length >= 3 }
         // Set + number are hard gates before this method is called.  A readable
         // German name then confirms the identity; a clear contradiction must not
         // become a high-confidence false positive.
@@ -42,6 +45,12 @@ internal object CardRecognitionRanker {
         .lowercase()
         .replace("ß", "ss")
         .filter(Char::isLetterOrDigit)
+    private fun canonicalNumber(value: String): String {
+        val primary = value.substringBefore('/').uppercase().filter(Char::isLetterOrDigit)
+        val prefix = primary.takeWhile(Char::isLetter)
+        val digits = primary.dropWhile(Char::isLetter).trimStart('0').ifBlank { if (primary.any(Char::isDigit)) "0" else "" }
+        return prefix + digits
+    }
     private fun similarity(left: String, right: String): Float {
         if (left.isBlank() || right.isBlank()) return 0f
         if (left == right || left.contains(right) || right.contains(left)) return 1f
@@ -53,6 +62,8 @@ internal object CardRecognitionRanker {
     }
 
     private fun Boolean.then(value: Int) = if (this) value else 0
+
+    private const val SOURCE_FALLBACK_LANGUAGE = "SOURCE_FALLBACK"
 
     private fun levenshtein(left: String, right: String): Int {
         var previous = IntArray(right.length + 1) { it }

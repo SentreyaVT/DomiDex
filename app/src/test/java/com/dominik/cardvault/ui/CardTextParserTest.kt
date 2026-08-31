@@ -1,5 +1,7 @@
 package com.dominik.cardvault.ui
 
+import com.dominik.cardvault.data.catalog.PokemonSet
+import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -171,6 +173,44 @@ class CardTextParserTest {
 
         assertEquals("087/086", result.collectorNumber)
         assertEquals(null, result.setIdentifier)
+    }
+
+    @Test fun sourceDeclaredFutureSetCodeBecomesAvailableWithoutAnAppUpdate() {
+        val detailedSet = PokemonSet("future1", "Zukünftiges Set", "Deutsch · TCGdex", 100, 120, "2027-01-01", null, "ZZQ")
+        PokemonSetRegistry.registerSourceSets(listOf(detailedSet))
+
+        val result = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Testkarte"),
+            preferredSetText = "H ZZQ DE 007/100",
+            preferredNumberText = "ZZQ DE 007/100",
+        )
+
+        assertEquals("ZZQ", result.setIdentifier)
+        assertEquals("007/100", result.collectorNumber)
+
+        val lightweightIndexSet = detailedSet.copy(ptcgoCode = null)
+        assertEquals(lightweightIndexSet, PokemonSetRegistry.resolve("ZZQ", listOf(lightweightIndexSet)))
+    }
+
+    @Test fun promoCollectorPrefixesResolveToTheirSourceSets() {
+        val cases = mapOf(
+            "HGSS01" to "hgssp",
+            "BW01" to "bwp",
+            "XY01" to "xyp",
+            "SM01" to "smp",
+            "SWSH001" to "swshp",
+        )
+
+        cases.forEach { (printedNumber, expectedSetId) ->
+            val result = CardTextParser.parse(
+                mapOf(CardScript.LATIN to "Promokarte"),
+                preferredNameText = "Promokarte",
+                preferredSetText = printedNumber,
+                preferredNumberText = printedNumber,
+            )
+            assertEquals(printedNumber, result.collectorNumber)
+            assertEquals(expectedSetId, result.setIdentifier)
+        }
     }
 
     @Test fun repeatedLowerBorderReadsOutrankOneEarlyWrongCollectorNumber() {

@@ -71,6 +71,7 @@ internal object CardNumberParser {
     // This repair is deliberately confined to two numeric groups inside an identity ROI.
     private val pair = Regex("(?i)(?<![A-Z0-9])([0-9OIlSBZg]{1,4})\\s*[/|VY]\\s*([0-9OIlSBZg]{1,4})(?![A-Z0-9])")
     private val setBoundSingle = Regex("(?i)(?:^|\\s)[A-Z]{3}(?:[-_ ]+DE)?[-_ ]+([0-9OIlSBZg]{1,4})(?:\\s|$)")
+    private val promoCollector = Regex("(?i)(?<![A-Z0-9])(SWSH|HGSS|BW|XY|SM)[-_ ]*([0-9OIlSBZg]{1,3})(?![A-Z0-9])")
 
     fun find(text: String): Evidence? {
         val lines = text.lineSequence()
@@ -91,7 +92,15 @@ internal object CardNumberParser {
                 confidence = (evidence.maxOf(Evidence::confidence) + (evidence.size - 1) * .01f).coerceAtMost(.99f),
                 supportingReads = evidence.size,
             )
-        } ?: lines.asSequence().mapNotNull { line -> setBoundSingle.find(line)?.groupValues?.get(1)?.let(::normalize)?.takeIf(String::isNotBlank) }
+        } ?: lines.asSequence().mapNotNull { line ->
+            promoCollector.find(line)?.let { match ->
+                val prefix = match.groupValues[1].uppercase()
+                val number = normalize(match.groupValues[2]).takeIf(String::isNotBlank) ?: return@let null
+                val width = if (prefix == "SWSH") 3 else 2
+                Evidence(prefix + number.padStart(width, '0'), .90f)
+            }
+        }.firstOrNull()
+            ?: lines.asSequence().mapNotNull { line -> setBoundSingle.find(line)?.groupValues?.get(1)?.let(::normalize)?.takeIf(String::isNotBlank) }
                 .map { number -> Evidence(number.padStart(3, '0'), .64f) }
                 .firstOrNull()
     }
@@ -256,7 +265,8 @@ internal object CardTextParser {
         } else {
             legacyStructuredText.lineSequence().toList()
         }
-        val setIdentifier = mostFrequentCode(numberBoundSetLines)
+        val setIdentifier = collectorNumber?.let(PokemonSetRegistry::promoSetIdForCollectorNumber)
+            ?: mostFrequentCode(numberBoundSetLines)
             ?: mostFrequentCode(fallbackLowerBorderLines)
         // Name lookup is intentionally restricted to the top name ROI. Attack
         // names and rules text may look like Pokémon names but cannot identify a

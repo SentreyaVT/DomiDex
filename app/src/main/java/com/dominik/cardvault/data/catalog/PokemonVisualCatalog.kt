@@ -7,10 +7,15 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import okio.buffer
 import okio.source
 import java.net.HttpURLConnection
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 data class PokemonSet(
     val id: String,
@@ -59,7 +64,25 @@ data class PokemonVisualCard(
     val printVariants: List<PokemonPrintVariant> = listOf(PokemonPrintVariant("normal", "Normal", "Standard")),
     /** Same source card in Cardmarket's commonly used English naming. */
     val marketSearchName: String? = null,
+    /** False only when German metadata omitted this printing and source-backed English identity filled the gap. */
+    val hasGermanLocalizedName: Boolean = true,
 )
+
+/** Every source set with the printed denominator remains eligible; none is cut off by list order. */
+internal fun setsMatchingPrintedTotal(sets: List<PokemonSet>, printedTotal: Int): List<PokemonSet> =
+    sets.filter { it.printedTotal == printedTotal }
+
+/** German identities win; source-backed English records only fill genuinely missing card ids. */
+internal fun mergeLocalizedSetCards(
+    germanCards: List<PokemonVisualCard>,
+    englishCards: List<PokemonVisualCard>,
+): List<PokemonVisualCard> {
+    val germanIds = germanCards.mapTo(hashSetOf(), PokemonVisualCard::id)
+    val englishById = englishCards.associateBy(PokemonVisualCard::id)
+    return (germanCards + englishCards.filterNot { it.id in germanIds })
+        .distinctBy(PokemonVisualCard::id)
+        .map { card -> card.copy(marketSearchName = englishById[card.id]?.name) }
+}
 
 /** Maps only source-declared collectible printings to separate binder slots. */
 internal fun pokemonPrintVariantForSourceKey(key: String): PokemonPrintVariant? = when (key.lowercase()) {
@@ -81,30 +104,48 @@ class PokemonVisualCatalog {
     val isLicensedSourceConfigured: Boolean get() = true
     private val germanBaseUrl = "https://api.tcgdex.net/v2/de"
     private val englishBaseUrl = "https://api.tcgdex.net/v2/en"
+    @Volatile private var cachedSets: List<PokemonSet>? = null
+    private val setLoadMutex = Mutex()
+    private val cardsBySet = ConcurrentHashMap<String, List<PokemonVisualCard>>()
+    private val detailedCards = ConcurrentHashMap<String, PokemonVisualCard>()
 
-    suspend fun sets(query: String = ""): List<PokemonSet> = withContext(Dispatchers.IO) {
-        val result = read("$germanBaseUrl/sets") { reader ->
-            buildList { readArray(reader) { parseGermanSet(it)?.let(::add) } }
+    suspend fun sets(query: String = ""): List<PokemonSet> {
+        val result = cachedSets ?: setLoadMutex.withLock {
+            cachedSets ?: withContext(Dispatchers.IO) {
+                read("$germanBaseUrl/sets") { reader ->
+                    buildList { readArray(reader) { parseGermanSet(it)?.let(::add) } }
+                }.sortedWith(compareByDescending(::catalogSetRecencyKey).thenByDescending { it.releaseDate })
+            }.also { loaded ->
+                PokemonSetRegistry.registerSourceSets(loaded)
+                cachedSets = loaded
+            }
         }
-        result.sortedWith(compareByDescending(::catalogSetRecencyKey).thenByDescending { it.releaseDate })
+        return result
             .filter { query.isBlank() || it.name.contains(query, true) || it.series.contains(query, true) }
     }
 
     suspend fun cards(set: PokemonSet, query: String = ""): List<PokemonVisualCard> = withContext(Dispatchers.IO) {
-        val result = read("$germanBaseUrl/sets/${set.id}") { reader ->
-            parseGermanSetCards(reader, set)
-        }
-        // Cardmarket's compact price catalogue commonly uses the English card
-        // name. TCGdex exposes the same card ids in both locales, so enrich the
-        // German UI card with that source-backed lookup name instead of guessing
-        // translations ourselves.
-        val englishNames = runCatching {
-            read("$englishBaseUrl/sets/${set.id}") { reader ->
-                parseGermanSetCards(reader, set).associate { it.id to it.name }
+        val result = cardsBySet[set.id] ?: run {
+            val germanCards = read("$germanBaseUrl/sets/${set.id}") { reader ->
+                parseSetCards(reader, set, hasGermanLocalizedName = true)
             }
-        }.getOrDefault(emptyMap())
-        result.map { card -> card.copy(marketSearchName = englishNames[card.id]) }
-            .sortedWith(compareBy({ it.number.toIntOrNull() ?: Int.MAX_VALUE }, { it.number }))
+            // Cardmarket's compact price catalogue commonly uses the English card
+            // name. TCGdex exposes the same card ids in both locales, so enrich the
+            // German UI card with that source-backed lookup name instead of guessing
+            // translations ourselves. A few old promo/subset records have an empty
+            // or incomplete German list; merge only their missing source identities
+            // from English so they can still reach artwork verification/manual review.
+            val englishCards = runCatching {
+                read("$englishBaseUrl/sets/${set.id}") { reader ->
+                    parseSetCards(reader, set, hasGermanLocalizedName = false)
+                }
+            }.getOrDefault(emptyList())
+            PokemonSetRegistry.registerSourceSets((germanCards + englishCards).map(PokemonVisualCard::set))
+            mergeLocalizedSetCards(germanCards, englishCards)
+                .sortedWith(compareBy({ it.number.toIntOrNull() ?: Int.MAX_VALUE }, { it.number }))
+                .also { cardsBySet.putIfAbsent(set.id, it) }
+        }
+        result
             .filter { query.isBlank() || it.name.contains(query, true) || it.number.contains(query, true) }
     }
 
@@ -113,11 +154,13 @@ class PokemonVisualCatalog {
      * source-declared Normal/Holo/Reverse printings for master-set slots.
      */
     suspend fun withDeclaredPrintVariants(card: PokemonVisualCard): PokemonVisualCard = withContext(Dispatchers.IO) {
-        val detail = read("$germanBaseUrl/cards/${card.id}") { reader -> parseCardDetail(reader) }
-        card.copy(
-            rarity = detail.rarity ?: card.rarity,
-            printVariants = detail.printVariants.ifEmpty { card.printVariants },
-        )
+        detailedCards[card.id] ?: run {
+            val detail = read("$germanBaseUrl/cards/${card.id}") { reader -> parseCardDetail(reader) }
+            card.copy(
+                rarity = detail.rarity ?: card.rarity,
+                printVariants = detail.printVariants.ifEmpty { card.printVariants },
+            ).also { detailedCards.putIfAbsent(card.id, it) }
+        }
     }
 
     suspend fun findExact(setIdentifier: String, collectorNumber: String): List<PokemonVisualCard> = withContext(Dispatchers.IO) {
@@ -149,11 +192,9 @@ class PokemonVisualCatalog {
         // The set payload intentionally stays lightweight and can omit rarity.
         // Only the one or few exact number candidates are expanded, off the UI
         // thread, to obtain source-declared rarity/finish metadata.
-        buildList {
-            cards(matchingSet)
-                .filter { it.number.toIntOrNull() == number }
-                .forEach { candidate -> add(withDeclaredPrintVariants(candidate)) }
-        }
+        runCatching { cards(matchingSet) }.getOrDefault(emptyList())
+            .filter { collectorIdentity(it.number) == collectorIdentity(collectorNumber) }
+            .map { candidate -> runCatching { withDeclaredPrintVariants(candidate) }.getOrDefault(candidate) }
     }
 
     /**
@@ -167,10 +208,14 @@ class PokemonVisualCatalog {
             ?: return@coroutineScope emptyList()
         val number = parts.groupValues[1].toIntOrNull() ?: return@coroutineScope emptyList()
         val printedTotal = parts.groupValues[2].toIntOrNull() ?: return@coroutineScope emptyList()
-        sets().filter { it.printedTotal == printedTotal }.take(8).map { set ->
+        val lookupSlots = Semaphore(permits = 4)
+        setsMatchingPrintedTotal(sets(), printedTotal).map { set ->
             async(Dispatchers.IO) {
-                cards(set).filter { it.number.toIntOrNull() == number }
-                    .map { candidate -> withDeclaredPrintVariants(candidate) }
+                lookupSlots.withPermit {
+                    runCatching { cards(set) }.getOrDefault(emptyList())
+                        .filter { it.number.toIntOrNull() == number }
+                        .map { candidate -> runCatching { withDeclaredPrintVariants(candidate) }.getOrDefault(candidate) }
+                }
             }
         }.awaitAll().flatten()
     }
@@ -216,17 +261,40 @@ class PokemonVisualCatalog {
         return if (id.isBlank() || name.isBlank()) null else PokemonSet(id, name, "Deutsch · TCGdex", official, total.coerceAtLeast(official), releaseDate, logo ?: symbol, abbreviation)
     }
 
-    private fun parseGermanSetCards(reader: JsonReader, set: PokemonSet): List<PokemonVisualCard> {
+    private fun parseSetCards(
+        reader: JsonReader,
+        set: PokemonSet,
+        hasGermanLocalizedName: Boolean,
+    ): List<PokemonVisualCard> {
         val cards = mutableListOf<PokemonVisualCard>()
+        var abbreviation = set.ptcgoCode
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
-            "cards" -> readArray(reader) { parseGermanCardBrief(it, set)?.let(cards::add) }
+            "cards" -> readArray(reader) {
+                parseCardBrief(it, set, hasGermanLocalizedName)?.let(cards::add)
+            }
+            // The lightweight /sets index intentionally omits this field. The
+            // set detail is authoritative and lets the scanner learn every
+            // currently published code without accepting arbitrary OCR text.
+            "abbreviation" -> {
+                reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
+                    "official" -> abbreviation = if (reader.peek() == JsonReader.Token.NULL) {
+                        reader.nextNull<Unit>(); null
+                    } else reader.nextString()
+                    else -> reader.skipValue()
+                }; reader.endObject()
+            }
             else -> reader.skipValue()
         }
         reader.endObject()
-        return cards
+        val detailedSet = set.copy(ptcgoCode = abbreviation?.takeIf(String::isNotBlank) ?: set.ptcgoCode)
+        return cards.map { it.copy(set = detailedSet) }
     }
 
-    private fun parseGermanCardBrief(reader: JsonReader, set: PokemonSet): PokemonVisualCard? {
+    private fun parseCardBrief(
+        reader: JsonReader,
+        set: PokemonSet,
+        hasGermanLocalizedName: Boolean,
+    ): PokemonVisualCard? {
         var id = ""; var name = ""; var number = ""; var rarity: String? = null; var image = ""
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
             "id" -> id = reader.nextString(); "name" -> name = reader.nextString(); "localId" -> number = reader.nextString()
@@ -240,6 +308,7 @@ class PokemonVisualCatalog {
         return if (id.isBlank() || name.isBlank()) null else PokemonVisualCard(
             id, name, number, rarity, lowImage, highImage, set,
             listOf(PokemonPrintVariant("normal", "Normal", "Standard")),
+            hasGermanLocalizedName = hasGermanLocalizedName,
         )
     }
 
@@ -274,6 +343,13 @@ class PokemonVisualCatalog {
     /** TCGdex returns a logo asset base path; Coil needs the actual image file. */
     private fun assetImageUrl(value: String): String =
         if (value.substringAfterLast('/').contains('.')) value else "$value.png"
+
+    private fun collectorIdentity(value: String): String {
+        val primary = value.substringBefore('/').uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+        val prefix = primary.takeWhile(Char::isLetter)
+        val digits = primary.dropWhile(Char::isLetter).trimStart('0').ifBlank { "0" }
+        return prefix + digits
+    }
 }
 
 /**

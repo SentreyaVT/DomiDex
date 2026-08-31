@@ -18,6 +18,11 @@ data class PokemonSetMetadata(
 )
 
 object PokemonSetRegistry {
+    @Volatile
+    private var sourceDeclaredCodes: Set<String> = emptySet()
+    @Volatile
+    private var sourceSetIdByDeclaredCode: Map<String, String> = emptyMap()
+
     /**
      * Printed expansion codes verified against the public Pokémon TCG set index.
      * TCGdex uses zero-padded source ids for several modern sets (for example
@@ -41,6 +46,15 @@ object PokemonSetRegistry {
         "me1" to "MEG", "me2" to "PFL", "me25" to "ASC", "me3" to "POR", "me4" to "CRI", "me5" to "PBL",
     )
 
+    /** Source-backed collector prefixes used by Black Star promo printings. */
+    private val promoSetIdByCollectorPrefix = mapOf(
+        "HGSS" to "hgssp",
+        "BW" to "bwp",
+        "XY" to "xyp",
+        "SM" to "smp",
+        "SWSH" to "swshp",
+    )
+
     /**
      * Existing offline master-set data has a declared code too. Keeping this
      * compatibility record here avoids a second hidden set-code table inside
@@ -59,14 +73,39 @@ object PokemonSetRegistry {
     fun isVerifiedPrintedCode(value: String): Boolean {
         val candidate = value.uppercase().filter(Char::isLetterOrDigit)
         return verifiedExternalCodeByNormalizedSourceId.values.any { it.equals(candidate, ignoreCase = true) } ||
-            legacyOfflineSets.any { it.ptcgoCode.equals(candidate, ignoreCase = true) }
+            legacyOfflineSets.any { it.ptcgoCode.equals(candidate, ignoreCase = true) } ||
+            candidate in sourceDeclaredCodes
+    }
+
+    /**
+     * Extends scanner coverage from the live German catalogue without trusting
+     * arbitrary OCR fragments. Only abbreviations explicitly declared by the
+     * source set payload are admitted, and the assignment is atomic for the
+     * camera/OCR worker threads.
+     */
+    fun registerSourceSets(sets: List<PokemonSet>) {
+        val declared = sets.mapNotNull { set ->
+            val code = set.ptcgoCode
+                ?.uppercase()
+                ?.filter(Char::isLetterOrDigit)
+                ?.takeIf { it.length in 2..6 && it.any(Char::isLetter) }
+                ?: return@mapNotNull null
+            code to set.id
+        }
+        if (declared.isNotEmpty()) {
+            sourceDeclaredCodes = sourceDeclaredCodes + declared.map(Pair<String, String>::first)
+            sourceSetIdByDeclaredCode = sourceSetIdByDeclaredCode + declared.associate { (code, setId) ->
+                normalize(code) to setId
+            }
+        }
     }
 
     fun metadata(set: PokemonSet): PokemonSetMetadata = PokemonSetMetadata(
         setId = set.id,
         // A TCGdex source ID (e.g. sv03) is useful internally, but it is not a
         // printed expansion abbreviation. Never present or match it as one.
-        setCode = verifiedExternalCodeByNormalizedSourceId[normalize(set.id)] ?: set.ptcgoCode?.takeIf { it.isNotBlank() },
+        setCode = set.ptcgoCode?.takeIf { it.isNotBlank() }
+            ?: verifiedExternalCodeByNormalizedSourceId[normalize(set.id)],
         germanName = set.name,
         mainSetSize = set.printedTotal,
         totalKnownCards = set.total.coerceAtLeast(set.printedTotal),
@@ -77,11 +116,13 @@ object PokemonSetRegistry {
     fun resolve(input: String, sourceSets: List<PokemonSet>): PokemonSet? {
         val normalized = normalize(input)
         if (normalized == "svp") return null
+        val declaredSourceId = sourceSetIdByDeclaredCode[normalized]
         return sourceSets.firstOrNull { set ->
             val metadata = metadata(set)
             normalize(metadata.setId) == normalized ||
                 metadata.setCode?.let(::normalize) == normalized ||
-                normalize(set.ptcgoCode.orEmpty()) == normalized
+                normalize(set.ptcgoCode.orEmpty()) == normalized ||
+                declaredSourceId?.let { normalize(set.id) == normalize(it) } == true
         }
     }
 
@@ -93,6 +134,13 @@ object PokemonSetRegistry {
     }
 
     fun legacyOfflineSets(): List<PokemonSet> = legacyOfflineSets.toList()
+
+    fun promoSetIdForCollectorNumber(value: String): String? {
+        val compact = value.uppercase().filter(Char::isLetterOrDigit)
+        val prefix = Regex("^([A-Z]{2,4})\\d{1,3}$").matchEntire(compact)?.groupValues?.get(1)
+            ?: return null
+        return promoSetIdByCollectorPrefix[prefix]
+    }
 
     fun isAboveMainSet(collectorNumber: String, set: PokemonSet): Boolean {
         val cardNumber = collectorNumber.substringBefore('/').filter(Char::isDigit).toIntOrNull() ?: return false

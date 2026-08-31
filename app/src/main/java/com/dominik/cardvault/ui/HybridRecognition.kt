@@ -69,12 +69,16 @@ internal object HybridCandidateFusion {
         }
 
         val candidateName = canonicalName(candidate.name)
-        val nameSimilarity = analysis.searchQueries.maxOfOrNull { similarity(canonicalName(it), candidateName) } ?: 0f
-        val readableName = analysis.hasNameRoiEvidence && analysis.searchQueries.any { canonicalName(it).length >= 3 }
+        val localizedNameComparable = candidate.language != SOURCE_FALLBACK_LANGUAGE
+        val nameSimilarity = if (localizedNameComparable) {
+            analysis.searchQueries.maxOfOrNull { similarity(canonicalName(it), candidateName) } ?: 0f
+        } else 0f
+        val readableName = localizedNameComparable && analysis.hasNameRoiEvidence && analysis.searchQueries.any { canonicalName(it).length >= 3 }
         val name = (nameSimilarity * 100).roundToInt()
 
         val language = when (candidate.language?.uppercase(Locale.ROOT)) {
             "GERMAN", "DE", "DEUTSCH" -> 100
+            SOURCE_FALLBACK_LANGUAGE -> 65
             null, "", "UNKNOWN" -> if (analysis.likelyScript == CardScript.LATIN) 65 else 35
             "ENGLISH" -> if (analysis.likelyScript == CardScript.LATIN) 55 else 20
             else -> 20
@@ -144,10 +148,17 @@ internal object HybridCandidateFusion {
         }
     }
 
-    private fun canonicalNumber(value: String) = value.substringBefore('/').filter(Char::isDigit).trimStart('0').ifBlank { if (value.any(Char::isDigit)) "0" else "" }
+    private fun canonicalNumber(value: String): String {
+        val primary = value.substringBefore('/').uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+        val prefix = primary.takeWhile(Char::isLetter)
+        val digits = primary.dropWhile(Char::isLetter).trimStart('0').ifBlank { if (primary.any(Char::isDigit)) "0" else "" }
+        return prefix + digits
+    }
     private fun canonicalMetadata(value: String) = value.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
     private fun canonicalName(value: String) = Normalizer.normalize(value, Normalizer.Form.NFD)
         .lowercase(Locale.ROOT).replace("ß", "ss").filter(Char::isLetterOrDigit)
+
+    private const val SOURCE_FALLBACK_LANGUAGE = "SOURCE_FALLBACK"
 
     private fun similarity(left: String, right: String): Float {
         if (left.isBlank() || right.isBlank()) return 0f

@@ -27,6 +27,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -46,6 +49,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.core.content.ContextCompat
 import com.dominik.cardvault.R
 import com.dominik.cardvault.ui.theme.*
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -201,7 +206,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
 
 @Composable fun LiveCameraScanner(
     modifier: Modifier = Modifier,
-    onCaptureStarted: (Boolean) -> Unit = {},
+    onCaptureStarted: () -> Unit = {},
     onCaptureSaved: (File, Boolean, List<File>) -> Unit = { _, _, _ -> },
     onCaptureFailed: () -> Unit = {},
 ) {
@@ -215,7 +220,6 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     var quality by remember { mutableStateOf(FrameQuality(QualityLevel.RED, QualityGuidance.HOLD_STILL, 0f, 0f, 0f, 0f, 0f)) }
     var captureMessage by remember { mutableStateOf<Int?>(null) }
     var confirmedOutlineCorners by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
-    var autoCaptureEnabled by rememberSaveable { mutableStateOf(true) }
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
     var captureInProgress by remember { mutableStateOf(false) }
     var activeCaptureId by remember { mutableLongStateOf(0L) }
@@ -225,8 +229,6 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     val maxTorchStrength = remember(cameraManager, torchCameraId) { if (Build.VERSION.SDK_INT >= 33 && torchCameraId != null) cameraManager.getCameraCharacteristics(torchCameraId).get(CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL) ?: 1 else 1 }
     var torchEnabled by rememberSaveable { mutableStateOf(false) }
     var torchStrength by rememberSaveable { mutableIntStateOf(1) }
-    var torchSettlingUntil by remember { mutableLongStateOf(0L) }
-    val autoCaptureGate = remember { AutoCaptureGate() }
     val controller = remember {
         LifecycleCameraController(context).apply {
             setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
@@ -250,36 +252,33 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         val future = controller.cameraControl?.enableTorch(enabled) ?: return
         future.addListener({ runCatching { future.get() }.onSuccess {
             torchEnabled = enabled; torchStrength = strength.coerceIn(1, maxTorchStrength)
-            // Exposure/AF may jump immediately after torch changes. Suppress the
-            // next short capture window rather than saving a transition frame.
-            torchSettlingUntil = SystemClock.elapsedRealtime() + 450L
         } }, mainExecutor)
     }
-    fun capture(auto: Boolean) {
+    fun capture() {
         if (captureInProgress) return
         val captureOutlineCorners = quality.corners
-        captureInProgress = true; captureMessage = null; confirmedOutlineCorners = emptyList(); autoCaptureGate.disarm(quality.fingerprint)
-        onCaptureStarted(auto)
+        captureInProgress = true; captureMessage = null; confirmedOutlineCorners = emptyList()
+        onCaptureStarted()
         val captureId = System.nanoTime()
         val captureStartedAt = SystemClock.elapsedRealtime()
         val contributionEligible = quality.level == QualityLevel.GREEN && quality.corners.size == 4
         activeCaptureId = captureId
         val files = mutableListOf<File>()
-        // Automatic rapid scan uses the already stable green frame and releases the camera after
-        // one maximum-quality still. A manual capture keeps the two-frame safety net.
-        val frameCount = if (auto) 1 else 2
+        // A deliberate shutter press always records a two-frame safety pair. The queue can use
+        // both stills for temporal OCR/artwork evidence without racing an automatic capture.
+        val frameCount = 2
         fun finishSuccessful() {
             if (activeCaptureId != captureId || files.isEmpty()) return
             activeCaptureId = 0L
             val primary = files.first()
             latestCapture = primary; captureInProgress = false
             LatestCardCapture.path = primary.absolutePath
-            captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
+            captureMessage = R.string.capture_saved
             confirmedOutlineCorners = captureOutlineCorners.takeIf { it.size == 4 } ?: quality.corners
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             confirmationSound.play()
             captureTimeoutHandler.postDelayed({
-                if (activeCaptureId == 0L && latestCapture == primary && captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) {
+                if (activeCaptureId == 0L && latestCapture == primary && captureMessage == R.string.capture_saved) {
                     captureMessage = null
                     confirmedOutlineCorners = emptyList()
                 }
@@ -290,7 +289,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                 "captureTimestamp" to System.currentTimeMillis(),
                 "captureLatencyMs" to (SystemClock.elapsedRealtime() - captureStartedAt),
                 "frameCount" to files.size,
-                "auto" to auto,
+                "auto" to false,
                 "selectedBestFrame" to 0,
                 "sharpnessScore" to quality.sharpness,
                 "glarePercentage" to quality.glare,
@@ -344,14 +343,33 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         }
         takeFrame(0)
     }
-    LaunchedEffect(quality, autoCaptureEnabled, captureInProgress, torchSettlingUntil) {
-        if (
-            autoCaptureEnabled &&
-            !captureInProgress &&
-            SystemClock.elapsedRealtime() >= torchSettlingUntil &&
-            autoCaptureGate.onFrame(quality.level, quality.guidance, quality.cardPresent, quality.fingerprint)
-        ) capture(true)
+    val captureConfirmed = captureMessage == R.string.capture_saved
+    val outlineTarget = if (captureConfirmed && confirmedOutlineCorners.size == 4) confirmedOutlineCorners else quality.corners
+    val outlineCoordinates = remember { List(8) { Animatable(0f) } }
+    var outlineInitialized by remember { mutableStateOf(false) }
+    LaunchedEffect(outlineTarget) {
+        if (outlineTarget.size != 4) {
+            outlineInitialized = false
+            return@LaunchedEffect
+        }
+        val targets = outlineTarget.flatMap { (x, y) -> listOf(x, y) }
+        if (!outlineInitialized) {
+            outlineCoordinates.zip(targets).forEach { (coordinate, target) -> coordinate.snapTo(target) }
+            outlineInitialized = true
+        } else {
+            coroutineScope {
+                outlineCoordinates.zip(targets).forEach { (coordinate, target) ->
+                    launch { coordinate.animateTo(target, tween(durationMillis = 280, easing = LinearOutSlowInEasing)) }
+                }
+            }
+        }
     }
+    val animatedOutline = if (outlineInitialized) listOf(
+        outlineCoordinates[0].value to outlineCoordinates[1].value,
+        outlineCoordinates[2].value to outlineCoordinates[3].value,
+        outlineCoordinates[4].value to outlineCoordinates[5].value,
+        outlineCoordinates[6].value to outlineCoordinates[7].value,
+    ) else emptyList()
     Box(modifier.fillMaxSize().background(Color.Black)) {
         Box(Modifier.matchParentSize()) {
             // Preserve the webcam's complete 4:3 scene. FIT_CENTER intentionally letterboxes
@@ -361,15 +379,16 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                 message = when {
                     captureMessage != null -> captureMessage?.let { stringResource(it) }
                     captureInProgress -> "Aufnahme läuft …"
+                    quality.level == QualityLevel.GREEN -> "Bereit – Auslöser drücken"
                     else -> "Karte ruhig halten"
                 },
                 tone = when {
                     captureMessage == R.string.capture_failed -> DomiStatusTone.ERROR
-                    captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically) -> DomiStatusTone.SUCCESS
+                    captureMessage == R.string.capture_saved || quality.level == QualityLevel.GREEN -> DomiStatusTone.SUCCESS
                     else -> DomiStatusTone.WARNING
                 },
                 modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 16.dp).padding(top = 76.dp),
-                accentColor = if (captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)) VaultPositive else null,
+                accentColor = if (captureMessage == R.string.capture_saved || quality.level == QualityLevel.GREEN) VaultPositive else null,
             )
             Canvas(Modifier.matchParentSize()) {
                 // CameraX rotates the landscape analysis stream into a portrait 3:4 preview.
@@ -388,11 +407,9 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                     contentWidth = size.width; contentHeight = contentWidth / imageAspect
                     offsetX = 0f; offsetY = (size.height - contentHeight) / 2f
                 }
-                val captureConfirmed = captureMessage in setOf(R.string.capture_saved, R.string.capture_saved_automatically)
-                val displayedOutline = if (captureConfirmed && confirmedOutlineCorners.size == 4) confirmedOutlineCorners else quality.corners
-                if (displayedOutline.size == 4) {
+                if (animatedOutline.size == 4) {
                     val path = Path()
-                    displayedOutline.forEachIndexed { index, point ->
+                    animatedOutline.forEachIndexed { index, point ->
                         val x = offsetX + point.first * contentWidth; val y = offsetY + point.second * contentHeight
                         if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                     }
@@ -444,19 +461,12 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                             Text(if (torchEnabled) "Blitz an" else "Blitz", color = if (torchEnabled) MewIce else VaultTextMuted, fontSize = 9.sp)
                         }
                     }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Switch(
-                            checked = autoCaptureEnabled,
-                            onCheckedChange = { enabled ->
-                                autoCaptureEnabled = enabled
-                                if (enabled) autoCaptureGate.arm() else autoCaptureGate.disarm()
-                            },
-                            modifier = Modifier.height(27.dp),
-                        )
-                        Text("Automatik", color = VaultText, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        DomiLineIcon(DomiIconKind.CHECK, VaultTextMuted, Modifier.size(18.dp))
+                        Text("Manuell", color = VaultTextMuted, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
                     }
                     Button(
-                        onClick = { capture(false) },
+                        onClick = { capture() },
                         enabled = !captureInProgress,
                         modifier = Modifier.size(58.dp),
                         shape = RoundedCornerShape(29.dp),
@@ -567,10 +577,10 @@ internal class AutoCaptureGate(
  * Detection/OCR always continue to use the unsmoothed source geometry.
  */
 internal class OverlayCornerStabilizer(
-    private val smoothing: Float = .20f,
-    private val deadZone: Float = .004f,
-    private val maxStep: Float = .018f,
-    private val missingFramesToClear: Int = 3,
+    private val smoothing: Float = .12f,
+    private val deadZone: Float = .007f,
+    private val maxStep: Float = .010f,
+    private val missingFramesToClear: Int = 5,
 ) {
     private var displayed = emptyList<Pair<Float, Float>>()
     private var missingFrames = 0

@@ -143,4 +143,20 @@ class HybridCandidateFusionTest {
         assertEquals(100, ranked.single().evidence?.setScore)
         assertEquals(ScannerDecision.ACCEPTED, HybridCandidateFusion.decide(ranked).decision)
     }
+
+    @Test fun `source language fallback waits for artwork without contradicting German name ocr`() {
+        val fallback = candidate(1).copy(
+            name = "English Source Name",
+            language = "SOURCE_FALLBACK",
+            mainSetSize = 84,
+        )
+        val evidence = HybridCandidateFusion.score(
+            analysis.copy(setIdentifier = null),
+            fallback,
+            ArtworkVerification(ArtworkMatch.CORROBORATES, .94f, .94f),
+        )
+
+        assertTrue("name" !in evidence.contradictions)
+        assertTrue(evidence.finalConfidence >= 85)
+    }
 }

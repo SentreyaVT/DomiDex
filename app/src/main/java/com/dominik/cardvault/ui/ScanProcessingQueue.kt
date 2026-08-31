@@ -78,8 +78,15 @@ internal object CardScanCandidateResolver {
         }
         val number = analysis.collectorNumber ?: return ScanCandidateResolution(emptyList(), ScannerDecisionResult(ScannerDecision.REJECTED, reason = "collector_number_missing"))
         val found = linkedMapOf<Long, CatalogSearchResult>()
-        val visualMatches = analysis.setIdentifier?.let { setCode -> visualCatalog.findExact(setCode, number) }
-            ?: visualCatalog.findByPrintedTotalAndCollectorNumber(number)
+        val exactSetMatches = analysis.setIdentifier
+            ?.let { setCode -> visualCatalog.findExact(setCode, number) }
+            .orEmpty()
+        // A foil reflection can turn one letter of an otherwise valid set code
+        // into another source code. An empty exact lookup must not dead-end the
+        // card: the printed denominator still provides a safe all-set fallback.
+        val visualMatches = exactSetMatches.ifEmpty {
+            visualCatalog.findByPrintedTotalAndCollectorNumber(number)
+        }
         visualMatches.forEach { visualCard ->
             val products = repository.searchCatalog(visualCard.name, 40)
             visualCard.printVariants.forEach { printing ->
@@ -103,6 +110,7 @@ internal object CardScanCandidateResolver {
                             visualSetName = visualCard.set.name,
                             collectorNumber = visualCard.number,
                             imageUrl = visualCard.largeImageUrl,
+                            language = if (visualCard.hasGermanLocalizedName) "GERMAN" else "SOURCE_FALLBACK",
                             finish = printing.finish,
                             variant = printing.variant,
                             rarity = visualCard.rarity,
@@ -124,6 +132,7 @@ internal object CardScanCandidateResolver {
                         visualSetName = visualCard.set.name,
                         collectorNumber = visualCard.number,
                         imageUrl = visualCard.largeImageUrl,
+                        language = if (visualCard.hasGermanLocalizedName) "GERMAN" else "SOURCE_FALLBACK",
                         finish = printing.finish,
                         variant = printing.variant,
                         rarity = visualCard.rarity,

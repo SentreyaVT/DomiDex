@@ -45,4 +45,18 @@ class CardRecognitionRankerTest {
 
         assertTrue(CardRecognitionRanker.score(analysis, matching) >= ScannerDecisionPolicy.MIN_CANDIDATE_SCORE)
     }
+
+    @Test fun sourceLanguageFallbackReachesArtworkVerificationWithoutCreatingANameContradiction() {
+        val analysis = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Deutscher Kartenname"),
+            preferredNameText = "Deutscher Kartenname",
+            preferredNumberText = "007/100",
+        )
+        val sourceFallback = CatalogSearchResult(
+            1, "English Card Name", "future", null, null,
+            collectorNumber = "007", language = "SOURCE_FALLBACK", mainSetSize = 100,
+        )
+
+        assertTrue(CardRecognitionRanker.score(analysis, sourceFallback) >= ScannerDecisionPolicy.MIN_CANDIDATE_SCORE)
+    }
 }
