@@ -42,4 +42,27 @@ class CardImageNormalizerInstrumentedTest {
         assertNull(result.bitmap)
         assertTrue(!result.quality.cardDetected || result.quality.reason.isNotBlank())
     }
+
+    @Test fun holoHighlightDoesNotInvalidateAnOtherwisePlausibleSpecialCard() {
+        val source = Bitmap.createBitmap(900, 1_200, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(source)
+        canvas.drawColor(Color.rgb(16, 17, 23))
+        val card = Path().apply {
+            moveTo(150f, 125f); lineTo(755f, 150f); lineTo(720f, 1_020f); lineTo(118f, 980f); close()
+        }
+        canvas.drawPath(card, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(142, 30, 188) })
+        canvas.drawPath(card, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.CYAN; style = Paint.Style.STROKE; strokeWidth = 15f })
+        repeat(18) { index ->
+            canvas.drawCircle(250f + (index % 6) * 80f, 260f + (index / 6) * 190f, 55f, Paint().apply { color = Color.rgb(30 + index * 8, 190 - index * 5, 210) })
+        }
+        // Local foil reflection: significant but far from covering the card.
+        canvas.drawOval(430f, 300f, 690f, 610f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE })
+
+        val result = CardImageNormalizer.normalize(source)
+
+        assertNotNull("holo normalization failed: ${result.quality}", result.bitmap)
+        assertTrue(result.quality.cardDetected)
+        assertTrue(result.quality.glare > 0f)
+        assertTrue(result.recognitionBitmap != null)
+    }
 }

@@ -2499,7 +2499,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     val latestQueuedScans = rememberUpdatedState(queuedScans)
     DisposableEffect(textAnalyzer) { onDispose {
         textAnalyzer.close()
-        latestQueuedScans.value.forEach { scan -> scan.file.delete() }
+        latestQueuedScans.value.forEach { scan ->
+            scan.file.delete()
+            scan.evidenceFiles.forEach(File::delete)
+        }
     } }
     fun updateQueuedScan(id: String, change: (QueuedCardScan) -> QueuedCardScan) {
         queuedScans = queuedScans.map { scan -> if (scan.id == id) change(scan) else scan }
@@ -2638,8 +2641,8 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             feedbackConsentPending = latestScanFile != null
         }
     }
-    fun enqueueScan(file: File, qualityEligible: Boolean) {
-        val scan = QueuedCardScan(file = file, qualityEligible = qualityEligible)
+    fun enqueueScan(file: File, qualityEligible: Boolean, evidenceFiles: List<File> = emptyList()) {
+        val scan = QueuedCardScan(file = file, evidenceFiles = evidenceFiles, qualityEligible = qualityEligible)
         queuedScans = listOf(scan) + queuedScans
         ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(state = AutoScanState.READING, reason = "queued:${scan.id.take(8)}", scanId = scan.id)
         scope.launch {
@@ -2678,11 +2681,26 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 }
 
                 stage(ScanPipelineStage.PREPROCESSING)
-                val textResult = textAnalyzer.analyzeAwait(file)
-                val currentAnalysis = textResult.getOrElse { error ->
-                    terminal(ScanPipelineStage.FAILED, "Texterkennung fehlgeschlagen: ${error.javaClass.simpleName}")
+                val textResults = (listOf(file) + evidenceFiles).map { evidenceFile ->
+                    async { textAnalyzer.analyzeAwait(evidenceFile) }
+                }.awaitAll()
+                evidenceFiles.forEach(File::delete)
+                val successfulAnalyses = textResults.mapNotNull(Result<CardTextAnalysis>::getOrNull)
+                val currentAnalysis = TemporalRecognitionEvidence.merge(successfulAnalyses)
+                if (currentAnalysis == null) {
+                    val error = textResults.firstNotNullOfOrNull(Result<CardTextAnalysis>::exceptionOrNull)
+                    terminal(ScanPipelineStage.FAILED, "Texterkennung fehlgeschlagen: ${error?.javaClass?.simpleName ?: "Unbekannt"}")
                     return@withPermit
                 }
+                ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
+                    geometryScore = currentAnalysis.imageQuality.geometryScore,
+                    perspectiveScore = currentAnalysis.imageQuality.perspective,
+                    frameQualityScore = currentAnalysis.imageQuality.frameQualityScore,
+                    glarePercentage = currentAnalysis.imageQuality.glare,
+                    usedFallbackGeometry = currentAnalysis.imageQuality.usedFallbackGeometry,
+                    usedDynamicOcr = currentAnalysis.usedDynamicOcr,
+                    usedMultiFrameEvidence = currentAnalysis.usedMultiFrameEvidence,
+                )
                 stage(ScanPipelineStage.OCR)
                 updateQueuedScan(scan.id) { it.copy(analysis = currentAnalysis, message = ScanPipelineStage.OCR.label) }
                 if (!currentAnalysis.imageQuality.cardDetected || currentAnalysis.imageQuality.reason.isNotBlank()) {
@@ -2703,10 +2721,15 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 }
                 stage(ScanPipelineStage.ARTWORK_VERIFICATION)
                 val artwork = currentAnalysis.normalizedCard?.let { captured ->
-                    val descriptor = withContext(Dispatchers.Default) { CardArtworkVerifier.describe(captured) }
+                    val descriptors = currentAnalysis.visualDescriptors.ifEmpty {
+                        listOf(withContext(Dispatchers.Default) { CardArtworkVerifier.describe(captured) })
+                    }
                     withContext(Dispatchers.IO) {
                         resolution.candidates.take(ScanQueuePolicy.MAX_VISUAL_CANDIDATES).filter { !it.card.imageUrl.isNullOrBlank() }
-                            .associate { candidate -> candidate.card.productId to CardArtworkVerifier.verify(descriptor, candidate.card.imageUrl) }
+                            .associate { candidate ->
+                                val temporalResults = descriptors.map { descriptor -> CardArtworkVerifier.verify(descriptor, candidate.card.imageUrl) }
+                                candidate.card.productId to CardArtworkVerifier.combineTemporal(temporalResults)
+                            }
                     }
                 }.orEmpty()
                 val fused = HybridCandidateFusion.rank(currentAnalysis, resolution.candidates, artwork)
@@ -2722,7 +2745,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 val best = fused.firstOrNull()
                 val confidenceLabel = best?.evidence?.confidence?.userLabel ?: "Nicht erkannt"
                 terminal(finalStage, if (finalStage == ScanPipelineStage.MATCHED) "$confidenceLabel · zum Hinzufügen bereit" else confidenceLabel) { current ->
-                    current.copy(analysis = currentAnalysis.copy(normalizedCard = null), candidates = fused, artwork = artwork, decision = finalDecision)
+                    current.copy(analysis = currentAnalysis.copy(normalizedCard = null, visualDescriptors = emptyList()), candidates = fused, artwork = artwork, decision = finalDecision)
                 }
                 val bestArtwork = best?.let { artwork[it.card.productId] }
                 val evidence = best?.evidence
@@ -2736,11 +2759,19 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     artworkMatch = bestArtwork?.match?.name.orEmpty(),
                     artworkConfidence = bestArtwork?.confidence ?: 0f,
                     visualScore = evidence?.visualScore ?: 0,
+                    visualFullCardScore = ((bestArtwork?.fullCardSimilarity ?: 0f) * 100).toInt(),
+                    visualArtworkScore = ((bestArtwork?.artworkSimilarity ?: 0f) * 100).toInt(),
                     numberScore = evidence?.numberScore ?: 0,
+                    collectorNumberScore = evidence?.numberScore ?: 0,
                     setScore = evidence?.setScore ?: 0,
                     nameScore = evidence?.nameScore ?: 0,
                     languageScore = evidence?.languageScore ?: 0,
                     processingMillis = SystemClock.elapsedRealtime() - pipelineStarted,
+                    scoreMargin = finalDecision.absoluteMargin.takeUnless { it == Int.MAX_VALUE } ?: 100,
+                    contradictionFlags = evidence?.contradictions?.joinToString(",").orEmpty(),
+                    glarePercentage = maxOf(currentAnalysis.imageQuality.glare, bestArtwork?.glarePercentage ?: 0f),
+                    usedDynamicOcr = currentAnalysis.usedDynamicOcr,
+                    usedMultiFrameEvidence = currentAnalysis.usedMultiFrameEvidence,
                     stageTimings = durations.entries.joinToString(" · ") { (pipelineStage, elapsed) -> "${pipelineStage.name.take(4)} ${elapsed}ms" },
                     scanId = scan.id,
                 )
@@ -2769,7 +2800,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     // ongoing queue entry here: the camera is free as soon as its JPEG is saved.
                     ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(state = AutoScanState.CAPTURING, reason = "capture_started")
                 },
-                onCaptureSaved = ::enqueueScan,
+                onCaptureSaved = { file, eligible, temporalFiles -> enqueueScan(file, eligible, temporalFiles) },
                 onCaptureFailed = { analysisFailed = true },
             )
         } else {
@@ -2864,7 +2895,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                         Text("Scan-Warteschlange", color = VaultText, fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.weight(1f))
                         TextButton(onClick = {
                             val removable = queuedScans.filter { it.stage in setOf(ScanPipelineStage.MATCHED, ScanPipelineStage.AMBIGUOUS, ScanPipelineStage.MANUAL_REVIEW, ScanPipelineStage.FAILED, ScanPipelineStage.SAVED) }
-                            removable.forEach { it.file.delete() }
+                            removable.forEach { scan -> scan.file.delete(); scan.evidenceFiles.forEach(File::delete) }
                             queuedScans = queuedScans.filterNot { scan -> removable.any { it.id == scan.id } }
                             recentResults = emptyList()
                         }) { Text("Fertige leeren", fontSize = 11.sp) }
@@ -3011,10 +3042,12 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 }
                 Text("M3: ${snapshot.candidateCount} Kandidaten · ${snapshot.finalConfidence}/${snapshot.secondBestConfidence} · ${snapshot.decision}", color = VaultTextMuted, fontSize = 10.sp)
                 if (snapshot.artworkMatch.isNotBlank()) Text("M4: ${snapshot.artworkMatch} (${(snapshot.artworkConfidence * 100).toInt()}%)", color = VaultTextMuted, fontSize = 10.sp)
+                Text("Geometry ${(snapshot.geometryScore * 100).toInt()} · Perspektive ${(snapshot.perspectiveScore * 100).toInt()} · Qualität ${(snapshot.frameQualityScore * 100).toInt()} · Glare ${(snapshot.glarePercentage * 100).toInt()}%", color = VaultTextMuted, fontSize = 9.sp)
                 if (snapshot.scanId.isNotBlank()) {
                     Text("Scan ${snapshot.scanId.take(8)} · ${snapshot.processingMillis} ms", color = VaultTextMuted, fontSize = 10.sp)
                     if (snapshot.stageTimings.isNotBlank()) Text(snapshot.stageTimings, color = VaultTextMuted, fontSize = 9.sp)
-                    Text("Signale: Bild ${snapshot.visualScore} · Nr ${snapshot.numberScore} · Set ${snapshot.setScore} · Name ${snapshot.nameScore} · Sprache ${snapshot.languageScore}", color = VaultTextMuted, fontSize = 10.sp)
+                    Text("Signale: Bild ${snapshot.visualScore} (${snapshot.visualFullCardScore}/${snapshot.visualArtworkScore}) · Nr ${snapshot.collectorNumberScore} · Set ${snapshot.setScore} · Name ${snapshot.nameScore} · Sprache ${snapshot.languageScore}", color = VaultTextMuted, fontSize = 10.sp)
+                    Text("Margin ${snapshot.scoreMargin} · Widerspruch ${snapshot.contradictionFlags.ifBlank { "—" }} · Fallback ${snapshot.usedFallbackGeometry} · dynOCR ${snapshot.usedDynamicOcr} · MultiFrame ${snapshot.usedMultiFrameEvidence}", color = VaultTextMuted, fontSize = 9.sp)
                 }
             }
         }

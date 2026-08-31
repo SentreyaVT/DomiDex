@@ -52,7 +52,9 @@ internal object HybridCandidateFusion {
     ): CandidateSignalScores {
         val readNumber = canonicalNumber(analysis.collectorNumber.orEmpty())
         val candidateNumber = canonicalNumber(candidate.collectorNumber.orEmpty())
-        val number = if (readNumber.isNotBlank() && readNumber == candidateNumber) 100 else 0
+        val number = if (readNumber.isNotBlank() && readNumber == candidateNumber) {
+            (60f + analysis.numberConfidence.coerceIn(0f, 1f) * 40f).roundToInt()
+        } else 0
 
         val readSet = canonicalMetadata(analysis.setIdentifier.orEmpty())
         val candidateSet = canonicalMetadata(candidate.setCode.orEmpty())
@@ -77,27 +79,35 @@ internal object HybridCandidateFusion {
 
         val visualAvailable = artwork != null && artwork.match != ArtworkMatch.UNAVAILABLE
         val visual = if (visualAvailable) (artwork!!.similarity * 100).roundToInt().coerceIn(0, 100) else 0
-        var weighted = number * NUMBER_WEIGHT + set * SET_WEIGHT + name * NAME_WEIGHT + language * LANGUAGE_WEIGHT
-        var availableWeight = NUMBER_WEIGHT + SET_WEIGHT + NAME_WEIGHT + LANGUAGE_WEIGHT
+        val numberAvailable = readNumber.isNotBlank()
+        val setAvailable = readSet.isNotBlank()
+        var weighted = language * LANGUAGE_WEIGHT
+        var availableWeight = LANGUAGE_WEIGHT
+        if (numberAvailable) { weighted += number * NUMBER_WEIGHT; availableWeight += NUMBER_WEIGHT }
+        if (setAvailable) { weighted += set * SET_WEIGHT; availableWeight += SET_WEIGHT }
+        if (readableName) { weighted += name * NAME_WEIGHT; availableWeight += NAME_WEIGHT }
         if (visualAvailable) {
-            weighted += visual * VISUAL_WEIGHT
-            availableWeight += VISUAL_WEIGHT
+            // An inconclusive glare-affected visual result remains evidence, but may not drown out
+            // exact printed identity. A clear corroboration/contradiction retains full weight.
+            val visualWeight = if (artwork?.match == ArtworkMatch.INCONCLUSIVE) 22f else VISUAL_WEIGHT
+            weighted += visual * visualWeight
+            availableWeight += visualWeight
         }
         var finalScore = (weighted / availableWeight).roundToInt().coerceIn(0, 100)
         val contradictions = buildSet {
             if (readNumber.isNotBlank() && number == 0) add("collector_number")
             if (readSet.isNotBlank() && candidateSet.isNotBlank() && set == 0) add("set")
-            if (readableName && nameSimilarity < .38f) add("name")
+            if (readableName && nameSimilarity < .25f) add("name")
             if (artwork?.match == ArtworkMatch.CONTRADICTS) add("artwork")
         }
         if ("collector_number" in contradictions || "set" in contradictions) finalScore = minOf(finalScore, 45)
         if ("name" in contradictions || "artwork" in contradictions) finalScore = minOf(finalScore, 58)
 
-        val hardIdentity = number == 100 && set >= 65 && "name" !in contradictions
+        val hardIdentity = number >= 86 && set >= 65
         val confidence = when {
             contradictions.isNotEmpty() -> RecognitionConfidence.LOW
-            finalScore >= 92 && artwork?.match == ArtworkMatch.CORROBORATES && hardIdentity -> RecognitionConfidence.VERY_HIGH
-            finalScore >= 86 && hardIdentity -> RecognitionConfidence.HIGH
+            finalScore >= 91 && artwork?.match == ArtworkMatch.CORROBORATES && hardIdentity -> RecognitionConfidence.VERY_HIGH
+            finalScore >= 85 && hardIdentity -> RecognitionConfidence.HIGH
             finalScore >= 72 -> RecognitionConfidence.MEDIUM
             finalScore >= 60 -> RecognitionConfidence.LOW
             else -> RecognitionConfidence.UNRESOLVED
@@ -110,13 +120,24 @@ internal object HybridCandidateFusion {
             ?: return ScannerDecisionResult(ScannerDecision.REJECTED, reason = "no_hybrid_candidate")
         val second = candidates.drop(1).firstOrNull()?.evidence?.finalConfidence
         val margin = second?.let { best.finalConfidence - it } ?: Int.MAX_VALUE
+        val relativeMargin = second?.let { margin.toFloat() / best.finalConfidence.coerceAtLeast(1) } ?: 1f
+        val clearMargin = margin >= ScannerDecisionPolicy.MIN_ACCEPTED_MARGIN && relativeMargin >= ScannerDecisionPolicy.MIN_ACCEPTED_RELATIVE_MARGIN
+        fun result(decision: ScannerDecision, reason: String) = ScannerDecisionResult(
+            decision = decision,
+            bestScore = best.finalConfidence,
+            secondScore = second,
+            reason = reason,
+            absoluteMargin = margin,
+            relativeMargin = relativeMargin,
+            contradictionCount = best.contradictions.size,
+        )
         return when {
-            best.contradictions.isNotEmpty() -> ScannerDecisionResult(ScannerDecision.REJECTED, best.finalConfidence, second, "independent_signal_contradiction")
-            best.confidence in setOf(RecognitionConfidence.VERY_HIGH, RecognitionConfidence.HIGH) && margin >= ScannerDecisionPolicy.MIN_ACCEPTED_MARGIN ->
-                ScannerDecisionResult(ScannerDecision.ACCEPTED, best.finalConfidence, second, "hybrid_identity_with_clear_margin")
+            best.contradictions.isNotEmpty() -> result(ScannerDecision.REJECTED, "independent_signal_contradiction")
+            best.confidence in setOf(RecognitionConfidence.VERY_HIGH, RecognitionConfidence.HIGH) && clearMargin ->
+                result(ScannerDecision.ACCEPTED, "hybrid_identity_with_clear_absolute_and_relative_margin")
             best.confidence in setOf(RecognitionConfidence.VERY_HIGH, RecognitionConfidence.HIGH, RecognitionConfidence.MEDIUM) ->
-                ScannerDecisionResult(ScannerDecision.AMBIGUOUS, best.finalConfidence, second, if (margin < ScannerDecisionPolicy.MIN_ACCEPTED_MARGIN) "reprint_or_candidate_margin_too_close" else "hybrid_review_required")
-            else -> ScannerDecisionResult(ScannerDecision.REJECTED, best.finalConfidence, second, "hybrid_evidence_insufficient")
+                result(ScannerDecision.AMBIGUOUS, if (!clearMargin) "reprint_or_candidate_margin_too_close" else "hybrid_review_required")
+            else -> result(ScannerDecision.REJECTED, "hybrid_evidence_insufficient")
         }
     }
 

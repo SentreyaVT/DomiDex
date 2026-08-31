@@ -126,4 +126,27 @@ class CardTextParserTest {
         assertEquals(null, result.setIdentifier)
         assertEquals("001/084", result.collectorNumber)
     }
+
+    @Test fun acceptsSetBoundSingleCollectorNumberOnlyAsWeakEvidence() {
+        val result = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Mew ex"),
+            preferredSetText = "PAF DE 232",
+            preferredNumberText = "PAF DE 232",
+        )
+
+        assertEquals("PAF", result.setIdentifier)
+        assertEquals("232", result.collectorNumber)
+        assertTrue(result.numberConfidence in .60f..(.70f))
+    }
+
+    @Test fun isolatedAttackNumberIsNeverRepairedIntoCollectorEvidence() {
+        val result = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Glurak ex"),
+            preferredSetText = "DE 330",
+            preferredNumberText = "330",
+        )
+
+        assertEquals(null, result.collectorNumber)
+        assertEquals(null, result.setIdentifier)
+    }
 }

@@ -39,6 +39,12 @@ internal data class CardTextAnalysis(
     val roiEvidence: List<CardOcrEvidence> = emptyList(),
     /** Perspective-corrected image kept only for the current local artwork cross-check. */
     val normalizedCard: Bitmap? = null,
+    /** True when a layout-agnostic lower-corner/strip ROI contributed OCR evidence. */
+    val usedDynamicOcr: Boolean = false,
+    /** True when independent still frames contributed best-per-stage evidence. */
+    val usedMultiFrameEvidence: Boolean = false,
+    /** Compact in-memory descriptors; raw temporal frames are discarded immediately. */
+    val visualDescriptors: List<ArtworkDescriptor> = emptyList(),
 )
 
 /** Parses only lower-border-like number pairs; HP/KP and attack damage are excluded. */
@@ -48,16 +54,23 @@ internal object CardNumberParser {
     // accepted. Z/2 and G/6 are common on foiled German cards; accepting them
     // in ordinary body text would make attack damage unsafe evidence.
     private val pair = Regex("(?i)(?<![A-Z0-9])([0-9OIlSBZg]{1,4})\\s*[/|]\\s*([0-9OIlSBZg]{1,4})(?![A-Z0-9])")
+    private val setBoundSingle = Regex("(?i)(?:^|\\s)[A-Z]{3}(?:[-_ ]+DE)?[-_ ]+([0-9OIlSBZg]{1,4})(?:\\s|$)")
 
-    fun find(text: String): Evidence? = text.lineSequence()
+    fun find(text: String): Evidence? {
+        val lines = text.lineSequence()
         .map { it.trim() }
         .filterNot { line -> line.contains(Regex("(?i)\\b(?:hp|kp)\\b")) }
-        .mapNotNull { line -> pair.find(line)?.let { match ->
+        .toList()
+        return lines.asSequence().mapNotNull { line -> pair.find(line)?.let { match ->
             val left = normalize(match.groupValues[1]); val right = normalize(match.groupValues[2])
             if (left.isBlank() || right.isBlank()) null
             else Evidence("${left.padStart(3, '0')}/${right.padStart(3, '0')}", if (line.any { it in "OolISBZzGg" }) .84f else .96f)
         } }
         .firstOrNull()
+            ?: lines.asSequence().mapNotNull { line -> setBoundSingle.find(line)?.groupValues?.get(1)?.let(::normalize)?.takeIf(String::isNotBlank) }
+                .map { number -> Evidence(number.padStart(3, '0'), .64f) }
+                .firstOrNull()
+    }
 
     private fun normalize(value: String): String = value
         .replace('O', '0').replace('o', '0').replace('I', '1').replace('l', '1')
@@ -79,6 +92,7 @@ internal object CardTextParser {
     // the number (for example "OBF098/197"). It remains tied to a number pair so
     // title or attack text can never become a set marker.
     private val compactThreeLetterBorderSetCodePattern = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})(?![A-Z0-9])[-_]?\\s*(?=[0-9OIlSBZg]{1,4}\\s*[/|])")
+    private val threeLetterSetCodeBeforeSingleNumber = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})(?![A-Z0-9])[-_ ]+(?=[0-9OIlSBZg]{1,4}(?:\\s|$))")
     // Language/market abbreviations often sit beside the lower-border set code.
     // They identify the card's language, never its expansion.
     // Scanner scope is deliberately German. "DE" can be printed with or without
@@ -141,6 +155,7 @@ internal object CardTextParser {
                 .trim()
             threeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1)
                 ?: compactThreeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1)
+                ?: threeLetterSetCodeBeforeSingleNumber.find(lowerBorder)?.groupValues?.get(1)
                 // Older cards can use an established alpha-numeric series marker
                 // such as SV3. This fallback still never accepts H/J as a set ID.
                 ?: setIdentifierPattern.find(lowerBorder)?.value
@@ -215,7 +230,9 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
             return
         }
         val raritySymbolEvidence = CardRaritySymbolAnalyzer.analyze(bitmap)
-        val inputs = buildOcrInputs(bitmap)
+        val inputs = buildOcrInputs(bitmap, normalized.recognitionBitmap)
+        normalized.recognitionBitmap?.recycle()
+        normalized.originalCrop?.recycle()
         // Keep the read order deterministic. Each region has explicit variants; full-card OCR is
         // intentionally absent so attack text and KP never become primary identity evidence.
         val results = mutableMapOf<CardScript, MutableMap<Int, String>>()
@@ -248,7 +265,17 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
                 CardOcrEvidence(CardOcrRegion.SET, sets, parsed.setIdentifier, parsed.setIdentifier?.let { .80f } ?: 0f),
                 CardOcrEvidence(CardOcrRegion.NUMBER, numbers, parsed.collectorNumber, parsed.numberConfidence),
             )
-            return parsed.copy(raritySymbolEvidence = raritySymbolEvidence, imageQuality = normalized.quality, roiEvidence = evidence, normalizedCard = bitmap)
+            val dynamicEvidenceUsed = inputs.mapIndexedNotNull { index, input ->
+                latin[index]?.takeIf { input.dynamic && it.isNotBlank() }
+            }.isNotEmpty()
+            return parsed.copy(
+                raritySymbolEvidence = raritySymbolEvidence,
+                imageQuality = normalized.quality,
+                roiEvidence = evidence,
+                normalizedCard = bitmap,
+                usedDynamicOcr = dynamicEvidenceUsed,
+                visualDescriptors = listOf(CardArtworkVerifier.describe(bitmap)),
+            )
         }
         var remaining = recognizers.size * inputs.size
         val lock = Any()
@@ -288,25 +315,29 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
     }
 }
 
-private data class OcrInput(val region: CardOcrRegion, val image: InputImage)
+private data class OcrInput(val region: CardOcrRegion, val image: InputImage, val dynamic: Boolean)
 
-private fun buildOcrInputs(bitmap: Bitmap): List<OcrInput> {
-    fun variants(region: CardOcrRegion, roi: CardRoi, inverted: Boolean = false): List<OcrInput> {
+private fun buildOcrInputs(bitmap: Bitmap, recognitionBitmap: Bitmap?): List<OcrInput> {
+    fun variants(region: CardOcrRegion, roi: CardRoi, dynamic: Boolean, inverted: Boolean = false): List<OcrInput> {
         val crop = roi.crop(bitmap)
-        val enhanced = enhanceForOcr(crop)
-        val result = mutableListOf(
-            OcrInput(region, InputImage.fromBitmap(crop, 0)),
-            OcrInput(region, InputImage.fromBitmap(enhanced, 0)),
-        )
-        if (inverted) result += OcrInput(region, InputImage.fromBitmap(invertForOcr(enhanced), 0))
+        val enhanced = recognitionBitmap?.let(roi::crop) ?: enhanceForOcr(crop)
+        val result = mutableListOf(OcrInput(region, InputImage.fromBitmap(crop, 0), dynamic))
+        if (enhanced !== crop) result += OcrInput(region, InputImage.fromBitmap(enhanced, 0), dynamic)
+        if (inverted) result += OcrInput(region, InputImage.fromBitmap(invertForOcr(enhanced), 0), dynamic)
         return result
     }
-    // Try a small set of layout profiles only after a card has been normalised. This retains the
-    // speed/safety benefit of targeted OCR without assuming one fixed lower-border position.
-    return CardOcrRois.profiles.flatMap { profile ->
-        variants(CardOcrRegion.NAME, profile.name) +
-            variants(CardOcrRegion.SET, profile.set, inverted = true) +
-            variants(CardOcrRegion.NUMBER, profile.number, inverted = true)
+    val primary = CardOcrRois.profiles.take(3)
+    val dynamic = CardOcrRois.profiles.drop(3)
+    // Names need only three broad top bands. Lower identity data additionally searches left,
+    // centre, right and a full-width strip so special-card print can move without enabling unsafe
+    // whole-card OCR.
+    return buildList {
+        primary.map(CardOcrLayoutProfile::name).distinct().forEach { addAll(variants(CardOcrRegion.NAME, it, false)) }
+        (primary + dynamic).forEachIndexed { index, profile ->
+            val isDynamic = index >= primary.size
+            addAll(variants(CardOcrRegion.SET, profile.set, isDynamic, inverted = true))
+            addAll(variants(CardOcrRegion.NUMBER, profile.number, isDynamic, inverted = true))
+        }
     }
 }
 

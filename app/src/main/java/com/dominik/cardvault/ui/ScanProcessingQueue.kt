@@ -21,6 +21,7 @@ internal object ScanQueuePolicy {
 internal data class QueuedCardScan(
     val id: String = UUID.randomUUID().toString(),
     val file: File,
+    val evidenceFiles: List<File> = emptyList(),
     val capturedAtMillis: Long = System.currentTimeMillis(),
     val qualityEligible: Boolean,
     val stage: ScanPipelineStage = ScanPipelineStage.CAPTURED,

@@ -60,4 +60,56 @@ class HybridCandidateFusionTest {
         assertEquals(RecognitionConfidence.HIGH, ranked.single().evidence?.confidence)
         assertEquals(ScannerDecision.ACCEPTED, HybridCandidateFusion.decide(ranked).decision)
     }
+
+    @Test fun `strong artwork number and set tolerate weak special card name`() {
+        val weakName = analysis.copy(searchQueries = listOf("Pikacu"), hasNameRoiEvidence = true)
+        val evidence = HybridCandidateFusion.score(weakName, candidate(1), ArtworkVerification(ArtworkMatch.CORROBORATES, .95f, .95f))
+
+        assertEquals(RecognitionConfidence.VERY_HIGH, evidence.confidence)
+        assertTrue("name" !in evidence.contradictions)
+    }
+
+    @Test fun `artwork and name without printed identity remain review only`() {
+        val noBorder = analysis.copy(collectorNumber = null, setIdentifier = null, numberConfidence = 0f)
+        val ranked = HybridCandidateFusion.rank(
+            noBorder,
+            listOf(ScanCandidate(candidate(1), 80)),
+            mapOf(1L to ArtworkVerification(ArtworkMatch.CORROBORATES, .93f, .93f)),
+        )
+
+        assertEquals(RecognitionConfidence.MEDIUM, ranked.single().evidence?.confidence)
+        assertEquals(ScannerDecision.AMBIGUOUS, HybridCandidateFusion.decide(ranked).decision)
+    }
+
+    @Test fun `visual similarity can never override collector contradiction`() {
+        val wrongNumber = analysis.copy(collectorNumber = "042/084")
+        val ranked = HybridCandidateFusion.rank(
+            wrongNumber,
+            listOf(ScanCandidate(candidate(1), 90)),
+            mapOf(1L to ArtworkVerification(ArtworkMatch.CORROBORATES, .96f, .96f)),
+        )
+
+        assertTrue("collector_number" in ranked.single().evidence!!.contradictions)
+        assertEquals(ScannerDecision.REJECTED, HybridCandidateFusion.decide(ranked).decision)
+    }
+
+    @Test fun `exact printed identity wins with inconclusive artwork`() {
+        val ranked = HybridCandidateFusion.rank(
+            analysis,
+            listOf(ScanCandidate(candidate(1), 90)),
+            mapOf(1L to ArtworkVerification(ArtworkMatch.INCONCLUSIVE, .65f, .65f)),
+        )
+
+        assertEquals(RecognitionConfidence.HIGH, ranked.single().evidence?.confidence)
+        assertEquals(ScannerDecision.ACCEPTED, HybridCandidateFusion.decide(ranked).decision)
+    }
+
+    @Test fun `temporal visual conflict remains inconclusive instead of forcing a match`() {
+        val combined = CardArtworkVerifier.combineTemporal(listOf(
+            ArtworkVerification(ArtworkMatch.CORROBORATES, .90f, .90f),
+            ArtworkVerification(ArtworkMatch.CONTRADICTS, .75f, .25f),
+        ))
+
+        assertEquals(ArtworkMatch.INCONCLUSIVE, combined.match)
+    }
 }

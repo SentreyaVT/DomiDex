@@ -8,6 +8,9 @@ internal data class ScannerDecisionResult(
     val bestScore: Int = 0,
     val secondScore: Int? = null,
     val reason: String,
+    val absoluteMargin: Int = secondScore?.let { bestScore - it } ?: Int.MAX_VALUE,
+    val relativeMargin: Float = secondScore?.let { (bestScore - it).toFloat() / bestScore.coerceAtLeast(1) } ?: 1f,
+    val contradictionCount: Int = 0,
 )
 
 /**
@@ -18,6 +21,7 @@ internal object ScannerDecisionPolicy {
     const val MIN_CANDIDATE_SCORE = 65
     const val ACCEPTED_SCORE = 88
     const val MIN_ACCEPTED_MARGIN = 12
+    const val MIN_ACCEPTED_RELATIVE_MARGIN = .12f
 
     fun decide(scoresDescending: List<Int>): ScannerDecisionResult {
         val best = scoresDescending.firstOrNull() ?: return ScannerDecisionResult(ScannerDecision.REJECTED, reason = "no_database_candidate")

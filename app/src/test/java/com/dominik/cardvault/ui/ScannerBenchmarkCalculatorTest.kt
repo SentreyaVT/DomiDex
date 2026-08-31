@@ -15,6 +15,19 @@ class ScannerBenchmarkCalculatorTest {
         assertEquals(.50f, report.top3Accuracy, .001f)
         assertEquals(.25f, report.unresolvedRate, .001f)
         assertEquals(.25f, report.falsePositiveRate, .001f)
+        assertEquals(.25f, report.reviewRate, .001f)
         assertEquals(250L, report.averageProcessingMillis)
+    }
+
+    @Test fun `special card classes are reported independently`() {
+        val report = ScannerBenchmarkCalculator.calculate(listOf(
+            ScannerBenchmarkSample("EX-1", listOf("EX-1"), ScannerDecision.ACCEPTED, 120, ScannerCardClass.EX),
+            ScannerBenchmarkSample("EX-2", listOf("EX-X"), ScannerDecision.AMBIGUOUS, 180, ScannerCardClass.EX),
+            ScannerBenchmarkSample("FA-1", emptyList(), ScannerDecision.REJECTED, 240, ScannerCardClass.FULL_ART),
+        ))
+
+        assertEquals(.5f, report.byCardClass.getValue(ScannerCardClass.EX).top1Accuracy, .001f)
+        assertEquals(.5f, report.byCardClass.getValue(ScannerCardClass.EX).reviewRate, .001f)
+        assertEquals(1f, report.byCardClass.getValue(ScannerCardClass.FULL_ART).unknownRate, .001f)
     }
 }

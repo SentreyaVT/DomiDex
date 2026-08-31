@@ -25,4 +25,12 @@ class AutoCaptureGateTest {
         assertFalse(gate.onFrame(QualityLevel.GREEN, QualityGuidance.READY))
         assertFalse(gate.onFrame(QualityLevel.GREEN, QualityGuidance.READY))
     }
+
+    @Test fun qualityWindowWaitsForNearBestFrameWithoutLongDelay() {
+        val window = FrameQualityWindow(capacity = 4, tolerance = .04f)
+        assertFalse(window.add(.72f))
+        assertFalse(window.add(.60f))
+        assertTrue(window.add(.70f))
+        assertTrue(window.hasTemporalEvidence)
+    }
 }

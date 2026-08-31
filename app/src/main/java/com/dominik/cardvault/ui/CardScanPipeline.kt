@@ -29,6 +29,8 @@ internal object CardScanConfiguration {
     const val MIN_SHARPNESS = .12f
     const val MIN_EXPOSURE = .28f
     const val MAX_GLARE = .27f
+    const val MAX_RECOGNITION_GLARE = .58f
+    const val FALLBACK_GEOMETRY_TRIGGER = .68f
     const val NORMALIZED_WIDTH = 630
     const val NORMALIZED_HEIGHT = 880
 }
@@ -40,6 +42,9 @@ internal data class CardImageQuality(
     val exposure: Float = 0f,
     val glare: Float = 0f,
     val perspective: Float = 0f,
+    val geometryScore: Float = 0f,
+    val frameQualityScore: Float = 0f,
+    val usedFallbackGeometry: Boolean = false,
     val reason: String = "",
 )
 
@@ -71,6 +76,10 @@ internal object CardOcrRois {
         CardOcrLayoutProfile("modern", CardRoi(.055f, .055f, .945f, .245f), CardRoi(.035f, .805f, .500f, .985f), CardRoi(.180f, .805f, .735f, .985f)),
         CardOcrLayoutProfile("legacy", CardRoi(.050f, .045f, .950f, .285f), CardRoi(.030f, .755f, .530f, .965f), CardRoi(.130f, .755f, .760f, .965f)),
         CardOcrLayoutProfile("extended_lower_border", CardRoi(.050f, .050f, .950f, .270f), CardRoi(.025f, .830f, .565f, .995f), CardRoi(.105f, .830f, .805f, .995f)),
+        CardOcrLayoutProfile("full_art_left", CardRoi(.030f, .025f, .970f, .230f), CardRoi(.015f, .790f, .455f, .998f), CardRoi(.015f, .790f, .455f, .998f)),
+        CardOcrLayoutProfile("full_art_center", CardRoi(.030f, .025f, .970f, .260f), CardRoi(.260f, .790f, .745f, .998f), CardRoi(.230f, .790f, .775f, .998f)),
+        CardOcrLayoutProfile("full_art_right", CardRoi(.030f, .025f, .970f, .260f), CardRoi(.545f, .790f, .995f, .998f), CardRoi(.525f, .790f, .995f, .998f)),
+        CardOcrLayoutProfile("full_lower_strip", CardRoi(.030f, .025f, .970f, .275f), CardRoi(.010f, .745f, .995f, .998f), CardRoi(.010f, .745f, .995f, .998f)),
     )
     val name get() = profiles.first().name
     val set get() = profiles.first().set
@@ -92,6 +101,10 @@ internal data class NormalizedCardCapture(
     val quality: CardImageQuality,
     /** Normalized (0..1) corners in TL, TR, BR, BL order for debug diagnostics. */
     val corners: List<Pair<Float, Float>> = emptyList(),
+    /** Recognition-only local contrast image. It is never persisted or uploaded. */
+    val recognitionBitmap: Bitmap? = null,
+    /** Unwarped bounding crop retained only until OCR input creation. */
+    val originalCrop: Bitmap? = null,
 )
 
 /**
@@ -104,7 +117,7 @@ internal object CardImageNormalizer {
 
     fun normalize(file: File): NormalizedCardCapture {
         val source = decodeUpright(file) ?: return NormalizedCardCapture(null, CardImageQuality(reason = "image_decode_failed"))
-        return normalize(source)
+        return try { normalize(source) } finally { source.recycle() }
     }
 
     fun normalize(source: Bitmap): NormalizedCardCapture {
@@ -112,9 +125,12 @@ internal object CardImageNormalizer {
         val sourceMat = Mat()
         val gray = Mat()
         val normalized = Mat()
-        val blurred = Mat()
+        val rawBlurred = Mat()
+        val normalizedBlurred = Mat()
         val edges = Mat()
+        val contrastEdges = Mat()
         val adaptive = Mat()
+        val luminance = Mat()
         val hierarchy = Mat()
         try {
             Utils.bitmapToMat(source, sourceMat)
@@ -122,33 +138,65 @@ internal object CardImageNormalizer {
             val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
             clahe.apply(gray, normalized)
             clahe.collectGarbage()
-            Imgproc.GaussianBlur(normalized, blurred, Size(5.0, 5.0), 0.0)
-            Imgproc.Canny(blurred, edges, 28.0, 94.0)
-            Imgproc.adaptiveThreshold(blurred, adaptive, 255.0, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 31, 7.0)
+            Imgproc.GaussianBlur(gray, rawBlurred, Size(5.0, 5.0), 0.0)
+            Imgproc.GaussianBlur(normalized, normalizedBlurred, Size(5.0, 5.0), 0.0)
+            // Fast normal edge pass. Expensive fallbacks are evaluated only when it is weak.
+            Imgproc.Canny(rawBlurred, edges, 32.0, 104.0)
             val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
             Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel)
             Imgproc.dilate(edges, edges, kernel)
-            Imgproc.morphologyEx(adaptive, adaptive, Imgproc.MORPH_CLOSE, kernel)
+            val primary = findBestQuad(edges, hierarchy, source.width, source.height, usedFallback = false)
+            val candidate = if (primary == null || primary.score < CardScanConfiguration.FALLBACK_GEOMETRY_TRIGGER) {
+                Imgproc.Canny(normalizedBlurred, contrastEdges, 22.0, 86.0)
+                Imgproc.adaptiveThreshold(normalizedBlurred, adaptive, 255.0, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 31, 7.0)
+                Imgproc.threshold(normalizedBlurred, luminance, 0.0, 255.0, Imgproc.THRESH_BINARY_INV or Imgproc.THRESH_OTSU)
+                listOf(contrastEdges, adaptive, luminance).forEach { map ->
+                    Imgproc.morphologyEx(map, map, Imgproc.MORPH_CLOSE, kernel)
+                }
+                (listOfNotNull(primary) + listOf(contrastEdges, adaptive, luminance).mapNotNull { map ->
+                    findBestQuad(map, hierarchy, source.width, source.height, usedFallback = true)
+                }).maxByOrNull { it.score }
+            } else primary
             kernel.release()
-            val candidate = listOf(edges, adaptive)
-                .mapNotNull { map -> findBestQuad(map, hierarchy, source.width, source.height) }
-                .maxByOrNull { it.score }
+            candidate
                 ?: return NormalizedCardCapture(null, CardImageQuality(reason = "no_plausible_card_frame"))
             if (candidate.score < CardScanConfiguration.MIN_FRAME_SCORE || candidate.coverage !in CardScanConfiguration.MIN_CARD_COVERAGE..CardScanConfiguration.MAX_CARD_COVERAGE) {
-                return NormalizedCardCapture(null, CardImageQuality(cardDetected = true, frameConfidence = candidate.score, perspective = candidate.perspective, reason = "implausible_card_frame"), candidate.corners.map { it.x.toFloat() / source.width to it.y.toFloat() / source.height })
+                return NormalizedCardCapture(
+                    null,
+                    CardImageQuality(
+                        cardDetected = true,
+                        frameConfidence = candidate.score,
+                        perspective = candidate.perspective,
+                        geometryScore = candidate.score,
+                        usedFallbackGeometry = candidate.usedFallback,
+                        reason = "implausible_card_frame",
+                    ),
+                    candidate.corners.map { it.x.toFloat() / source.width to it.y.toFloat() / source.height },
+                )
             }
             val output = warp(sourceMat, candidate.corners)
             val quality = evaluate(output, candidate)
-            return if (quality.reason.isBlank()) NormalizedCardCapture(output, quality, candidate.corners.map { it.x.toFloat() / source.width to it.y.toFloat() / source.height })
-            else NormalizedCardCapture(null, quality, candidate.corners.map { it.x.toFloat() / source.width to it.y.toFloat() / source.height })
+            val normalizedCorners = candidate.corners.map { it.x.toFloat() / source.width to it.y.toFloat() / source.height }
+            if (quality.reason.isNotBlank()) {
+                output.recycle()
+                return NormalizedCardCapture(null, quality, normalizedCorners)
+            }
+            return NormalizedCardCapture(
+                bitmap = output,
+                quality = quality,
+                corners = normalizedCorners,
+                recognitionBitmap = contrastRecognitionImage(output),
+                originalCrop = boundingCrop(source, candidate.corners),
+            )
         } finally {
-            sourceMat.release(); gray.release(); normalized.release(); blurred.release(); edges.release(); adaptive.release(); hierarchy.release()
+            sourceMat.release(); gray.release(); normalized.release(); rawBlurred.release(); normalizedBlurred.release()
+            edges.release(); contrastEdges.release(); adaptive.release(); luminance.release(); hierarchy.release()
         }
     }
 
-    private data class Quad(val corners: List<Point>, val score: Float, val coverage: Float, val perspective: Float)
+    private data class Quad(val corners: List<Point>, val score: Float, val coverage: Float, val perspective: Float, val usedFallback: Boolean)
 
-    private fun findBestQuad(edgeMap: Mat, hierarchy: Mat, width: Int, height: Int): Quad? {
+    private fun findBestQuad(edgeMap: Mat, hierarchy: Mat, width: Int, height: Int, usedFallback: Boolean): Quad? {
         val contours = ArrayList<MatOfPoint>()
         return try {
             Imgproc.findContours(edgeMap, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
@@ -169,15 +217,27 @@ internal object CardImageNormalizer {
                     val long = max((lengths[0] + lengths[2]) / 2.0, (lengths[1] + lengths[3]) / 2.0)
                     val ratio = if (long > 0) short / long else 0.0
                     val aspectScore = (1.0 - abs(ratio - CardScanConfiguration.CARD_RATIO) / .20).coerceIn(0.0, 1.0).toFloat()
+                    val rightAngles = rightAngleScore(ordered)
                     val margin = ordered.all { it.x > width * .008 && it.x < width * .992 && it.y > height * .008 && it.y < height * .992 }
-                    val perspective = min(opposite, aspectScore) * if (margin) 1f else .55f
+                    val perspective = min(min(opposite, aspectScore), rightAngles) * if (margin) 1f else .55f
                     val coverage = (area / imageArea).toFloat()
                     val coverageScore = (1f - abs(coverage - .42f) / .48f).coerceIn(0f, 1f)
-                    Quad(ordered, perspective * .75f + coverageScore * .25f, coverage, perspective)
+                    val geometry = aspectScore * .34f + rightAngles * .30f + opposite * .22f + coverageScore * .14f
+                    Quad(ordered, geometry * if (margin) 1f else .72f, coverage, perspective, usedFallback)
                 } finally { curve.release(); approximation.release() }
             }.maxByOrNull { it.score }
         } finally { contours.forEach(Mat::release) }
     }
+
+    private fun rightAngleScore(points: List<Point>): Float = points.indices.map { index ->
+        val previous = points[(index + 3) % 4]
+        val current = points[index]
+        val next = points[(index + 1) % 4]
+        val ax = previous.x - current.x; val ay = previous.y - current.y
+        val bx = next.x - current.x; val by = next.y - current.y
+        val denominator = hypot(ax, ay) * hypot(bx, by)
+        if (denominator <= 0.0) 0f else (1.0 - abs((ax * bx + ay * by) / denominator)).coerceIn(0.0, 1.0).toFloat()
+    }.average().toFloat()
 
     private fun orderCorners(points: List<Point>): List<Point> {
         val sorted = points.sortedBy { it.y }
@@ -221,15 +281,38 @@ internal object CardImageNormalizer {
             val sharpnessScore = (laplacianVariance / 1_200.0).toFloat().coerceIn(0f, 1f)
             val exposure = (1f - abs(mean - 128.0).toFloat() / 128f).coerceIn(0f, 1f)
             val glareScore = glare.toFloat() / samples.coerceAtLeast(1)
+            val glareQuality = (1f - glareScore / CardScanConfiguration.MAX_RECOGNITION_GLARE).coerceIn(0f, 1f)
+            val frameQuality = (sharpnessScore * .32f + exposure * .18f + glareQuality * .20f + quad.score * .20f + quad.perspective * .10f).coerceIn(0f, 1f)
             val reason = when {
                 sharpnessScore < CardScanConfiguration.MIN_SHARPNESS -> "image_too_soft"
                 exposure < CardScanConfiguration.MIN_EXPOSURE -> "exposure_out_of_range"
-                glareScore > CardScanConfiguration.MAX_GLARE -> "strong_reflections"
+                // Local holo highlights are expected. Only an overwhelmingly clipped card is
+                // unusable; ordinary glare is down-weighted later by the visual descriptor.
+                glareScore > CardScanConfiguration.MAX_RECOGNITION_GLARE -> "overwhelming_reflection"
                 else -> ""
             }
-            CardImageQuality(true, quad.score, sharpnessScore, exposure, glareScore, quad.perspective, reason)
+            CardImageQuality(true, quad.score, sharpnessScore, exposure, glareScore, quad.perspective, quad.score, frameQuality, quad.usedFallback, reason)
         } finally { mat.release(); gray.release(); laplacian.release() }
     }
+
+    private fun contrastRecognitionImage(source: Bitmap): Bitmap {
+        val rgba = Mat(); val gray = Mat(); val enhanced = Mat()
+        return try {
+            Utils.bitmapToMat(source, rgba)
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+            val clahe = Imgproc.createCLAHE(2.4, Size(8.0, 8.0))
+            clahe.apply(gray, enhanced); clahe.collectGarbage()
+            Bitmap.createBitmap(enhanced.cols(), enhanced.rows(), Bitmap.Config.ARGB_8888).also { Utils.matToBitmap(enhanced, it) }
+        } finally { rgba.release(); gray.release(); enhanced.release() }
+    }
+
+    private fun boundingCrop(source: Bitmap, corners: List<Point>): Bitmap? = runCatching {
+        val left = corners.minOf { it.x }.toInt().coerceIn(0, source.width - 1)
+        val top = corners.minOf { it.y }.toInt().coerceIn(0, source.height - 1)
+        val right = corners.maxOf { it.x }.toInt().coerceIn(left + 1, source.width)
+        val bottom = corners.maxOf { it.y }.toInt().coerceIn(top + 1, source.height)
+        Bitmap.createBitmap(source, left, top, right - left, bottom - top)
+    }.getOrNull()
 
     private fun decodeUpright(file: File): Bitmap? = runCatching {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }

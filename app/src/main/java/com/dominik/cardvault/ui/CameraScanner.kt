@@ -62,7 +62,7 @@ internal object LatestCardCapture {
     var path by mutableStateOf<String?>(null)
 }
 
-private data class FrameQuality(val level: QualityLevel, val guidance: QualityGuidance, val exposure: Float, val sharpness: Float, val stability: Float, val coverage: Float, val perspective: Float, val contourStability: Float = 0f, val stableFrames: Int = 0, val corners: List<Pair<Float, Float>> = emptyList())
+private data class FrameQuality(val level: QualityLevel, val guidance: QualityGuidance, val exposure: Float, val sharpness: Float, val stability: Float, val coverage: Float, val perspective: Float, val contourStability: Float = 0f, val stableFrames: Int = 0, val corners: List<Pair<Float, Float>> = emptyList(), val glare: Float = 0f, val frameQualityScore: Float = 0f)
 internal enum class QualityLevel { RED, YELLOW, GREEN }
 internal enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS, FIND_CARD, MOVE_CLOSER, MOVE_AWAY, ALIGN_PARALLEL, READY }
 internal enum class AutoScanState { SEARCHING, CARD_DETECTED, STABILIZING, READY, CAPTURING, READING, MATCHING, CONFIRMED, NOT_FOUND, AMBIGUOUS }
@@ -78,16 +78,28 @@ internal data class ScannerDebugSnapshot(
     val raritySymbolColor: SymbolColor = SymbolColor.UNKNOWN,
     val raritySymbolConfidence: Float = 0f,
     val frameConfidence: Float = 0f,
+    val geometryScore: Float = 0f,
+    val perspectiveScore: Float = 0f,
+    val frameQualityScore: Float = 0f,
+    val glarePercentage: Float = 0f,
     val secondBestConfidence: Int = 0,
     val decision: String = "",
     val artworkConfidence: Float = 0f,
     val artworkMatch: String = "",
     val visualScore: Int = 0,
+    val visualFullCardScore: Int = 0,
+    val visualArtworkScore: Int = 0,
     val numberScore: Int = 0,
+    val collectorNumberScore: Int = 0,
     val setScore: Int = 0,
     val nameScore: Int = 0,
     val languageScore: Int = 0,
     val processingMillis: Long = 0L,
+    val scoreMargin: Int = 0,
+    val contradictionFlags: String = "",
+    val usedFallbackGeometry: Boolean = false,
+    val usedDynamicOcr: Boolean = false,
+    val usedMultiFrameEvidence: Boolean = false,
     val stageTimings: String = "",
     val scanId: String = "",
 )
@@ -97,7 +109,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
 @Composable fun LiveCameraScanner(
     modifier: Modifier = Modifier,
     onCaptureStarted: (Boolean) -> Unit = {},
-    onCaptureSaved: (File, Boolean) -> Unit = { _, _ -> },
+    onCaptureSaved: (File, Boolean, List<File>) -> Unit = { _, _, _ -> },
     onCaptureFailed: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -160,35 +172,53 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         val captureId = System.nanoTime()
         val contributionEligible = quality.level == QualityLevel.GREEN && quality.corners.size == 4
         activeCaptureId = captureId
-        val file = File(context.cacheDir, "cardvault-test-capture-${System.currentTimeMillis()}.jpg")
+        val files = mutableListOf<File>()
+        val frameCount = if (auto) 2 else 1
+        fun finishSuccessful() {
+            if (activeCaptureId != captureId || files.isEmpty()) return
+            activeCaptureId = 0L
+            val primary = files.first()
+            latestCapture = primary; captureInProgress = false
+            LatestCardCapture.path = primary.absolutePath
+            captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            confirmationSound.play(MediaActionSound.SHUTTER_CLICK)
+            onCaptureSaved(primary, contributionEligible, files.drop(1))
+        }
+        fun failCapture() {
+            if (activeCaptureId != captureId) return
+            activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed
+            files.forEach(File::delete); onCaptureFailed()
+        }
         captureTimeoutHandler.postDelayed({
             if (activeCaptureId == captureId && captureInProgress) {
-                activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; file.delete(); onCaptureFailed()
+                failCapture()
             }
-        }, 12_000L)
-        try {
-            controller.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), mainExecutor, object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    if (activeCaptureId != captureId) { file.delete(); return }
-                    activeCaptureId = 0L
-                    latestCapture = file; captureInProgress = false
-                    LatestCardCapture.path = file.absolutePath
-                    captureMessage = if (auto) R.string.capture_saved_automatically else R.string.capture_saved
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    confirmationSound.play(MediaActionSound.SHUTTER_CLICK)
-                    onCaptureSaved(file, contributionEligible)
-                }
-                override fun onError(exception: ImageCaptureException) {
-                    if (activeCaptureId != captureId) return
-                    activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; file.delete(); onCaptureFailed()
-                }
-            })
-        } catch (_: IllegalStateException) {
-            // Some emulators and a temporarily unavailable physical camera expose the scanner UI
-            // before CameraX has an initialized lens. A tap must report a recoverable capture
-            // failure, never terminate the whole collection app.
-            activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; file.delete(); onCaptureFailed()
+        }, 16_000L)
+        fun takeFrame(index: Int) {
+            if (activeCaptureId != captureId) return
+            val file = File(context.cacheDir, "cardvault-capture-${captureId}-${index}.jpg")
+            try {
+                controller.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), mainExecutor, object : ImageCapture.OnImageSavedCallback {
+                    override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                        if (activeCaptureId != captureId) { file.delete(); return }
+                        files += file
+                        if (index + 1 < frameCount) captureTimeoutHandler.postDelayed({ takeFrame(index + 1) }, 140L)
+                        else finishSuccessful()
+                    }
+                    override fun onError(exception: ImageCaptureException) {
+                        file.delete()
+                        // One high-quality frame remains a truthful fallback when a short temporal
+                        // burst is interrupted by CameraX; a missing first frame is a real failure.
+                        if (files.isNotEmpty()) finishSuccessful() else failCapture()
+                    }
+                })
+            } catch (_: IllegalStateException) {
+                file.delete()
+                if (files.isNotEmpty()) finishSuccessful() else failCapture()
+            }
         }
+        takeFrame(0)
     }
     LaunchedEffect(quality, autoCaptureEnabled, captureInProgress, torchSettlingUntil) {
         if (autoCaptureEnabled && !captureInProgress && SystemClock.elapsedRealtime() >= torchSettlingUntil && autoCaptureGate.onFrame(quality.level, quality.guidance)) capture(true)
@@ -306,6 +336,18 @@ internal class AutoCaptureGate(private val missingFramesToRearm: Int = 3, privat
     fun disarm() { armed = false; missingFrames = 0; readyFrames = 0 }
 }
 
+/** Keeps a tiny quality window so auto capture waits for a near-best stable holo frame. */
+internal class FrameQualityWindow(private val capacity: Int = 4, private val tolerance: Float = .045f) {
+    private val values = ArrayDeque<Float>()
+    fun add(value: Float): Boolean {
+        values.addLast(value.coerceIn(0f, 1f))
+        while (values.size > capacity) values.removeFirst()
+        return values.size >= 2 && value >= (values.maxOrNull() ?: value) - tolerance
+    }
+    fun clear() = values.clear()
+    val hasTemporalEvidence: Boolean get() = values.size >= 2
+}
+
 @Composable private fun QualityMetric(label: String, value: Float, modifier: Modifier) = Column(modifier) {
     Text(label, color = VaultTextMuted, fontSize = 10.sp)
     LinearProgressIndicator(progress = { value.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(4.dp))
@@ -334,6 +376,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
     private var missedTrackedFrames = 0
     private var priorDetectedFrame: CardFrame? = null
     private val detector = CardFrameDetector()
+    private val qualityWindow = FrameQualityWindow()
 
     override fun analyze(image: ImageProxy) {
         try {
@@ -361,6 +404,8 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             val detectedFrame = detector.detect(buffer, width, height, plane.rowStride, plane.pixelStride)
             val frame = track(detectedFrame)
             val contourStability = contourStability(detectedFrame)
+            val glareQuality = (1f - clippedBright / .42f).coerceIn(0f, 1f)
+            val frameQualityScore = (sharpnessScore * .26f + exposureScore * .16f + glareQuality * .18f + stabilityScore * .18f + detectedFrame.geometryScore * .14f + detectedFrame.perspective * .08f).coerceIn(0f, 1f)
             // Only a fresh, current frame may arm auto-capture. The short tracker
             // grace period is purely visual so the proposal does not flicker when a
             // hand, glare or a webcam frame briefly hides an otherwise found edge.
@@ -371,9 +416,10 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             // A textured background alone must never arm auto capture.  Centre
             // detail remains a guidance fallback, while capture requires an actual
             // stable four-corner proposal across consecutive analysis frames.
-            val baseReady = mean in 52.0..215.0 && clippedBright <= .16f && clippedDark <= .42f && stabilityScore >= .47f && sharpnessScore >= .15f && contourStability >= .60f && hasCardEvidence
+            val stableQuality = if (hasCardEvidence && stabilityScore >= .47f) qualityWindow.add(frameQualityScore) else { qualityWindow.clear(); false }
+            val baseReady = mean in 45.0..225.0 && clippedBright <= .32f && clippedDark <= .48f && stabilityScore >= .47f && sharpnessScore >= .15f && contourStability >= .60f && frameQualityScore >= .52f && stableQuality && hasCardEvidence
             stableReadyFrames = if (baseReady) stableReadyFrames + 1 else 0
-            val guidance = when { mean < 52 || clippedDark > .42f -> QualityGuidance.MORE_LIGHT; mean > 215 || clippedBright > .16f -> QualityGuidance.LESS_GLARE; stabilityScore < .47f || (frame.found && contourStability < .60f) -> QualityGuidance.HOLD_STILL; sharpnessScore < .15f -> QualityGuidance.FOCUS; !frame.found && centeredCardEvidence < .30f -> QualityGuidance.FIND_CARD; frame.found && frame.coverage < .11f -> QualityGuidance.MOVE_CLOSER; frame.found && frame.coverage > .96f -> QualityGuidance.MOVE_AWAY; frame.found && frame.perspective < .54f -> QualityGuidance.ALIGN_PARALLEL; stableReadyFrames >= 3 -> QualityGuidance.READY; else -> QualityGuidance.HOLD_STILL }
+            val guidance = when { mean < 45 || clippedDark > .48f -> QualityGuidance.MORE_LIGHT; mean > 225 || clippedBright > .32f -> QualityGuidance.LESS_GLARE; stabilityScore < .47f || (frame.found && contourStability < .60f) -> QualityGuidance.HOLD_STILL; sharpnessScore < .15f -> QualityGuidance.FOCUS; !frame.found && centeredCardEvidence < .30f -> QualityGuidance.FIND_CARD; frame.found && frame.coverage < .11f -> QualityGuidance.MOVE_CLOSER; frame.found && frame.coverage > .96f -> QualityGuidance.MOVE_AWAY; frame.found && frame.perspective < .54f -> QualityGuidance.ALIGN_PARALLEL; stableReadyFrames >= 3 -> QualityGuidance.READY; else -> QualityGuidance.HOLD_STILL }
             val level = when { guidance == QualityGuidance.READY -> QualityLevel.GREEN; guidance in setOf(QualityGuidance.FIND_CARD, QualityGuidance.MOVE_CLOSER, QualityGuidance.MOVE_AWAY, QualityGuidance.ALIGN_PARALLEL) || baseReady -> QualityLevel.YELLOW; else -> QualityLevel.RED }
             val scanState = when {
                 !frame.found -> AutoScanState.SEARCHING
@@ -388,9 +434,15 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                     frameStability = stabilityScore,
                     contourStability = contourStability,
                     frameConfidence = frame.coverage.coerceIn(0f, 1f),
+                    geometryScore = detectedFrame.geometryScore,
+                    perspectiveScore = detectedFrame.perspective,
+                    frameQualityScore = frameQualityScore,
+                    glarePercentage = clippedBright,
+                    usedFallbackGeometry = detectedFrame.usedFallbackGeometry,
+                    usedMultiFrameEvidence = qualityWindow.hasTemporalEvidence,
                     reason = if (ScannerDebugState.snapshot.scanId.isBlank()) guidance.name else ScannerDebugState.snapshot.reason,
                 )
-                onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, frame.corners))
+                onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, frame.corners, clippedBright, frameQualityScore))
             }
         } finally { image.close() }
     }
@@ -417,6 +469,8 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                 found = true,
                 coverage = previousFrame.coverage * .60f + detected.coverage * .40f,
                 perspective = previousFrame.perspective * .60f + detected.perspective * .40f,
+                geometryScore = previousFrame.geometryScore * .60f + detected.geometryScore * .40f,
+                usedFallbackGeometry = previousFrame.usedFallbackGeometry || detected.usedFallbackGeometry,
                 corners = previousFrame.corners.zip(detected.corners) { old, fresh ->
                     old.first * .60f + fresh.first * .40f to old.second * .60f + fresh.second * .40f
                 },
@@ -427,7 +481,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
     }
 }
 
-internal data class CardFrame(val found: Boolean, val coverage: Float, val perspective: Float, val corners: List<Pair<Float, Float>> = emptyList())
+internal data class CardFrame(val found: Boolean, val coverage: Float, val perspective: Float, val corners: List<Pair<Float, Float>> = emptyList(), val geometryScore: Float = 0f, val usedFallbackGeometry: Boolean = false)
 
 internal class CardFrameDetector {
     private val available = runCatching { OpenCVLoader.initLocal() }.getOrDefault(false)
@@ -436,26 +490,24 @@ internal class CardFrameDetector {
         if (!available) return CardFrame(false, 0f, 0f)
         val bytes = ByteArray(width * height); var target = 0
         for (y in 0 until height) for (x in 0 until width) bytes[target++] = buffer.get(y * rowStride + x * pixelStride)
-        val gray = Mat(height, width, CvType.CV_8UC1); val normalized = Mat(); val blurred = Mat(); val edges = Mat(); val adaptiveEdges = Mat(); val hierarchy = Mat()
+        val gray = Mat(height, width, CvType.CV_8UC1); val normalized = Mat(); val rawBlurred = Mat(); val blurred = Mat(); val edges = Mat(); val contrastEdges = Mat(); val adaptiveEdges = Mat(); val luminanceEdges = Mat(); val hierarchy = Mat()
         val contours = ArrayList<MatOfPoint>()
         return try {
             gray.put(0, 0, bytes)
             // Local contrast normalization keeps edges usable in uneven room lighting. It only
             // affects frame finding; the original camera image is never altered or saved.
             val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0)); clahe.apply(gray, normalized); clahe.collectGarbage()
+            Imgproc.GaussianBlur(gray, rawBlurred, Size(5.0, 5.0), 0.0)
             Imgproc.GaussianBlur(normalized, blurred, Size(5.0, 5.0), 0.0)
             // Webcam feeds tend to have softer, lower-contrast card edges than phone cameras.
             // Combine a conventional edge pass with an adaptive local-contrast pass so a card
             // against a similarly bright desk can still propose its outer contour.
-            Imgproc.Canny(blurred, edges, 24.0, 92.0)
-            Imgproc.adaptiveThreshold(blurred, adaptiveEdges, 255.0, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 31, 7.0)
+            Imgproc.Canny(rawBlurred, edges, 28.0, 98.0)
             val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
             Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel)
             Imgproc.dilate(edges, edges, kernel)
-            Imgproc.morphologyEx(adaptiveEdges, adaptiveEdges, Imgproc.MORPH_CLOSE, kernel)
-            kernel.release()
             val imageArea = width.toDouble() * height; var best: CardFrame? = null; var bestScore = 0f
-            fun inspectContours(edgeMap: Mat) {
+            fun inspectContours(edgeMap: Mat, usedFallback: Boolean) {
                 contours.clear()
                 Imgproc.findContours(edgeMap, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
                 contours.forEach { contour ->
@@ -468,16 +520,17 @@ internal class CardFrameDetector {
                     val opposite = min(min(lengths[0], lengths[2]) / maxOf(lengths[0], lengths[2]), min(lengths[1], lengths[3]) / maxOf(lengths[1], lengths[3])).toFloat()
                     val rect = Imgproc.minAreaRect(approx); val short = min(rect.size.width, rect.size.height); val long = maxOf(rect.size.width, rect.size.height); val aspect = if (long > 0) short / long else 0.0
                     val aspectScore = (1.0 - abs(aspect - 63.0 / 88.0) / .35).coerceIn(0.0, 1.0).toFloat()
+                    val rightAngles = liveRightAngleScore(ordered)
                     val margin = points.all { it.x > width * .015 && it.x < width * .985 && it.y > height * .015 && it.y < height * .985 }
-                    val perspective = min(opposite, aspectScore) * if (margin) 1f else .5f
+                    val perspective = min(min(opposite, aspectScore), rightAngles) * if (margin) 1f else .5f
                     val visualCorners = points.sortedWith(compareBy<Point> { it.y }.thenBy { it.x }).let { sorted ->
                         val top = sorted.take(2).sortedBy { it.x }; val bottom = sorted.takeLast(2).sortedByDescending { it.x }; top + bottom
                     }.map { (1f - (it.y / height).toFloat()).coerceIn(0f, 1f) to (it.x / width).toFloat().coerceIn(0f, 1f) }
                     val rawCoverage = (area / imageArea).toFloat()
                     val coverageScore = (1f - abs(rawCoverage - .42f) / .42f).coerceIn(0f, 1f)
-                    val score = perspective * .72f + coverageScore * .28f
+                    val score = (aspectScore * .32f + rightAngles * .28f + opposite * .22f + coverageScore * .18f) * if (margin) 1f else .70f
                     if (score > bestScore) {
-                        best = CardFrame(true, (area / (imageArea * .62)).toFloat(), perspective, visualCorners)
+                        best = CardFrame(true, (area / (imageArea * .62)).toFloat(), perspective, visualCorners, score, usedFallback)
                         bestScore = score
                     }
                 }
@@ -486,11 +539,28 @@ internal class CardFrameDetector {
                 contours.forEach(Mat::release)
                 contours.clear()
             }
-            inspectContours(edges)
-            inspectContours(adaptiveEdges)
+            inspectContours(edges, false)
+            if (bestScore < CardScanConfiguration.FALLBACK_GEOMETRY_TRIGGER) {
+                Imgproc.Canny(blurred, contrastEdges, 20.0, 82.0)
+                Imgproc.adaptiveThreshold(blurred, adaptiveEdges, 255.0, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 31, 7.0)
+                Imgproc.threshold(blurred, luminanceEdges, 0.0, 255.0, Imgproc.THRESH_BINARY_INV or Imgproc.THRESH_OTSU)
+                listOf(contrastEdges, adaptiveEdges, luminanceEdges).forEach { map -> Imgproc.morphologyEx(map, map, Imgproc.MORPH_CLOSE, kernel) }
+                inspectContours(contrastEdges, true)
+                inspectContours(adaptiveEdges, true)
+                inspectContours(luminanceEdges, true)
+            }
+            kernel.release()
             best ?: CardFrame(false, 0f, 0f)
-        } finally { contours.forEach(Mat::release); gray.release(); normalized.release(); blurred.release(); edges.release(); adaptiveEdges.release(); hierarchy.release() }
+        } finally { contours.forEach(Mat::release); gray.release(); normalized.release(); rawBlurred.release(); blurred.release(); edges.release(); contrastEdges.release(); adaptiveEdges.release(); luminanceEdges.release(); hierarchy.release() }
     }
+
+    private fun liveRightAngleScore(points: List<Point>): Float = points.indices.map { index ->
+        val previous = points[(index + 3) % 4]; val current = points[index]; val next = points[(index + 1) % 4]
+        val ax = previous.x - current.x; val ay = previous.y - current.y
+        val bx = next.x - current.x; val by = next.y - current.y
+        val denominator = hypot(ax, ay) * hypot(bx, by)
+        if (denominator <= 0.0) 0f else (1.0 - abs((ax * bx + ay * by) / denominator)).coerceIn(0.0, 1.0).toFloat()
+    }.average().toFloat()
 
     /** Detects a still image in its own (unrotated) coordinate system. */
     fun detectPhoto(luma: ByteArray, width: Int, height: Int): CardFrame {
