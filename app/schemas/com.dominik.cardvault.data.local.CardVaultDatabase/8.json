@@ -1,0 +1,967 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 8,
+    "identityHash": "e3d6c91c14c41d3a9796f7848bd264a1",
+    "entities": [
+      {
+        "tableName": "catalog_cards",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `tcg` TEXT NOT NULL, `setId` TEXT NOT NULL, `setName` TEXT NOT NULL, `name` TEXT NOT NULL, `collectorNumber` TEXT NOT NULL, `language` TEXT NOT NULL, `finish` TEXT NOT NULL, `variant` TEXT NOT NULL, `createdAtEpochMillis` INTEGER NOT NULL, `externalSource` TEXT, `externalProductId` INTEGER, `imageUrl` TEXT, `rarity` TEXT NOT NULL DEFAULT 'UNKNOWN', `effectOverride` TEXT DEFAULT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tcg",
+            "columnName": "tcg",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "setId",
+            "columnName": "setId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "setName",
+            "columnName": "setName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "collectorNumber",
+            "columnName": "collectorNumber",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "language",
+            "columnName": "language",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finish",
+            "columnName": "finish",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "variant",
+            "columnName": "variant",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMillis",
+            "columnName": "createdAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "externalSource",
+            "columnName": "externalSource",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "externalProductId",
+            "columnName": "externalProductId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "imageUrl",
+            "columnName": "imageUrl",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rarity",
+            "columnName": "rarity",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'UNKNOWN'"
+          },
+          {
+            "fieldPath": "effectOverride",
+            "columnName": "effectOverride",
+            "affinity": "TEXT",
+            "defaultValue": "NULL"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_catalog_cards_tcg_setId_collectorNumber_language_finish_variant",
+            "unique": false,
+            "columnNames": [
+              "tcg",
+              "setId",
+              "collectorNumber",
+              "language",
+              "finish",
+              "variant"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_catalog_cards_tcg_setId_collectorNumber_language_finish_variant` ON `${TABLE_NAME}` (`tcg`, `setId`, `collectorNumber`, `language`, `finish`, `variant`)"
+          },
+          {
+            "name": "index_catalog_cards_externalSource_externalProductId",
+            "unique": true,
+            "columnNames": [
+              "externalSource",
+              "externalProductId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_catalog_cards_externalSource_externalProductId` ON `${TABLE_NAME}` (`externalSource`, `externalProductId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "binders",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `setKey` TEXT NOT NULL, `name` TEXT NOT NULL, `heroAsset` TEXT, `createdAtEpochMillis` INTEGER NOT NULL, `updatedAtEpochMillis` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "setKey",
+            "columnName": "setKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "heroAsset",
+            "columnName": "heroAsset",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtEpochMillis",
+            "columnName": "createdAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMillis",
+            "columnName": "updatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_binders_setKey",
+            "unique": true,
+            "columnNames": [
+              "setKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_binders_setKey` ON `${TABLE_NAME}` (`setKey`)"
+          }
+        ]
+      },
+      {
+        "tableName": "collection_entries",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `cardId` TEXT NOT NULL, `quantity` INTEGER NOT NULL, `condition` TEXT NOT NULL, `acquisitionPriceMinor` INTEGER, `acquisitionCurrency` TEXT, `acquisitionDateEpochDay` INTEGER, `notes` TEXT NOT NULL, `frontPhotoUri` TEXT, `backPhotoUri` TEXT, `createdAtEpochMillis` INTEGER NOT NULL, `updatedAtEpochMillis` INTEGER NOT NULL, `externalProductSource` TEXT, `externalProductId` INTEGER, `binderId` TEXT NOT NULL DEFAULT 'inbox', `ownerUid` TEXT NOT NULL DEFAULT '__domidex_guest__', `syncId` TEXT NOT NULL DEFAULT 'pending', `syncState` TEXT NOT NULL DEFAULT 'LOCAL_ONLY', `remoteRevision` INTEGER NOT NULL DEFAULT 0, `deletedAtEpochMillis` INTEGER, `finishOverride` TEXT, `variantOverride` TEXT, `effectOverride` TEXT, FOREIGN KEY(`cardId`) REFERENCES `catalog_cards`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cardId",
+            "columnName": "cardId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quantity",
+            "columnName": "quantity",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "condition",
+            "columnName": "condition",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "acquisitionPriceMinor",
+            "columnName": "acquisitionPriceMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "acquisitionCurrency",
+            "columnName": "acquisitionCurrency",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "acquisitionDateEpochDay",
+            "columnName": "acquisitionDateEpochDay",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "frontPhotoUri",
+            "columnName": "frontPhotoUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "backPhotoUri",
+            "columnName": "backPhotoUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtEpochMillis",
+            "columnName": "createdAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMillis",
+            "columnName": "updatedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "externalProductSource",
+            "columnName": "externalProductSource",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "externalProductId",
+            "columnName": "externalProductId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "binderId",
+            "columnName": "binderId",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'inbox'"
+          },
+          {
+            "fieldPath": "ownerUid",
+            "columnName": "ownerUid",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'__domidex_guest__'"
+          },
+          {
+            "fieldPath": "syncId",
+            "columnName": "syncId",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'pending'"
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'LOCAL_ONLY'"
+          },
+          {
+            "fieldPath": "remoteRevision",
+            "columnName": "remoteRevision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "deletedAtEpochMillis",
+            "columnName": "deletedAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishOverride",
+            "columnName": "finishOverride",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "variantOverride",
+            "columnName": "variantOverride",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "effectOverride",
+            "columnName": "effectOverride",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_collection_entries_cardId",
+            "unique": false,
+            "columnNames": [
+              "cardId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_collection_entries_cardId` ON `${TABLE_NAME}` (`cardId`)"
+          },
+          {
+            "name": "index_collection_entries_externalProductSource_externalProductId",
+            "unique": false,
+            "columnNames": [
+              "externalProductSource",
+              "externalProductId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_collection_entries_externalProductSource_externalProductId` ON `${TABLE_NAME}` (`externalProductSource`, `externalProductId`)"
+          },
+          {
+            "name": "index_collection_entries_binderId",
+            "unique": false,
+            "columnNames": [
+              "binderId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_collection_entries_binderId` ON `${TABLE_NAME}` (`binderId`)"
+          },
+          {
+            "name": "index_collection_entries_ownerUid_syncId",
+            "unique": true,
+            "columnNames": [
+              "ownerUid",
+              "syncId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_collection_entries_ownerUid_syncId` ON `${TABLE_NAME}` (`ownerUid`, `syncId`)"
+          },
+          {
+            "name": "index_collection_entries_ownerUid_deletedAtEpochMillis",
+            "unique": false,
+            "columnNames": [
+              "ownerUid",
+              "deletedAtEpochMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_collection_entries_ownerUid_deletedAtEpochMillis` ON `${TABLE_NAME}` (`ownerUid`, `deletedAtEpochMillis`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "catalog_cards",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "cardId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "collection_sync_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`entryKey` TEXT NOT NULL, `mutationId` TEXT NOT NULL, `ownerUid` TEXT NOT NULL, `syncId` TEXT NOT NULL, `operation` TEXT NOT NULL, `expectedRemoteRevision` INTEGER NOT NULL, `state` TEXT NOT NULL, `createdAtEpochMillis` INTEGER NOT NULL, `lastError` TEXT, PRIMARY KEY(`entryKey`))",
+        "fields": [
+          {
+            "fieldPath": "entryKey",
+            "columnName": "entryKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mutationId",
+            "columnName": "mutationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownerUid",
+            "columnName": "ownerUid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncId",
+            "columnName": "syncId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "operation",
+            "columnName": "operation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expectedRemoteRevision",
+            "columnName": "expectedRemoteRevision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMillis",
+            "columnName": "createdAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "entryKey"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_collection_sync_outbox_ownerUid_state_createdAtEpochMillis",
+            "unique": false,
+            "columnNames": [
+              "ownerUid",
+              "state",
+              "createdAtEpochMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_collection_sync_outbox_ownerUid_state_createdAtEpochMillis` ON `${TABLE_NAME}` (`ownerUid`, `state`, `createdAtEpochMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "raw_price_snapshots",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `cardId` TEXT NOT NULL, `source` TEXT NOT NULL, `currency` TEXT NOT NULL, `lowValueMinor` INTEGER, `averageValueMinor` INTEGER, `trendValueMinor` INTEGER, `marketValueMinor` INTEGER, `average1DayValueMinor` INTEGER, `average7DayValueMinor` INTEGER, `average30DayValueMinor` INTEGER, `holoAverageValueMinor` INTEGER, `holoLowValueMinor` INTEGER, `holoTrendValueMinor` INTEGER, `fetchedAtEpochMillis` INTEGER NOT NULL, `effectiveAtEpochMillis` INTEGER NOT NULL, FOREIGN KEY(`cardId`) REFERENCES `catalog_cards`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cardId",
+            "columnName": "cardId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lowValueMinor",
+            "columnName": "lowValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "averageValueMinor",
+            "columnName": "averageValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "trendValueMinor",
+            "columnName": "trendValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "marketValueMinor",
+            "columnName": "marketValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "average1DayValueMinor",
+            "columnName": "average1DayValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "average7DayValueMinor",
+            "columnName": "average7DayValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "average30DayValueMinor",
+            "columnName": "average30DayValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "holoAverageValueMinor",
+            "columnName": "holoAverageValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "holoLowValueMinor",
+            "columnName": "holoLowValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "holoTrendValueMinor",
+            "columnName": "holoTrendValueMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "fetchedAtEpochMillis",
+            "columnName": "fetchedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "effectiveAtEpochMillis",
+            "columnName": "effectiveAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_raw_price_snapshots_cardId",
+            "unique": false,
+            "columnNames": [
+              "cardId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_raw_price_snapshots_cardId` ON `${TABLE_NAME}` (`cardId`)"
+          },
+          {
+            "name": "index_raw_price_snapshots_cardId_source_effectiveAtEpochMillis",
+            "unique": true,
+            "columnNames": [
+              "cardId",
+              "source",
+              "effectiveAtEpochMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_raw_price_snapshots_cardId_source_effectiveAtEpochMillis` ON `${TABLE_NAME}` (`cardId`, `source`, `effectiveAtEpochMillis`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "catalog_cards",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "cardId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "graded_market_records",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `cardId` TEXT NOT NULL, `gradingCompany` TEXT NOT NULL, `grade` REAL NOT NULL, `recordType` TEXT NOT NULL, `valueMinor` INTEGER NOT NULL, `currency` TEXT NOT NULL, `saleDateEpochDay` INTEGER, `source` TEXT NOT NULL, `sourceReference` TEXT, `confidence` REAL, `sampleSize` INTEGER, `recordedAtEpochMillis` INTEGER NOT NULL, FOREIGN KEY(`cardId`) REFERENCES `catalog_cards`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cardId",
+            "columnName": "cardId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gradingCompany",
+            "columnName": "gradingCompany",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "grade",
+            "columnName": "grade",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordType",
+            "columnName": "recordType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "valueMinor",
+            "columnName": "valueMinor",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "saleDateEpochDay",
+            "columnName": "saleDateEpochDay",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceReference",
+            "columnName": "sourceReference",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "sampleSize",
+            "columnName": "sampleSize",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "recordedAtEpochMillis",
+            "columnName": "recordedAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_graded_market_records_cardId",
+            "unique": false,
+            "columnNames": [
+              "cardId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_graded_market_records_cardId` ON `${TABLE_NAME}` (`cardId`)"
+          },
+          {
+            "name": "index_graded_market_records_cardId_gradingCompany_grade_saleDateEpochDay",
+            "unique": false,
+            "columnNames": [
+              "cardId",
+              "gradingCompany",
+              "grade",
+              "saleDateEpochDay"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_graded_market_records_cardId_gradingCompany_grade_saleDateEpochDay` ON `${TABLE_NAME}` (`cardId`, `gradingCompany`, `grade`, `saleDateEpochDay`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "catalog_cards",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "cardId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "grading_analyses",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `collectionEntryId` INTEGER NOT NULL, `status` TEXT NOT NULL, `estimatedMinimumGrade` REAL, `estimatedMaximumGrade` REAL, `confidence` REAL, `centeringFinding` TEXT, `cornersFinding` TEXT, `edgesFinding` TEXT, `surfaceFinding` TEXT, `frontPhotoUri` TEXT, `backPhotoUri` TEXT, `anglePhotoUris` TEXT, `createdAtEpochMillis` INTEGER NOT NULL, `completedAtEpochMillis` INTEGER, `analyzerVersion` TEXT, `rawValueMinorAtAnalysis` INTEGER, `gradingCostMinor` INTEGER, `shippingCostMinor` INTEGER, `insuranceCostMinor` INTEGER, `economicRecommendation` TEXT, `economicReasoning` TEXT, FOREIGN KEY(`collectionEntryId`) REFERENCES `collection_entries`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "collectionEntryId",
+            "columnName": "collectionEntryId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "estimatedMinimumGrade",
+            "columnName": "estimatedMinimumGrade",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "estimatedMaximumGrade",
+            "columnName": "estimatedMaximumGrade",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "centeringFinding",
+            "columnName": "centeringFinding",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cornersFinding",
+            "columnName": "cornersFinding",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "edgesFinding",
+            "columnName": "edgesFinding",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "surfaceFinding",
+            "columnName": "surfaceFinding",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "frontPhotoUri",
+            "columnName": "frontPhotoUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "backPhotoUri",
+            "columnName": "backPhotoUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "anglePhotoUris",
+            "columnName": "anglePhotoUris",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtEpochMillis",
+            "columnName": "createdAtEpochMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completedAtEpochMillis",
+            "columnName": "completedAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "analyzerVersion",
+            "columnName": "analyzerVersion",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rawValueMinorAtAnalysis",
+            "columnName": "rawValueMinorAtAnalysis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "gradingCostMinor",
+            "columnName": "gradingCostMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "shippingCostMinor",
+            "columnName": "shippingCostMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "insuranceCostMinor",
+            "columnName": "insuranceCostMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "economicRecommendation",
+            "columnName": "economicRecommendation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "economicReasoning",
+            "columnName": "economicReasoning",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_grading_analyses_collectionEntryId",
+            "unique": false,
+            "columnNames": [
+              "collectionEntryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_grading_analyses_collectionEntryId` ON `${TABLE_NAME}` (`collectionEntryId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "collection_entries",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "collectionEntryId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "app_metadata",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))",
+        "fields": [
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "key"
+          ]
+        }
+      },
+      {
+        "tableName": "catalog_sync_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`source` TEXT NOT NULL, `status` TEXT NOT NULL, `lastAttemptAtEpochMillis` INTEGER, `lastSuccessAtEpochMillis` INTEGER, `dataCreatedAt` TEXT, `catalogProductCount` INTEGER NOT NULL, `priceRecordCount` INTEGER NOT NULL, `errorMessage` TEXT, PRIMARY KEY(`source`))",
+        "fields": [
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastAttemptAtEpochMillis",
+            "columnName": "lastAttemptAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSuccessAtEpochMillis",
+            "columnName": "lastSuccessAtEpochMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "dataCreatedAt",
+            "columnName": "dataCreatedAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "catalogProductCount",
+            "columnName": "catalogProductCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "priceRecordCount",
+            "columnName": "priceRecordCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "errorMessage",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "source"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'e3d6c91c14c41d3a9796f7848bd264a1')"
+    ]
+  }
+}

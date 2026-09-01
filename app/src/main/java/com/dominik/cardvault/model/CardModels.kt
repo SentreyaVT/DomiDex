@@ -20,6 +20,9 @@ data class CollectionCard(
     val marketSearchName: String? = null,
     /** Transient source-verified Cardmarket expansion bridge for Binder reference slots. */
     val marketExpansionId: String? = null,
+    /** Stable TCGdex identity. Null only for cards that did not originate in that catalogue. */
+    val sourceSetId: String? = null,
+    val sourceCardId: String? = null,
 )
 
 data class CatalogSearchResult(
@@ -37,6 +40,11 @@ data class CatalogSearchResult(
     val setCode: String? = null,
     /** Source-backed Cardmarket lookup name, usually the English TCGdex printing name. */
     val marketSearchName: String? = null,
+    /** Real Cardmarket Holo trend signal. It stays null when the source has none. */
+    val holoTrendPriceEur: Double? = null,
+    /** Stable visual-catalog identity; it must survive scanner, Room and Firebase. */
+    val sourceSetId: String? = null,
+    val sourceCardId: String? = null,
 )
 
 /** Metadata cache for a German master-set slot; it never represents possession. */
@@ -79,6 +87,9 @@ data class PortfolioSummary(val cards: List<CollectionCard>, val history: List<P
 data class ManualCardInput(val name: String, val setName: String, val collectorNumber: String, val language: CardLanguage, val finish: String, val variant: String, val quantity: Int, val condition: String, val notes: String, val acquisitionPriceEur: Double?, val acquisitionDateEpochDay: Long?, val externalProductId: Long? = null, val imageUrl: String? = null, val rarity: String? = null, val effectOverride: String? = null,
     /** Stable Cardmarket expansion id. It is used for Binder identity only; the German display name remains unchanged. */
     val cardmarketExpansionId: String? = null,
+    /** Stable source identity. Both values are present together or both are null. */
+    val sourceSetId: String? = null,
+    val sourceCardId: String? = null,
 )
 data class CollectionEntryUpdate(val quantity: Int, val condition: String, val notes: String, val acquisitionPriceEur: Double?, val acquisitionDateEpochDay: Long?, val finish: String, val variant: String, val effectOverride: String?)
 enum class AddCardOutcome { CREATED, QUANTITY_INCREMENTED }
@@ -86,12 +97,30 @@ enum class AddCardOutcome { CREATED, QUANTITY_INCREMENTED }
 interface CollectionRepository {
     val portfolio: Flow<PortfolioSummary>
     val binders: Flow<List<BinderSummary>>
+    /** Legacy/local rows waiting for an explicit, user-confirmed account transfer. */
+    val guestEntryCount: Flow<Int>
+    /** True optimistic-lock conflicts for the currently authenticated owner only. */
+    val syncConflictCount: Flow<Int>
+    /** Terminal configuration/payload failures for the current owner; never data conflicts. */
+    val syncErrorCount: Flow<Int>
     val catalogSyncStatus: Flow<CatalogSyncStatus>
     suspend fun seedIfNeeded()
     suspend fun addManualCard(input: ManualCardInput): AddCardOutcome
     suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate)
     suspend fun deleteEntry(entryId: Long)
     suspend fun deleteBinder(binderId: String)
+    /** Explicit only: never invoked automatically by authentication changes. */
+    suspend fun claimGuestCollectionForCurrentUser(): Int
+    /**
+     * Explicit local-wins retry. Only conflicts carrying a validated remote revision are
+     * rebased; malformed/auth failures remain untouched and can never be mistaken for data
+     * conflicts.
+     */
+    suspend fun retryConflictsKeepingLocal(): Int
+    /** Explicit Cloud-wins resolution; failed server reads leave conflicts untouched. */
+    suspend fun keepCloudVersionsForConflicts(): Int
+    /** Explicit retry after a configuration/payload error has been corrected. */
+    suspend fun retrySyncErrors(): Int
     /** Source-backed, read-only master-set slots for an existing Binder. */
     suspend fun binderReferences(setName: String): List<CollectionCard>
     suspend fun binderReferenceCount(setName: String): Int

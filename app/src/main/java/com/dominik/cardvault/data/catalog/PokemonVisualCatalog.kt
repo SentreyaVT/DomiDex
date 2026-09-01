@@ -165,8 +165,10 @@ class PokemonVisualCatalog {
 
     suspend fun findExact(setIdentifier: String, collectorNumber: String): List<PokemonVisualCard> = withContext(Dispatchers.IO) {
         val code = PokemonSetRegistry.normalize(setIdentifier)
-        val number = Regex("\\d{1,4}").find(collectorNumber)?.value?.toIntOrNull() ?: return@withContext emptyList()
+        val collectorKey = collectorIdentity(collectorNumber)
+        if (collectorKey.isBlank()) return@withContext emptyList()
         PokemonSetRegistry.legacyOfflineSet(code)?.let { set ->
+            val number = Regex("\\d{1,4}").find(collectorNumber)?.value?.toIntOrNull() ?: return@withContext emptyList()
             return@withContext WachsendesChaosMasterSet.cards.asSequence()
                 .filter { Regex("\\d{1,4}").find(it.number)?.value?.toIntOrNull() == number }
                 .groupBy { it.number }
@@ -189,11 +191,12 @@ class PokemonVisualCatalog {
                 .toList()
         }
         val matchingSet = PokemonSetRegistry.resolve(code, sets()) ?: return@withContext emptyList()
+        val sourceCollectorKey = collectorIdentityForSourceLookup(collectorNumber, matchingSet.id)
         // The set payload intentionally stays lightweight and can omit rarity.
         // Only the one or few exact number candidates are expanded, off the UI
         // thread, to obtain source-declared rarity/finish metadata.
         runCatching { cards(matchingSet) }.getOrDefault(emptyList())
-            .filter { collectorIdentity(it.number) == collectorIdentity(collectorNumber) }
+            .filter { collectorIdentity(it.number) == sourceCollectorKey }
             .map { candidate -> runCatching { withDeclaredPrintVariants(candidate) }.getOrDefault(candidate) }
     }
 
@@ -350,6 +353,22 @@ class PokemonVisualCatalog {
         val digits = primary.dropWhile(Char::isLetter).trimStart('0').ifBlank { "0" }
         return prefix + digits
     }
+}
+
+/**
+ * TCGdex stores promo local ids as digits (for example `173`) while the physical card and OCR use
+ * the registered prefix (`SVP173`). Strip that prefix only after the requested source set itself
+ * has been resolved to the corresponding promo catalogue; arbitrary letters remain significant.
+ */
+internal fun collectorIdentityForSourceLookup(value: String, resolvedSourceSetId: String): String {
+    val primary = value.substringBefore('/').uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+    val prefix = primary.takeWhile(Char::isLetter)
+    val digits = primary.dropWhile(Char::isLetter).trimStart('0').ifBlank { if (primary.any(Char::isDigit)) "0" else "" }
+    val promoSet = PokemonSetRegistry.promoSetIdForCollectorNumber(primary)
+    return if (
+        promoSet != null &&
+        PokemonSetRegistry.normalize(promoSet) == PokemonSetRegistry.normalize(resolvedSourceSetId)
+    ) digits else prefix + digits
 }
 
 /**

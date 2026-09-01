@@ -40,9 +40,9 @@ internal object HybridCandidateFusion {
     fun rank(
         analysis: CardTextAnalysis,
         candidates: List<ScanCandidate>,
-        artwork: Map<Long, ArtworkVerification>,
+        artwork: Map<String, ArtworkVerification>,
     ): List<ScanCandidate> = candidates.map { candidate ->
-        candidate.copy(evidence = score(analysis, candidate.card, artwork[candidate.card.productId]))
+        candidate.copy(evidence = score(analysis, candidate.card, artwork[candidate.card.scanIdentityKey()]))
     }.sortedByDescending { it.evidence?.finalConfidence ?: it.score }
 
     fun score(
@@ -56,15 +56,32 @@ internal object HybridCandidateFusion {
             (60f + analysis.numberConfidence.coerceIn(0f, 1f) * 40f).roundToInt()
         } else 0
 
+        // A manual source id (for example `sv08.5`) is a catalogue key, not a printed set code.
+        // Keep those namespaces separate so the UI selection can never masquerade as OCR.
+        val manualSourceSet = canonicalMetadata(analysis.manualSetSourceId.orEmpty())
+        val candidateSourceSet = candidate.expansionId
+            .takeIf { value -> value.any(Char::isLetter) }
+            ?.let(::canonicalMetadata)
+            .orEmpty()
         val readSet = canonicalMetadata(analysis.setIdentifier.orEmpty())
         val candidateSet = canonicalMetadata(candidate.setCode.orEmpty())
-        val readPrintedTotal = analysis.collectorNumber?.substringAfter('/', "")?.filter(Char::isDigit)?.toIntOrNull()
+        val readPrintedTotal = analysis.collectorNumber?.let(::printedCollectorDenominator)
         val printedTotalMatches = readPrintedTotal != null && candidate.mainSetSize == readPrintedTotal
+        val printedTotalContradicts = readPrintedTotal != null &&
+            candidate.mainSetSize != null &&
+            candidate.mainSetSize != readPrintedTotal
+        val manualSourceMatches = manualSourceSet.isNotBlank() && candidateSourceSet == manualSourceSet
+        val manualSourceContradicts = manualSourceSet.isNotBlank() &&
+            candidateSourceSet.isNotBlank() &&
+            candidateSourceSet != manualSourceSet
         val set = when {
+            printedTotalContradicts || manualSourceContradicts -> 0
+            manualSourceMatches -> 100
             readSet.isBlank() && printedTotalMatches -> 65
             readSet.isBlank() -> 0
             candidateSet.isBlank() -> 65 // candidate came from exact source lookup, but has no display code
             readSet == candidateSet -> 100
+            manualSourceSet.isNotBlank() && candidateSourceSet.isBlank() -> 65 // exact reducer, market id has no source namespace
             else -> 0
         }
 
@@ -87,7 +104,7 @@ internal object HybridCandidateFusion {
         val visualAvailable = artwork != null && artwork.match != ArtworkMatch.UNAVAILABLE
         val visual = if (visualAvailable) (artwork!!.similarity * 100).roundToInt().coerceIn(0, 100) else 0
         val numberAvailable = readNumber.isNotBlank()
-        val setAvailable = readSet.isNotBlank() || printedTotalMatches
+        val setAvailable = manualSourceSet.isNotBlank() || readSet.isNotBlank() || printedTotalMatches || printedTotalContradicts
         var weighted = language * LANGUAGE_WEIGHT
         var availableWeight = LANGUAGE_WEIGHT
         if (numberAvailable) { weighted += number * NUMBER_WEIGHT; availableWeight += NUMBER_WEIGHT }
@@ -104,10 +121,17 @@ internal object HybridCandidateFusion {
         val contradictions = buildSet {
             if (readNumber.isNotBlank() && number == 0) add("collector_number")
             if (readSet.isNotBlank() && candidateSet.isNotBlank() && set == 0) add("set")
+            if (manualSourceContradicts) add("manual_set_source")
+            if (printedTotalContradicts) add("printed_total")
             if (readableName && nameSimilarity < .25f) add("name")
             if (artwork?.match == ArtworkMatch.CONTRADICTS) add("artwork")
         }
-        if ("collector_number" in contradictions || "set" in contradictions) finalScore = minOf(finalScore, 45)
+        if (
+            "collector_number" in contradictions ||
+            "set" in contradictions ||
+            "manual_set_source" in contradictions ||
+            "printed_total" in contradictions
+        ) finalScore = minOf(finalScore, 45)
         if ("name" in contradictions || "artwork" in contradictions) finalScore = minOf(finalScore, 58)
 
         val hardIdentity = number >= 86 && set >= 65

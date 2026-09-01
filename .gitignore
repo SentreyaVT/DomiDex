@@ -26,3 +26,16 @@ local.properties
 keystore.properties
 secrets.properties
 /app/google-services.json
+/firebase-tests/node_modules/
+/firebase-tests/*-debug.log
+/firebase-debug.log
+/firestore-debug.log
+/storage-debug.log
+/ui-debug.log
+# Local device/emulator evidence and generated tester binaries never belong in source control.
+/*.apk
+/*.db
+/*.db-*
+/*.png
+/*.xml
+/.codex-screenshot-review*/

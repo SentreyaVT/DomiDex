@@ -3,6 +3,79 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     function own(uid) { return signedIn() && request.auth.uid == uid; }
+    function nullableString(value, maximum) {
+      return value == null || (value is string && value.size() <= maximum);
+    }
+    function nullableInt(value) { return value == null || value is int; }
+    function validCollectionEntry(uid, entryId) {
+      let data = request.resource.data;
+      return own(uid)
+        && data.keys().hasOnly([
+          'syncId', 'ownerUid', 'revision', 'lastMutationId', 'updatedAt',
+          'updatedAtClient', 'deleted', 'deletedAtClient', 'name', 'setId',
+          'setName', 'collectorNumber', 'language', 'finish', 'variant', 'rarity',
+          'quantity', 'condition', 'notes', 'acquisitionPriceMinor',
+          'acquisitionCurrency', 'acquisitionDateEpochDay', 'externalProductSource',
+          'externalProductId', 'imageUrl', 'effectOverride', 'binderId',
+          'sourceSetId', 'sourceCardId', 'binderSetKey', 'binderName', 'binderHeroAsset'
+        ])
+        && data.keys().hasAll([
+          'syncId', 'ownerUid', 'revision', 'lastMutationId', 'updatedAt',
+          'updatedAtClient', 'deleted', 'name', 'setId', 'setName', 'quantity',
+          'binderId', 'binderSetKey', 'binderName'
+        ])
+        && data.syncId == entryId
+        && data.syncId is string && data.syncId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.ownerUid == uid
+        && data.revision is int && data.revision > 0
+        && data.lastMutationId is string && data.lastMutationId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.updatedAt == request.time
+        && data.updatedAtClient is int && data.updatedAtClient > 0
+        && data.deleted is bool
+        && nullableInt(data.deletedAtClient)
+        && (!data.deleted || data.deletedAtClient is int)
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 200
+        && data.setId is string && data.setId.size() <= 120
+        && data.setName is string && data.setName.size() > 0 && data.setName.size() <= 200
+        && nullableString(data.collectorNumber, 80)
+        && nullableString(data.language, 30)
+        && nullableString(data.finish, 80)
+        && nullableString(data.variant, 80)
+        && nullableString(data.rarity, 80)
+        && data.quantity is int && data.quantity > 0 && data.quantity <= 10000
+        && nullableString(data.condition, 120)
+        && nullableString(data.notes, 4000)
+        && nullableInt(data.acquisitionPriceMinor)
+        && nullableString(data.acquisitionCurrency, 8)
+        && nullableInt(data.acquisitionDateEpochDay)
+        && nullableString(data.externalProductSource, 80)
+        && nullableInt(data.externalProductId)
+        && nullableString(data.imageUrl, 2000)
+        && nullableString(data.effectOverride, 80)
+        && nullableString(data.sourceSetId, 120)
+        && nullableString(data.sourceCardId, 120)
+        && ((data.sourceSetId == null && data.sourceCardId == null)
+          || (data.sourceSetId is string && data.sourceCardId is string
+            && data.sourceSetId.matches('[a-z0-9._-]{1,120}')
+            && data.sourceCardId.matches('[a-z0-9._-]{1,120}')))
+        && data.binderId is string && data.binderId.size() > 0 && data.binderId.size() <= 160
+        && data.binderSetKey is string && data.binderSetKey.size() > 0 && data.binderSetKey.size() <= 160
+        && data.binderName is string && data.binderName.size() > 0 && data.binderName.size() <= 200
+        && nullableString(data.binderHeroAsset, 2000);
+    }
+
+    match /users/{uid}/collectionEntries/{entryId} {
+      allow read: if own(uid);
+      allow create: if validCollectionEntry(uid, entryId)
+        && request.resource.data.revision == 1;
+      allow update: if validCollectionEntry(uid, entryId)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.syncId == resource.data.syncId
+        && request.resource.data.revision == resource.data.revision + 1
+        && (!resource.data.deleted || request.resource.data.deleted);
+      // Deletes are replicated as tombstones so an offline device cannot resurrect a card.
+      allow delete: if false;
+    }
 
     match /communitySubmissions/{submissionId} {
       allow create: if signedIn()

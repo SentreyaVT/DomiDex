@@ -4,24 +4,48 @@ import androidx.room.withTransaction
 import com.dominik.cardvault.data.local.*
 import com.dominik.cardvault.model.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlin.math.roundToLong
 
-class RoomCollectionRepository(private val database: CardVaultDatabase) : CollectionRepository {
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+class RoomCollectionRepository(
+    private val database: CardVaultDatabase,
+    private val activeOwnerUid: StateFlow<String> = MutableStateFlow(GUEST_OWNER_UID),
+    private val onSyncNeeded: () -> Unit = {},
+    private val onKeepCloudConflicts: suspend () -> Int = { 0 },
+) : CollectionRepository {
     private val dao = database.cardVaultDao()
     override val catalogSyncStatus: Flow<CatalogSyncStatus> = dao.observeSyncState(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE).map { state ->
         state?.let { CatalogSyncStatus(it.status, it.lastSuccessAtEpochMillis, it.dataCreatedAt, it.catalogProductCount, it.priceRecordCount, it.errorMessage) }
             ?: CatalogSyncStatus("IDLE", null, null, 0, 0, null)
     }
-    override val binders: Flow<List<BinderSummary>> = dao.observeBinders().map { rows -> rows.map { row ->
-        BinderSummary(row.id, row.name, row.heroAsset, row.uniqueCards, row.ownedCards, (row.marketValueMinor ?: 0L) / 100.0, row.lastPriceUpdatedAtEpochMillis)
-    } }
+    override val guestEntryCount: Flow<Int> = dao.observeGuestEntryCount()
+    override val syncConflictCount: Flow<Int> = activeOwnerUid.flatMapLatest { ownerUid ->
+        if (ownerUid == GUEST_OWNER_UID) kotlinx.coroutines.flow.flowOf(0)
+        else dao.observeSyncConflictCount(ownerUid)
+    }
+    override val syncErrorCount: Flow<Int> = activeOwnerUid.flatMapLatest { ownerUid ->
+        if (ownerUid == GUEST_OWNER_UID) kotlinx.coroutines.flow.flowOf(0)
+        else dao.observeSyncErrorCount(ownerUid)
+    }
+    override val binders: Flow<List<BinderSummary>> = activeOwnerUid.flatMapLatest { ownerUid ->
+        dao.observeBinders(ownerUid).map { rows -> rows.map { row ->
+            BinderSummary(row.id, row.name, row.heroAsset, row.uniqueCards, row.ownedCards, (row.marketValueMinor ?: 0L) / 100.0, row.lastPriceUpdatedAtEpochMillis)
+        } }
+    }
 
-    override val portfolio: Flow<PortfolioSummary> = combine(dao.observeCollection(), dao.observeRawPriceHistory()) { rows, prices ->
+    override val portfolio: Flow<PortfolioSummary> = activeOwnerUid.flatMapLatest { ownerUid ->
+        combine(
+            dao.observeCollection(ownerUid),
+            dao.observeOwnedRawPriceHistory(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE),
+        ) { rows, prices ->
         // One indexed view replaces repeated full price-table scans for every card and every
         // history timestamp. Room already emits immutable snapshots, so this cache is local to
         // the current calculation and can never become stale.
@@ -38,56 +62,290 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
                 CardLanguage.fromStorage(row.language), row.finish, row.variant, row.condition, row.quantity,
                 (latest ?: 0L) / 100.0, change, row.priceUpdatedAtEpochMillis, row.notes,
                 row.acquisitionPriceMinor?.div(100.0), row.acquisitionDateEpochDay, accentFor(row.name), imageUrl = row.imageUrl)
-                .copy(binderId = row.binderId, externalProductId = row.externalProductId, rarity = row.rarity, effectOverride = row.effectOverride)
+                .copy(
+                    binderId = row.binderId,
+                    externalProductId = row.externalProductId,
+                    rarity = row.rarity,
+                    effectOverride = row.effectOverride,
+                    sourceSetId = row.sourceSetId,
+                    sourceCardId = row.sourceCardId,
+                )
         }
-        PortfolioSummary(cards, buildHistory(rows, prices, cardmarketPrices))
+            PortfolioSummary(cards, buildHistory(rows, prices, cardmarketPrices))
+        }
     }
 
     override suspend fun seedIfNeeded() = database.withTransaction {
-        removeAccidentalDemoCollectionOnce()
+        // Historical builds identified demo rows only by real card ids. Deleting those ids can
+        // destroy legitimate collections, so the cleanup is now permanently data-preserving.
+        if (dao.metadata(DEMO_CLEANUP_KEY) == null) {
+            dao.putMetadata(AppMetadataEntity(DEMO_CLEANUP_KEY, "disabled-data-preserving-v2"))
+        }
         // A catalog/reference set must never be silently treated as owned cards.
         // Binder contents are created only through an explicit manual or scan add.
     }
 
-    /** Removes only the exact IDs previously inserted by the accidental demo seed. */
-    private suspend fun removeAccidentalDemoCollectionOnce() {
-        if (dao.metadata(DEMO_CLEANUP_KEY) != null) return
-        val baseDemoIds = listOf("sv3-198", "sv2a-025", "base-004", "s12a-205")
-        val masterDemoIds = WachsendesChaosMasterSet.cards.map { it.id }
-        dao.deleteCollectionEntriesForCardIds(baseDemoIds + masterDemoIds)
-        dao.deleteEmptyBinders(listOf("set-sv3", "set-sv2a", "set-base", "set-s12a", "set-me04"))
-        dao.putMetadata(AppMetadataEntity(DEMO_CLEANUP_KEY, "completed"))
-    }
-
-    override suspend fun addManualCard(input: ManualCardInput): AddCardOutcome = database.withTransaction {
-        val now = System.currentTimeMillis()
-        val normalizedCondition = input.condition.trim()
-        val normalizedFinish = input.finish.trim().ifBlank { "Normal" }
-        val normalizedVariant = input.variant.trim().ifBlank { "Standard" }
-        if (input.externalProductId != null) {
-            val existing = dao.findLinkedEntry(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, input.externalProductId, normalizedCondition, normalizedFinish, normalizedVariant)
+    override suspend fun addManualCard(input: ManualCardInput): AddCardOutcome {
+        val ownerUid = activeOwnerUid.value
+        validateManualInputForSync(input)
+        val sourceIdentity = sourceIdentity(input.sourceSetId, input.sourceCardId)
+        var scheduleSync = false
+        val outcome = database.withTransaction {
+            val now = System.currentTimeMillis()
+            val normalizedCondition = input.condition.trim()
+            val normalizedFinish = input.finish.trim().ifBlank { "Normal" }
+            val normalizedVariant = input.variant.trim().ifBlank { "Standard" }
+            val amount = input.quantity.coerceAtLeast(1)
+            // TCGdex identity is authoritative. Cardmarket remains an independent price link and
+            // may appear only after the first scan has already been saved.
+            val existing = sourceIdentity?.let { source ->
+                dao.findSourceEntry(ownerUid, source.setId, source.cardId, normalizedCondition, normalizedFinish, normalizedVariant)
+            } ?: input.externalProductId?.let { productId ->
+                dao.findLinkedEntry(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, productId, normalizedCondition, normalizedFinish, normalizedVariant, ownerUid)
+            }
             if (existing != null) {
-                dao.incrementQuantity(existing.id, input.quantity.coerceAtLeast(1), now)
+                val newQuantity = existing.quantity.toLong() + amount.toLong()
+                require(newQuantity in 1..com.dominik.cardvault.data.sync.CollectionSyncLimits.QUANTITY.toLong()) {
+                    "Die Gesamtanzahl darf ${com.dominik.cardvault.data.sync.CollectionSyncLimits.QUANTITY} nicht überschreiten."
+                }
+                val syncState = syncStateFor(ownerUid)
+                if (existing.externalProductId == null && input.externalProductId != null) {
+                    dao.linkExternalProduct(existing.id, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, input.externalProductId, now, ownerUid, syncState)
+                }
+                dao.incrementQuantity(existing.id, amount, now, ownerUid, syncState)
+                dao.getCollectionEntry(existing.id, ownerUid)?.let { changed ->
+                    scheduleSync = queueMutation(changed, "UPSERT") || scheduleSync
+                }
                 return@withTransaction AddCardOutcome.QUANTITY_INCREMENTED
             }
+
+            val displaySetName = input.setName.trim().ifBlank { "Ohne Setzuordnung" }
+            val setKey = binderSetKey(input.cardmarketExpansionId, displaySetName, sourceIdentity?.setId)
+            val binderId = dao.binderIdForSet(setKey) ?: binderIdForSetKey(setKey)
+            com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Set-ID", setKey, com.dominik.cardvault.data.sync.CollectionSyncLimits.SET_ID, required = true)
+            com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Binder-ID", binderId, com.dominik.cardvault.data.sync.CollectionSyncLimits.BINDER_ID, required = true)
+            dao.insertBinder(BinderEntity(binderId, setKey, displaySetName, createdAtEpochMillis = now, updatedAtEpochMillis = now))
+
+            val cardId = sourceIdentity?.let(::sourceCatalogCardId) ?: "manual-${UUID.randomUUID()}"
+            val catalogCard = CatalogCardEntity(
+                id = cardId,
+                tcg = "POKEMON",
+                setId = sourceIdentity?.setId ?: setKey,
+                setName = displaySetName,
+                name = input.name.trim(),
+                collectorNumber = input.collectorNumber.trim(),
+                language = input.language.name,
+                finish = normalizedFinish,
+                variant = normalizedVariant,
+                createdAtEpochMillis = now,
+                externalSource = sourceIdentity?.let { "TCGDEX_DE" },
+                imageUrl = input.imageUrl,
+                rarity = input.rarity?.trim()?.ifBlank { "UNKNOWN" } ?: "UNKNOWN",
+                effectOverride = input.effectOverride,
+            )
+            if (sourceIdentity != null) dao.insertCatalogCards(listOf(catalogCard)) else dao.insertCatalogCard(catalogCard)
+
+            val deterministicSyncId = if (ownerUid == GUEST_OWNER_UID) null else when {
+                sourceIdentity != null -> deterministicSourceSyncId(ownerUid, sourceIdentity, normalizedCondition, normalizedFinish, normalizedVariant)
+                input.externalProductId != null -> deterministicCardmarketSyncId(ownerUid, input.externalProductId, normalizedCondition, normalizedFinish, normalizedVariant)
+                else -> null
+            }
+            val syncId = deterministicSyncId?.let { nextAvailableSyncId(ownerUid, it) }
+                ?: UUID.randomUUID().toString()
+            val entry = CollectionEntryEntity(
+                cardId = cardId,
+                quantity = amount,
+                condition = normalizedCondition,
+                acquisitionPriceMinor = input.acquisitionPriceEur?.times(100)?.roundToLong(),
+                acquisitionCurrency = input.acquisitionPriceEur?.let { "EUR" },
+                acquisitionDateEpochDay = input.acquisitionDateEpochDay,
+                notes = input.notes.trim(),
+                frontPhotoUri = null,
+                backPhotoUri = null,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+                externalProductSource = input.externalProductId?.let { com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE },
+                externalProductId = input.externalProductId,
+                binderId = binderId,
+                ownerUid = ownerUid,
+                syncId = syncId,
+                syncState = syncStateFor(ownerUid),
+                finishOverride = normalizedFinish,
+                variantOverride = normalizedVariant,
+                effectOverride = input.effectOverride,
+                sourceSetId = sourceIdentity?.setId,
+                sourceCardId = sourceIdentity?.cardId,
+            )
+            // A Firestore tombstone is immutable by rule. A re-add therefore always receives a
+            // fresh successor id; the deleted row remains intact and can never be resurrected.
+            val stored = entry.copy(id = dao.insertCollectionEntry(entry))
+            scheduleSync = queueMutation(stored, "UPSERT") || scheduleSync
+            AddCardOutcome.CREATED
         }
-        val cardId = "manual-${UUID.randomUUID()}"
-        // Cardmarket's expansion id is the stable set identity. The visible Binder
-        // name intentionally stays the German source/user name, so collectors can
-        // still find the set exactly as before.
-        val setKey = binderSetKey(input.cardmarketExpansionId, input.setName)
-        val binderId = dao.binderIdForSet(setKey) ?: binderIdForSetKey(setKey)
-        dao.insertBinder(BinderEntity(binderId, setKey, input.setName.trim().ifBlank { "Ohne Setzuordnung" }, createdAtEpochMillis = now, updatedAtEpochMillis = now))
-        dao.insertCatalogCard(CatalogCardEntity(cardId, "POKEMON", setKey, input.setName.trim(), input.name.trim(), input.collectorNumber.trim(), input.language.name, normalizedFinish, normalizedVariant, now, imageUrl = input.imageUrl, rarity = input.rarity?.trim()?.ifBlank { "UNKNOWN" } ?: "UNKNOWN", effectOverride = input.effectOverride))
-        dao.insertCollectionEntry(CollectionEntryEntity(cardId = cardId, quantity = input.quantity.coerceAtLeast(1), condition = normalizedCondition, acquisitionPriceMinor = input.acquisitionPriceEur?.times(100)?.roundToLong(), acquisitionCurrency = input.acquisitionPriceEur?.let { "EUR" }, acquisitionDateEpochDay = input.acquisitionDateEpochDay, notes = input.notes.trim(), frontPhotoUri = null, backPhotoUri = null, createdAtEpochMillis = now, updatedAtEpochMillis = now, externalProductSource = input.externalProductId?.let { com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }, externalProductId = input.externalProductId, binderId = binderId))
-        AddCardOutcome.CREATED
+        if (scheduleSync) onSyncNeeded()
+        return outcome
     }
 
-    override suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate) = database.withTransaction {
-        dao.updateEntry(entryId, update.quantity.coerceAtLeast(1), update.condition.trim(), update.notes.trim(), update.acquisitionPriceEur?.times(100)?.roundToLong(), update.acquisitionPriceEur?.let { "EUR" }, update.acquisitionDateEpochDay, update.finish.trim().ifBlank { "Normal" }, update.variant.trim().ifBlank { "Standard" }, update.effectOverride)
+    override suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate) {
+        val ownerUid = activeOwnerUid.value
+        validateEntryUpdateForSync(update)
+        val queued = database.withTransaction {
+            dao.updateEntry(entryId, ownerUid, syncStateFor(ownerUid), update.quantity.coerceAtLeast(1), update.condition.trim(), update.notes.trim(), update.acquisitionPriceEur?.times(100)?.roundToLong(), update.acquisitionPriceEur?.let { "EUR" }, update.acquisitionDateEpochDay, update.finish.trim().ifBlank { "Normal" }, update.variant.trim().ifBlank { "Standard" }, update.effectOverride)
+            dao.getCollectionEntry(entryId, ownerUid)?.let { queueMutation(it, "UPSERT") } ?: false
+        }
+        if (queued) onSyncNeeded()
     }
-    override suspend fun deleteEntry(entryId: Long) = dao.deleteCollectionEntry(entryId)
-    override suspend fun deleteBinder(binderId: String) = database.withTransaction { dao.deleteBinderWithEntries(binderId) }
+    override suspend fun deleteEntry(entryId: Long) {
+        val ownerUid = activeOwnerUid.value
+        val queued = database.withTransaction {
+            val existing = dao.getCollectionEntry(entryId, ownerUid) ?: return@withTransaction false
+            if (ownerUid == GUEST_OWNER_UID) {
+                dao.deleteCollectionEntry(entryId)
+                false
+            } else {
+                val now = System.currentTimeMillis()
+                dao.tombstoneCollectionEntry(entryId, ownerUid, now, SYNC_PENDING)
+                queueMutation(existing.copy(deletedAtEpochMillis = now, updatedAtEpochMillis = now, syncState = SYNC_PENDING), "DELETE")
+            }
+        }
+        if (queued) onSyncNeeded()
+    }
+    override suspend fun deleteBinder(binderId: String) {
+        val ownerUid = activeOwnerUid.value
+        var queued = false
+        database.withTransaction {
+            val entries = dao.activeEntriesForBinder(binderId, ownerUid)
+            if (ownerUid == GUEST_OWNER_UID) {
+                entries.forEach { dao.deleteCollectionEntry(it.id) }
+            } else {
+                val now = System.currentTimeMillis()
+                dao.tombstoneEntriesForBinder(binderId, ownerUid, now, SYNC_PENDING)
+                entries.forEach { entry ->
+                    queued = queueMutation(entry.copy(deletedAtEpochMillis = now, updatedAtEpochMillis = now, syncState = SYNC_PENDING), "DELETE") || queued
+                }
+            }
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override suspend fun claimGuestCollectionForCurrentUser(): Int {
+        val ownerUid = activeOwnerUid.value
+        require(ownerUid != GUEST_OWNER_UID) { "Für die Übernahme ist eine Anmeldung erforderlich." }
+        var claimed = 0
+        database.withTransaction {
+            val now = System.currentTimeMillis()
+            dao.activeGuestEntries().forEach { guest ->
+                val projection = dao.collectionSyncProjection(GUEST_OWNER_UID, guest.syncId)
+                    ?: error("Ein lokaler Sammlungseintrag ist unvollständig und wurde nicht verändert.")
+                val guestSource = sourceIdentity(guest.sourceSetId, guest.sourceCardId)
+                val deterministicSyncId = when {
+                    guestSource != null -> deterministicSourceSyncId(
+                        ownerUid,
+                        guestSource,
+                        guest.condition,
+                        projection.finish,
+                        projection.variant,
+                    )
+                    guest.externalProductSource == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE &&
+                        guest.externalProductId != null && guest.externalProductId > 0L -> deterministicCardmarketSyncId(
+                            ownerUid,
+                            guest.externalProductId,
+                            guest.condition,
+                            projection.finish,
+                            projection.variant,
+                        )
+                    else -> null
+                }
+                val syncId = deterministicSyncId?.let { nextAvailableSyncId(ownerUid, it) }
+                    ?: UUID.randomUUID().toString()
+                val candidate = projection.copy(ownerUid = ownerUid, syncId = syncId)
+                val candidateMutation = CollectionSyncOutboxEntity(
+                    entryKey = "$ownerUid:$syncId",
+                    mutationId = UUID.randomUUID().toString(),
+                    ownerUid = ownerUid,
+                    syncId = syncId,
+                    operation = "UPSERT",
+                    expectedRemoteRevision = 0L,
+                    createdAtEpochMillis = now,
+                )
+                com.dominik.cardvault.data.sync.CollectionSyncLimits.requireValid(candidate, candidateMutation)
+                if (dao.claimGuestEntry(guest.id, ownerUid, syncId, now) == 1) {
+                    val claimedEntry = guest.copy(
+                        ownerUid = ownerUid,
+                        syncId = syncId,
+                        syncState = SYNC_PENDING,
+                        remoteRevision = 0L,
+                        updatedAtEpochMillis = now,
+                    )
+                    queueMutation(claimedEntry, "UPSERT")
+                    claimed++
+                }
+            }
+        }
+        if (claimed > 0) onSyncNeeded()
+        return claimed
+    }
+
+    override suspend fun retryConflictsKeepingLocal(): Int {
+        val ownerUid = activeOwnerUid.value
+        if (ownerUid == GUEST_OWNER_UID) return 0
+        var retried = 0
+        database.withTransaction {
+            val now = System.currentTimeMillis()
+            dao.conflictedSyncOutbox(ownerUid).forEach { conflict ->
+                val remoteRevision = com.dominik.cardvault.data.sync.parseRemoteConflictRevision(conflict.lastError)
+                    ?: return@forEach
+                // A delete-versus-update conflict is irreversible. This explicit local-wins
+                // shortcut intentionally handles edits only; tombstones stay blocked for a
+                // future dedicated decision that can show both sides.
+                val localEntry = dao.getCollectionEntryBySyncId(ownerUid, conflict.syncId)
+                    ?: return@forEach
+                if (localEntry.deletedAtEpochMillis != null) return@forEach
+                val rebased = dao.rebaseSyncConflict(
+                    entryKey = conflict.entryKey,
+                    ownerUid = ownerUid,
+                    previousMutationId = conflict.mutationId,
+                    newMutationId = UUID.randomUUID().toString(),
+                    remoteRevision = remoteRevision,
+                    createdAt = now,
+                )
+                if (rebased == 1) {
+                    dao.markEntrySynced(ownerUid, conflict.syncId, remoteRevision, SYNC_PENDING)
+                    retried++
+                }
+            }
+        }
+        if (retried > 0) onSyncNeeded()
+        return retried
+    }
+
+    override suspend fun keepCloudVersionsForConflicts(): Int = onKeepCloudConflicts()
+
+    override suspend fun retrySyncErrors(): Int {
+        val ownerUid = activeOwnerUid.value
+        if (ownerUid == GUEST_OWNER_UID) return 0
+        var retried = 0
+        database.withTransaction {
+            val now = System.currentTimeMillis()
+            dao.erroredSyncOutbox(ownerUid).forEach { failure ->
+                val localEntry = dao.getCollectionEntryBySyncId(ownerUid, failure.syncId)
+                    ?: return@forEach
+                val changed = dao.retrySyncError(
+                    entryKey = failure.entryKey,
+                    ownerUid = ownerUid,
+                    previousMutationId = failure.mutationId,
+                    newMutationId = UUID.randomUUID().toString(),
+                    createdAt = now,
+                )
+                if (changed == 1) {
+                    dao.markEntrySynced(ownerUid, failure.syncId, localEntry.remoteRevision, SYNC_PENDING)
+                    retried++
+                }
+            }
+        }
+        if (retried > 0) onSyncNeeded()
+        return retried
+    }
     override suspend fun binderReferences(setName: String): List<CollectionCard> =
         (dao.germanMasterSetReferences(setName).ifEmpty {
             dao.catalogReferencesForSet(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, setName)
@@ -95,7 +353,8 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
             // Cardmarket's compact download sometimes omits a structured finish.
             // Recognise only an explicitly labelled Holo/Reverse product name;
             // everything else remains a normal source slot rather than guessed foil.
-            val sourceFinish = when {
+            val sourceBacked = row.cardId.startsWith("tcgdex-${row.setId}-", ignoreCase = true)
+            val sourceFinish = if (sourceBacked) row.finish else when {
                 row.name.contains("reverse", ignoreCase = true) -> "Reverse Holo"
                 row.name.contains("holo", ignoreCase = true) -> "Holo"
                 else -> "Normal"
@@ -108,6 +367,8 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
                 priceUpdatedAtEpochMillis = row.priceUpdatedAtEpochMillis, notes = "", acquisitionPriceEur = null,
                 acquisitionDateEpochDay = null, accent = accentFor(row.name),
                 externalProductId = row.externalProductId, imageUrl = row.imageUrl,
+                sourceSetId = row.setId.takeIf { sourceBacked },
+                sourceCardId = sourceCardIdFromCatalogReference(row.cardId, row.setId),
             )
         }
     override suspend fun binderReferenceCount(setName: String): Int =
@@ -159,26 +420,37 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
                 finish = it.finish,
                 variant = it.variant,
                 rarity = it.rarity,
+                holoTrendPriceEur = it.holoMarketValueMinor?.div(100.0),
             )
         }
     }
-    override suspend fun linkCatalogProduct(entryId: Long, productId: Long?) = dao.linkExternalProduct(entryId, productId?.let { com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }, productId, System.currentTimeMillis())
+    override suspend fun linkCatalogProduct(entryId: Long, productId: Long?) {
+        val ownerUid = activeOwnerUid.value
+        val queued = database.withTransaction {
+            dao.linkExternalProduct(entryId, productId?.let { com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }, productId, System.currentTimeMillis(), ownerUid, syncStateFor(ownerUid))
+            dao.getCollectionEntry(entryId, ownerUid)?.let { queueMutation(it, "UPSERT") } ?: false
+        }
+        if (queued) onSyncNeeded()
+    }
 
     override fun priceHistory(card: CollectionCard): Flow<List<CardPricePoint>> {
         val usesHoloPrice = card.finish.contains("holo", ignoreCase = true)
-        return dao.observeCardPriceHistory(
-            entryId = card.entryId,
-            fallbackCardId = card.id,
-            source = com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE,
-            useHoloPrice = usesHoloPrice,
-        ).map { rows ->
-            rows.map { row ->
-                CardPricePoint(
-                    timestampEpochMillis = row.effectiveAtEpochMillis,
-                    valueEur = row.valueMinor / 100.0,
-                    currency = row.currency,
-                    source = row.source,
-                )
+        return activeOwnerUid.flatMapLatest { ownerUid ->
+            dao.observeCardPriceHistory(
+                entryId = card.entryId,
+                fallbackCardId = card.id,
+                source = com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE,
+                useHoloPrice = usesHoloPrice,
+                ownerUid = ownerUid,
+            ).map { rows ->
+                rows.map { row ->
+                    CardPricePoint(
+                        timestampEpochMillis = row.effectiveAtEpochMillis,
+                        valueEur = row.valueMinor / 100.0,
+                        currency = row.currency,
+                        source = row.source,
+                    )
+                }
             }
         }
     }
@@ -233,16 +505,148 @@ class RoomCollectionRepository(private val database: CardVaultDatabase) : Collec
     companion object {
         private const val DEMO_CLEANUP_KEY = "remove_accidental_demo_collection_v1"
     }
+
+    private fun validateManualInputForSync(input: ManualCardInput) {
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Kartenname", input.name.trim(), com.dominik.cardvault.data.sync.CollectionSyncLimits.NAME, required = true)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Setname", input.setName.trim(), com.dominik.cardvault.data.sync.CollectionSyncLimits.SET_NAME, required = true)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Kartennummer", input.collectorNumber.trim(), com.dominik.cardvault.data.sync.CollectionSyncLimits.COLLECTOR_NUMBER)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Finish", input.finish.trim().ifBlank { "Normal" }, com.dominik.cardvault.data.sync.CollectionSyncLimits.FINISH)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Variante", input.variant.trim().ifBlank { "Standard" }, com.dominik.cardvault.data.sync.CollectionSyncLimits.VARIANT)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Zustand", input.condition.trim(), com.dominik.cardvault.data.sync.CollectionSyncLimits.CONDITION)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Notiz", input.notes.trim(), com.dominik.cardvault.data.sync.CollectionSyncLimits.NOTES)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Bild-URL", input.imageUrl, com.dominik.cardvault.data.sync.CollectionSyncLimits.URL)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Seltenheit", input.rarity, com.dominik.cardvault.data.sync.CollectionSyncLimits.RARITY)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Effekt", input.effectOverride, com.dominik.cardvault.data.sync.CollectionSyncLimits.EFFECT)
+        sourceIdentity(input.sourceSetId, input.sourceCardId)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireQuantity(input.quantity)
+    }
+
+    private fun validateEntryUpdateForSync(update: CollectionEntryUpdate) {
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireQuantity(update.quantity)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Zustand", update.condition.trim(), com.dominik.cardvault.data.sync.CollectionSyncLimits.CONDITION)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Notiz", update.notes.trim(), com.dominik.cardvault.data.sync.CollectionSyncLimits.NOTES)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Finish", update.finish.trim().ifBlank { "Normal" }, com.dominik.cardvault.data.sync.CollectionSyncLimits.FINISH)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Variante", update.variant.trim().ifBlank { "Standard" }, com.dominik.cardvault.data.sync.CollectionSyncLimits.VARIANT)
+        com.dominik.cardvault.data.sync.CollectionSyncLimits.requireText("Effekt", update.effectOverride, com.dominik.cardvault.data.sync.CollectionSyncLimits.EFFECT)
+    }
+
+    private fun syncStateFor(ownerUid: String): String =
+        if (ownerUid == GUEST_OWNER_UID) SYNC_LOCAL_ONLY else SYNC_PENDING
+
+    private suspend fun nextAvailableSyncId(ownerUid: String, initial: String): String {
+        var candidate = initial
+        repeat(64) {
+            val occupied = dao.getCollectionEntryBySyncId(ownerUid, candidate) ?: return candidate
+            candidate = deterministicSuccessorSyncId(candidate, occupied)
+        }
+        error("Für diese Kartenidentität konnten zu viele historische Generationen gefunden werden.")
+    }
+
+    private suspend fun queueMutation(entry: CollectionEntryEntity, operation: String): Boolean {
+        if (entry.ownerUid == GUEST_OWNER_UID) return false
+        dao.upsertSyncOutbox(
+            CollectionSyncOutboxEntity(
+                entryKey = "${entry.ownerUid}:${entry.syncId}",
+                mutationId = UUID.randomUUID().toString(),
+                ownerUid = entry.ownerUid,
+                syncId = entry.syncId,
+                operation = operation,
+                expectedRemoteRevision = entry.remoteRevision,
+                createdAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+        return true
+    }
 }
 
 /** Keeps Binder identity independent from translated or differently formatted set names. */
-internal fun binderSetKey(cardmarketExpansionId: String?, displaySetName: String): String {
+internal fun binderSetKey(cardmarketExpansionId: String?, displaySetName: String, sourceSetId: String? = null): String {
     // Cardmarket expansion ids are numeric. Rejecting arbitrary labels here
     // prevents an old display name from accidentally being stored as an ID.
     val expansionId = cardmarketExpansionId?.trim()?.takeIf { it.all(Char::isDigit) }
-    return expansionId?.let { "cardmarket-$it" }
+    val sourceId = sourceSetId?.trim()?.lowercase()?.takeIf { it.matches(Regex("[a-z0-9._-]{1,120}")) }
+    val raw = sourceId?.let { "tcgdex-$it" }
+        ?: expansionId?.let { "cardmarket-$it" }
         ?: displaySetName.trim().lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifBlank { "inbox" }
+    if (raw.length <= com.dominik.cardvault.data.sync.CollectionSyncLimits.SET_ID) return raw
+    val suffix = UUID.nameUUIDFromBytes(raw.toByteArray(Charsets.UTF_8)).toString().take(12)
+    val prefixLength = com.dominik.cardvault.data.sync.CollectionSyncLimits.SET_ID - suffix.length - 1
+    return "${raw.take(prefixLength).trimEnd('-')}-$suffix"
 }
 
 internal fun binderIdForSetKey(setKey: String): String =
-    if (setKey.startsWith("cardmarket-")) setKey else "set-$setKey"
+    if (setKey.startsWith("cardmarket-") || setKey.startsWith("tcgdex-")) setKey else "set-$setKey"
+
+internal data class SourceCardIdentity(val setId: String, val cardId: String)
+
+/** Both source identifiers are required together; partial or malformed identity is rejected. */
+internal fun sourceIdentity(sourceSetId: String?, sourceCardId: String?): SourceCardIdentity? {
+    if (sourceSetId == null && sourceCardId == null) return null
+    require(!sourceSetId.isNullOrBlank() && !sourceCardId.isNullOrBlank()) {
+        "Set- und Karten-ID der Quelle müssen gemeinsam vorhanden sein."
+    }
+    val setId = sourceSetId.trim().lowercase()
+    val cardId = sourceCardId.trim().lowercase()
+    val allowed = Regex("[a-z0-9._-]{1,120}")
+    require(setId.matches(allowed) && cardId.matches(allowed)) { "Die Quellenidentität ist ungültig." }
+    return SourceCardIdentity(setId, cardId)
+}
+
+internal fun sourceCatalogCardId(source: SourceCardIdentity): String =
+    "tcgdex-${source.setId}-${source.cardId}"
+
+/** Recovers the canonical card id from source-backed cached master-set print slots. */
+internal fun sourceCardIdFromCatalogReference(catalogCardId: String, sourceSetId: String): String? {
+    val prefix = "tcgdex-${sourceSetId.lowercase()}-"
+    if (!catalogCardId.lowercase().startsWith(prefix)) return null
+    val encoded = catalogCardId.substring(prefix.length)
+    val printingSuffixes = listOf(
+        "-1steditionholofoil", "-unlimitedholofoil", "-reverseholofoil",
+        "-1stedition", "-unlimited", "-holofoil",
+    )
+    return printingSuffixes.firstOrNull { encoded.endsWith(it, ignoreCase = true) }
+        ?.let { encoded.dropLast(it.length) }
+        ?.ifBlank { null }
+        ?: encoded.ifBlank { null }
+}
+
+/**
+ * Same owner + physical source printing + collection variant maps to one cloud document.
+ * Concurrent offline adds therefore conflict visibly instead of creating silent duplicate rows.
+ */
+internal fun deterministicSourceSyncId(
+    ownerUid: String,
+    source: SourceCardIdentity,
+    condition: String,
+    finish: String,
+    variant: String,
+): String {
+    val key = listOf(ownerUid, source.setId, source.cardId, condition, finish, variant)
+        .joinToString("|") { it.trim().lowercase() }
+    return UUID.nameUUIDFromBytes(key.toByteArray(Charsets.UTF_8)).toString()
+}
+
+internal fun deterministicCardmarketSyncId(
+    ownerUid: String,
+    externalProductId: Long,
+    condition: String,
+    finish: String,
+    variant: String,
+): String {
+    require(externalProductId > 0L) { "Cardmarket-Produkt-ID ist ungültig." }
+    val key = listOf(ownerUid, "cardmarket", externalProductId.toString(), condition, finish, variant)
+        .joinToString("|") { it.trim().lowercase() }
+    return UUID.nameUUIDFromBytes(key.toByteArray(Charsets.UTF_8)).toString()
+}
+
+internal fun deterministicSuccessorSyncId(
+    previousSyncId: String,
+    occupied: CollectionEntryEntity,
+): String {
+    val generationKey = listOf(
+        previousSyncId,
+        occupied.remoteRevision.toString(),
+        if (occupied.deletedAtEpochMillis == null) "active-branch" else "readd-after-delete",
+    ).joinToString("|")
+    return UUID.nameUUIDFromBytes(generationKey.toByteArray(Charsets.UTF_8)).toString()
+}

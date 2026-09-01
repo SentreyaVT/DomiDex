@@ -13,18 +13,19 @@ import kotlinx.coroutines.flow.Flow
 interface CardVaultDao {
     @Query("""
         SELECT e.id AS entryId, c.id AS cardId, c.name, c.setName, c.collectorNumber,
-               c.language, c.finish, c.variant, c.rarity, e.quantity, e.condition,
+               c.language, COALESCE(e.finishOverride, c.finish) AS finish,
+               COALESCE(e.variantOverride, c.variant) AS variant, c.rarity, e.quantity, e.condition,
                e.acquisitionPriceMinor, e.acquisitionCurrency, e.acquisitionDateEpochDay,
                e.notes,
-               CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor)
+               CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%holo%' THEN NULLIF(p.holoTrendValueMinor, 0)
                     ELSE p.trendValueMinor END AS marketValueMinor,
                p.currency AS priceCurrency,
-               CASE WHEN CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor)
+               CASE WHEN CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%holo%' THEN NULLIF(p.holoTrendValueMinor, 0)
                               ELSE p.trendValueMinor END IS NULL
                     THEN NULL ELSE p.effectiveAtEpochMillis END AS priceUpdatedAtEpochMillis,
                e.externalProductSource, e.externalProductId,
-               COALESCE(linked.id, c.id) AS priceCardId, c.imageUrl, c.effectOverride
-               , e.binderId
+               COALESCE(linked.id, c.id) AS priceCardId, c.imageUrl, COALESCE(e.effectOverride, c.effectOverride) AS effectOverride
+               , e.binderId, e.sourceSetId, e.sourceCardId
         FROM collection_entries e
         JOIN catalog_cards c ON c.id = e.cardId
         LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource
@@ -34,23 +35,26 @@ interface CardVaultDao {
             WHERE p2.cardId = COALESCE(linked.id, c.id) AND p2.source = 'CARDMARKET_PUBLIC_DOWNLOAD'
             ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1
         )
+        WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
         ORDER BY e.updatedAtEpochMillis DESC
     """)
-    fun observeCollection(): Flow<List<CollectionProjection>>
+    fun observeCollection(ownerUid: String = GUEST_OWNER_UID): Flow<List<CollectionProjection>>
 
     @Query("""
-        SELECT b.id, b.name, b.heroAsset, COUNT(DISTINCT e.cardId) AS uniqueCards,
+        SELECT e.binderId AS id, MAX(c.setName) AS name, NULL AS heroAsset,
+               COUNT(DISTINCT e.cardId) AS uniqueCards,
                COALESCE(SUM(e.quantity), 0) AS ownedCards,
-               SUM(CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor) ELSE p.trendValueMinor END * e.quantity) AS marketValueMinor,
-               MAX(CASE WHEN CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor) ELSE p.trendValueMinor END IS NULL THEN NULL ELSE p.effectiveAtEpochMillis END) AS lastPriceUpdatedAtEpochMillis
-        FROM binders b LEFT JOIN collection_entries e ON e.binderId = b.id
-        LEFT JOIN catalog_cards c ON c.id = e.cardId
+               SUM(CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%holo%' THEN NULLIF(p.holoTrendValueMinor, 0) ELSE p.trendValueMinor END * e.quantity) AS marketValueMinor,
+               MAX(CASE WHEN CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%holo%' THEN NULLIF(p.holoTrendValueMinor, 0) ELSE p.trendValueMinor END IS NULL THEN NULL ELSE p.effectiveAtEpochMillis END) AS lastPriceUpdatedAtEpochMillis
+        FROM collection_entries e
+        JOIN catalog_cards c ON c.id = e.cardId
         LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource AND linked.externalProductId = e.externalProductId
         LEFT JOIN raw_price_snapshots p ON p.id = (SELECT p2.id FROM raw_price_snapshots p2 WHERE p2.cardId = COALESCE(linked.id, c.id) AND p2.source = 'CARDMARKET_PUBLIC_DOWNLOAD' ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1)
-        GROUP BY b.id
-        ORDER BY b.updatedAtEpochMillis DESC, b.name COLLATE NOCASE
+        WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
+        GROUP BY e.binderId
+        ORDER BY MAX(e.updatedAtEpochMillis) DESC, MAX(c.setName) COLLATE NOCASE
     """)
-    fun observeBinders(): Flow<List<BinderProjection>>
+    fun observeBinders(ownerUid: String = GUEST_OWNER_UID): Flow<List<BinderProjection>>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertBinder(binder: BinderEntity)
@@ -64,8 +68,20 @@ interface CardVaultDao {
     @Query("SELECT id FROM binders WHERE setKey = :setKey LIMIT 1")
     suspend fun binderIdForSet(setKey: String): String?
 
-    @Query("SELECT * FROM raw_price_snapshots ORDER BY effectiveAtEpochMillis")
-    fun observeRawPriceHistory(): Flow<List<RawPriceSnapshotEntity>>
+    /** Only price rows reachable from the active owner's collection enter portfolio memory. */
+    @Query("""
+        SELECT p.* FROM raw_price_snapshots p
+        WHERE p.source = :source AND p.cardId IN (
+            SELECT COALESCE(linked.id, c.id)
+            FROM collection_entries e
+            JOIN catalog_cards c ON c.id = e.cardId
+            LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource
+                 AND linked.externalProductId = e.externalProductId
+            WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
+        )
+        ORDER BY p.effectiveAtEpochMillis
+    """)
+    fun observeOwnedRawPriceHistory(ownerUid: String, source: String): Flow<List<RawPriceSnapshotEntity>>
 
     /**
      * History stays tied to the exact Cardmarket product linked to this entry.
@@ -73,7 +89,7 @@ interface CardVaultDao {
      */
     @Query("""
         SELECT p.effectiveAtEpochMillis,
-               CASE WHEN :useHoloPrice THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor)
+               CASE WHEN :useHoloPrice THEN NULLIF(p.holoTrendValueMinor, 0)
                     ELSE p.trendValueMinor END AS valueMinor,
                p.currency, p.source
         FROM raw_price_snapshots p
@@ -83,12 +99,12 @@ interface CardVaultDao {
              JOIN catalog_cards c ON c.id = e.cardId
              LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource
                   AND linked.externalProductId = e.externalProductId
-             WHERE e.id = :entryId
+             WHERE e.id = :entryId AND e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
              LIMIT 1),
             :fallbackCardId
         )
           AND p.source = :source
-          AND (CASE WHEN :useHoloPrice THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor)
+          AND (CASE WHEN :useHoloPrice THEN NULLIF(p.holoTrendValueMinor, 0)
                     ELSE p.trendValueMinor END) IS NOT NULL
         ORDER BY p.effectiveAtEpochMillis ASC, p.id ASC
     """)
@@ -97,13 +113,15 @@ interface CardVaultDao {
         fallbackCardId: String,
         source: String,
         useHoloPrice: Boolean,
+        ownerUid: String = GUEST_OWNER_UID,
     ): Flow<List<CardPriceHistoryProjection>>
 
     @Query("""
         SELECT c.externalProductId, c.name, c.setId, c.setName,
                c.collectorNumber, c.language, c.finish, c.variant, c.imageUrl,
-               CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor)
-                    ELSE p.trendValueMinor END AS marketValueMinor, p.currency, c.rarity
+               p.trendValueMinor AS marketValueMinor,
+               NULLIF(p.holoTrendValueMinor, 0) AS holoMarketValueMinor,
+               p.currency, c.rarity
         FROM catalog_cards c
         LEFT JOIN raw_price_snapshots p ON p.id = (
             SELECT p2.id FROM raw_price_snapshots p2
@@ -120,7 +138,7 @@ interface CardVaultDao {
     suspend fun searchCatalog(source: String, query: String, limit: Int): List<CatalogSearchProjection>
 
     @Query("""
-        SELECT c.id AS cardId, c.name, c.setName, c.collectorNumber, c.language,
+        SELECT c.id AS cardId, c.setId, c.name, c.setName, c.collectorNumber, c.language,
                c.finish, c.variant, c.imageUrl, c.externalProductId,
                CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor)
                     ELSE p.trendValueMinor END AS marketValueMinor,
@@ -140,7 +158,7 @@ interface CardVaultDao {
     suspend fun catalogReferencesForSet(source: String, setName: String): List<CatalogReferenceProjection>
 
     @Query("""
-        SELECT c.id AS cardId, c.name, c.setName, c.collectorNumber, c.language,
+        SELECT c.id AS cardId, c.setId, c.name, c.setName, c.collectorNumber, c.language,
                c.finish, c.variant, c.imageUrl, c.externalProductId,
                NULL AS marketValueMinor, NULL AS priceUpdatedAtEpochMillis
         FROM catalog_cards c
@@ -191,40 +209,99 @@ interface CardVaultDao {
     @Update
     suspend fun updateCollectionEntry(entry: CollectionEntryEntity)
 
-    @Query("SELECT * FROM collection_entries WHERE id = :id")
-    suspend fun getCollectionEntry(id: Long): CollectionEntryEntity?
+    @Query("SELECT * FROM collection_entries WHERE id = :id AND ownerUid = :ownerUid")
+    suspend fun getCollectionEntry(id: Long, ownerUid: String = GUEST_OWNER_UID): CollectionEntryEntity?
 
-    @Query("SELECT * FROM collection_entries WHERE cardId = :cardId AND `condition` = :condition LIMIT 1")
-    suspend fun findMatchingEntry(cardId: String, condition: String): CollectionEntryEntity?
+    @Query("SELECT * FROM collection_entries WHERE ownerUid = :ownerUid AND syncId = :syncId LIMIT 1")
+    suspend fun getCollectionEntryBySyncId(ownerUid: String, syncId: String): CollectionEntryEntity?
+
+    @Query("SELECT COUNT(*) FROM collection_entries WHERE ownerUid = '__domidex_guest__' AND deletedAtEpochMillis IS NULL")
+    fun observeGuestEntryCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM collection_sync_outbox WHERE ownerUid = :ownerUid AND state = 'CONFLICT'")
+    fun observeSyncConflictCount(ownerUid: String): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM collection_sync_outbox WHERE ownerUid = :ownerUid AND state = 'ERROR'")
+    fun observeSyncErrorCount(ownerUid: String): Flow<Int>
+
+    @Query("SELECT * FROM collection_sync_outbox WHERE ownerUid = :ownerUid AND state = 'CONFLICT' ORDER BY createdAtEpochMillis")
+    suspend fun conflictedSyncOutbox(ownerUid: String): List<CollectionSyncOutboxEntity>
+
+    @Query("SELECT * FROM collection_sync_outbox WHERE ownerUid = :ownerUid AND state = 'ERROR' ORDER BY createdAtEpochMillis")
+    suspend fun erroredSyncOutbox(ownerUid: String): List<CollectionSyncOutboxEntity>
+
+    @Query("SELECT * FROM collection_entries WHERE ownerUid = '__domidex_guest__' AND deletedAtEpochMillis IS NULL ORDER BY id")
+    suspend fun activeGuestEntries(): List<CollectionEntryEntity>
+
+    @Query("""UPDATE collection_entries SET ownerUid = :newOwnerUid, syncId = :newSyncId,
+        syncState = 'PENDING', remoteRevision = 0, updatedAtEpochMillis = :updatedAt
+        WHERE id = :entryId AND ownerUid = '__domidex_guest__' AND deletedAtEpochMillis IS NULL""")
+    suspend fun claimGuestEntry(entryId: Long, newOwnerUid: String, newSyncId: String, updatedAt: Long): Int
+
+    @Query("""
+        SELECT e.id AS entryId, e.ownerUid, e.syncId, e.syncState, e.remoteRevision,
+               e.deletedAtEpochMillis, e.updatedAtEpochMillis,
+               c.name, c.setId, c.setName, c.collectorNumber, c.language,
+               COALESCE(e.finishOverride, c.finish) AS finish,
+               COALESCE(e.variantOverride, c.variant) AS variant,
+               c.rarity, e.quantity, e.condition, e.notes,
+               e.acquisitionPriceMinor, e.acquisitionCurrency, e.acquisitionDateEpochDay,
+               e.externalProductSource, e.externalProductId, c.imageUrl,
+               COALESCE(e.effectOverride, c.effectOverride) AS effectOverride,
+               e.sourceSetId, e.sourceCardId,
+               e.binderId,
+               CASE WHEN e.sourceSetId IS NOT NULL THEN 'tcgdex-' || e.sourceSetId ELSE c.setId END AS binderSetKey,
+               c.setName AS binderName, NULL AS binderHeroAsset
+        FROM collection_entries e
+        JOIN catalog_cards c ON c.id = e.cardId
+        WHERE e.ownerUid = :ownerUid AND e.syncId = :syncId
+        LIMIT 1
+    """)
+    suspend fun collectionSyncProjection(ownerUid: String, syncId: String): CollectionSyncProjection?
 
     @Query("""SELECT e.* FROM collection_entries e JOIN catalog_cards c ON c.id = e.cardId
-        WHERE e.externalProductSource = :source AND e.externalProductId = :productId
-          AND e.`condition` = :condition AND c.finish = :finish AND c.variant = :variant LIMIT 1""")
-    suspend fun findLinkedEntry(source: String, productId: Long, condition: String, finish: String, variant: String): CollectionEntryEntity?
+        WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
+          AND e.externalProductSource = :source AND e.externalProductId = :productId
+          AND e.`condition` = :condition
+          AND COALESCE(e.finishOverride, c.finish) = :finish
+          AND COALESCE(e.variantOverride, c.variant) = :variant LIMIT 1""")
+    suspend fun findLinkedEntry(source: String, productId: Long, condition: String, finish: String, variant: String, ownerUid: String = GUEST_OWNER_UID): CollectionEntryEntity?
 
-    @Query("UPDATE collection_entries SET quantity = quantity + :amount, updatedAtEpochMillis = :updatedAt WHERE id = :id")
-    suspend fun incrementQuantity(id: Long, amount: Int, updatedAt: Long)
+    @Query("""SELECT e.* FROM collection_entries e JOIN catalog_cards c ON c.id = e.cardId
+        WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
+          AND e.sourceSetId = :sourceSetId AND e.sourceCardId = :sourceCardId
+          AND e.`condition` = :condition
+          AND COALESCE(e.finishOverride, c.finish) = :finish
+          AND COALESCE(e.variantOverride, c.variant) = :variant LIMIT 1""")
+    suspend fun findSourceEntry(
+        ownerUid: String,
+        sourceSetId: String,
+        sourceCardId: String,
+        condition: String,
+        finish: String,
+        variant: String,
+    ): CollectionEntryEntity?
 
-    @Query("UPDATE collection_entries SET externalProductSource = :source, externalProductId = :productId, updatedAtEpochMillis = :updatedAt WHERE id = :entryId")
-    suspend fun linkExternalProduct(entryId: Long, source: String?, productId: Long?, updatedAt: Long)
+    @Query("UPDATE collection_entries SET quantity = quantity + :amount, updatedAtEpochMillis = :updatedAt, syncState = :syncState WHERE id = :id AND ownerUid = :ownerUid")
+    suspend fun incrementQuantity(id: Long, amount: Int, updatedAt: Long, ownerUid: String = GUEST_OWNER_UID, syncState: String = SYNC_LOCAL_ONLY)
 
-    @Query("UPDATE catalog_cards SET finish = :finish, variant = :variant, effectOverride = :effectOverride WHERE id = (SELECT cardId FROM collection_entries WHERE id = :entryId)")
-    suspend fun updateCardAppearance(entryId: Long, finish: String, variant: String, effectOverride: String?)
+    @Query("UPDATE collection_entries SET externalProductSource = :source, externalProductId = :productId, updatedAtEpochMillis = :updatedAt, syncState = :syncState WHERE id = :entryId AND ownerUid = :ownerUid")
+    suspend fun linkExternalProduct(entryId: Long, source: String?, productId: Long?, updatedAt: Long, ownerUid: String = GUEST_OWNER_UID, syncState: String = SYNC_LOCAL_ONLY)
+
+    @Query("UPDATE collection_entries SET finishOverride = :finish, variantOverride = :variant, effectOverride = :effectOverride WHERE id = :entryId AND ownerUid = :ownerUid")
+    suspend fun updateCardAppearance(entryId: Long, finish: String, variant: String, effectOverride: String?, ownerUid: String = GUEST_OWNER_UID)
+
+    @Query("UPDATE collection_entries SET deletedAtEpochMillis = :deletedAt, updatedAtEpochMillis = :deletedAt, syncState = :syncState WHERE id = :id AND ownerUid = :ownerUid")
+    suspend fun tombstoneCollectionEntry(id: Long, ownerUid: String, deletedAt: Long, syncState: String)
 
     @Query("DELETE FROM collection_entries WHERE id = :id")
     suspend fun deleteCollectionEntry(id: Long)
 
-    @Query("DELETE FROM collection_entries WHERE cardId IN (:cardIds)")
-    suspend fun deleteCollectionEntriesForCardIds(cardIds: List<String>)
+    @Query("UPDATE collection_entries SET deletedAtEpochMillis = :deletedAt, updatedAtEpochMillis = :deletedAt, syncState = :syncState WHERE binderId = :binderId AND ownerUid = :ownerUid AND deletedAtEpochMillis IS NULL")
+    suspend fun tombstoneEntriesForBinder(binderId: String, ownerUid: String, deletedAt: Long, syncState: String)
 
-    @Query("DELETE FROM binders WHERE id IN (:binderIds) AND NOT EXISTS (SELECT 1 FROM collection_entries e WHERE e.binderId = binders.id)")
-    suspend fun deleteEmptyBinders(binderIds: List<String>)
-
-    @Query("DELETE FROM collection_entries WHERE binderId = :binderId")
-    suspend fun deleteEntriesForBinder(binderId: String)
-
-    @Query("DELETE FROM binders WHERE id = :binderId")
-    suspend fun deleteBinderRow(binderId: String)
+    @Query("SELECT * FROM collection_entries WHERE binderId = :binderId AND ownerUid = :ownerUid AND deletedAtEpochMillis IS NULL")
+    suspend fun activeEntriesForBinder(binderId: String, ownerUid: String): List<CollectionEntryEntity>
 
     /** Removes only generated reference binders; owned/user-created binders survive. */
     @Query("DELETE FROM binders WHERE id LIKE 'tcgdex-%' AND NOT EXISTS (SELECT 1 FROM collection_entries e WHERE e.binderId = binders.id)")
@@ -237,15 +314,97 @@ interface CardVaultDao {
     suspend fun putMetadata(value: AppMetadataEntity)
 
     @Transaction
-    suspend fun updateEntry(id: Long, quantity: Int, condition: String, notes: String, acquisitionPriceMinor: Long?, acquisitionCurrency: String?, acquisitionDateEpochDay: Long?, finish: String, variant: String, effectOverride: String?) {
-        val existing = getCollectionEntry(id) ?: return
-        updateCollectionEntry(existing.copy(quantity = quantity, condition = condition, notes = notes, acquisitionPriceMinor = acquisitionPriceMinor, acquisitionCurrency = acquisitionCurrency, acquisitionDateEpochDay = acquisitionDateEpochDay, updatedAtEpochMillis = System.currentTimeMillis()))
-        updateCardAppearance(id, finish, variant, effectOverride)
+    suspend fun updateEntry(id: Long, ownerUid: String, syncState: String, quantity: Int, condition: String, notes: String, acquisitionPriceMinor: Long?, acquisitionCurrency: String?, acquisitionDateEpochDay: Long?, finish: String, variant: String, effectOverride: String?) {
+        val existing = getCollectionEntry(id, ownerUid) ?: return
+        updateCollectionEntry(existing.copy(quantity = quantity, condition = condition, notes = notes, acquisitionPriceMinor = acquisitionPriceMinor, acquisitionCurrency = acquisitionCurrency, acquisitionDateEpochDay = acquisitionDateEpochDay, updatedAtEpochMillis = System.currentTimeMillis(), syncState = syncState))
+        updateCardAppearance(id, finish, variant, effectOverride, ownerUid)
     }
 
-    @Transaction
-    suspend fun deleteBinderWithEntries(binderId: String) {
-        deleteEntriesForBinder(binderId)
-        deleteBinderRow(binderId)
-    }
+    @Upsert
+    suspend fun upsertSyncOutbox(value: CollectionSyncOutboxEntity)
+
+    @Query("SELECT * FROM collection_sync_outbox WHERE ownerUid = :ownerUid AND state = 'PENDING' ORDER BY createdAtEpochMillis LIMIT :limit")
+    suspend fun pendingSyncOutbox(ownerUid: String, limit: Int = 50): List<CollectionSyncOutboxEntity>
+
+    @Query("SELECT * FROM collection_sync_outbox WHERE entryKey = :entryKey LIMIT 1")
+    suspend fun syncOutbox(entryKey: String): CollectionSyncOutboxEntity?
+
+    @Query("DELETE FROM collection_sync_outbox WHERE entryKey = :entryKey AND mutationId = :mutationId")
+    suspend fun deleteSyncOutboxIfCurrent(entryKey: String, mutationId: String)
+
+    @Query("UPDATE collection_sync_outbox SET expectedRemoteRevision = :revision WHERE entryKey = :entryKey AND expectedRemoteRevision < :revision")
+    suspend fun advanceOutboxBaseRevision(entryKey: String, revision: Long)
+
+    @Query("UPDATE collection_sync_outbox SET state = 'CONFLICT', lastError = :reason WHERE entryKey = :entryKey AND mutationId = :mutationId")
+    suspend fun markOutboxConflict(entryKey: String, mutationId: String, reason: String)
+
+    @Query("UPDATE collection_sync_outbox SET state = 'ERROR', lastError = :reason WHERE entryKey = :entryKey AND mutationId = :mutationId")
+    suspend fun markOutboxError(entryKey: String, mutationId: String, reason: String)
+
+    @Query("""UPDATE collection_sync_outbox
+        SET mutationId = :newMutationId, expectedRemoteRevision = :remoteRevision,
+            state = 'PENDING', createdAtEpochMillis = :createdAt, lastError = NULL
+        WHERE entryKey = :entryKey AND ownerUid = :ownerUid AND mutationId = :previousMutationId
+          AND state = 'CONFLICT'""")
+    suspend fun rebaseSyncConflict(
+        entryKey: String,
+        ownerUid: String,
+        previousMutationId: String,
+        newMutationId: String,
+        remoteRevision: Long,
+        createdAt: Long,
+    ): Int
+
+    @Query("""UPDATE collection_sync_outbox
+        SET mutationId = :newMutationId, state = 'PENDING', createdAtEpochMillis = :createdAt,
+            lastError = NULL
+        WHERE entryKey = :entryKey AND ownerUid = :ownerUid AND mutationId = :previousMutationId
+          AND state = 'ERROR'""")
+    suspend fun retrySyncError(
+        entryKey: String,
+        ownerUid: String,
+        previousMutationId: String,
+        newMutationId: String,
+        createdAt: Long,
+    ): Int
+
+    @Query("UPDATE collection_entries SET remoteRevision = :revision, syncState = :state WHERE ownerUid = :ownerUid AND syncId = :syncId")
+    suspend fun markEntrySynced(ownerUid: String, syncId: String, revision: Long, state: String)
+
+    @Query("UPDATE collection_entries SET syncState = 'CONFLICT' WHERE ownerUid = :ownerUid AND syncId = :syncId")
+    suspend fun markEntryConflict(ownerUid: String, syncId: String)
+
+    @Query("UPDATE collection_entries SET syncState = 'ERROR' WHERE ownerUid = :ownerUid AND syncId = :syncId")
+    suspend fun markEntrySyncError(ownerUid: String, syncId: String)
+
+    @Query("""UPDATE collection_entries SET quantity = :quantity, condition = :condition,
+        acquisitionPriceMinor = :acquisitionPriceMinor, acquisitionCurrency = :acquisitionCurrency,
+        acquisitionDateEpochDay = :acquisitionDateEpochDay, notes = :notes,
+        externalProductSource = :externalProductSource, externalProductId = :externalProductId,
+        sourceSetId = :sourceSetId, sourceCardId = :sourceCardId,
+        binderId = :binderId, updatedAtEpochMillis = :updatedAtEpochMillis,
+        remoteRevision = :remoteRevision, syncState = 'CLEAN', deletedAtEpochMillis = :deletedAtEpochMillis,
+        finishOverride = :finish, variantOverride = :variant, effectOverride = :effectOverride
+        WHERE ownerUid = :ownerUid AND syncId = :syncId AND syncState = 'CLEAN'""")
+    suspend fun applyCleanRemoteEntry(
+        ownerUid: String,
+        syncId: String,
+        quantity: Int,
+        condition: String,
+        acquisitionPriceMinor: Long?,
+        acquisitionCurrency: String?,
+        acquisitionDateEpochDay: Long?,
+        notes: String,
+        externalProductSource: String?,
+        externalProductId: Long?,
+        sourceSetId: String?,
+        sourceCardId: String?,
+        binderId: String,
+        updatedAtEpochMillis: Long,
+        remoteRevision: Long,
+        deletedAtEpochMillis: Long?,
+        finish: String,
+        variant: String,
+        effectOverride: String?,
+    )
 }

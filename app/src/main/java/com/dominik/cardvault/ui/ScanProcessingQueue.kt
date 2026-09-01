@@ -1,11 +1,11 @@
 package com.dominik.cardvault.ui
 
-import com.dominik.cardvault.data.catalog.PokemonSetRegistry
+import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
+import com.dominik.cardvault.data.catalog.PokemonVisualCard
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionRepository
 import java.io.File
-import java.text.Normalizer
 import java.util.UUID
 
 internal object ScanQueuePolicy {
@@ -30,7 +30,7 @@ internal data class QueuedCardScan(
     val stage: ScanPipelineStage = ScanPipelineStage.CAPTURED,
     val analysis: CardTextAnalysis? = null,
     val candidates: List<ScanCandidate> = emptyList(),
-    val artwork: Map<Long, ArtworkVerification> = emptyMap(),
+    val artwork: Map<String, ArtworkVerification> = emptyMap(),
     val decision: ScannerDecisionResult? = null,
     val stageDurationsMillis: Map<ScanPipelineStage, Long> = emptyMap(),
     val totalProcessingMillis: Long? = null,
@@ -60,6 +60,16 @@ internal data class ScanCandidate(
     val evidence: CandidateSignalScores? = null,
 )
 
+/** Physical print identity for scanner state; one Cardmarket product may expose several foils. */
+internal fun CatalogSearchResult.scanIdentityKey(): String {
+    val sourceKey = if (!sourceSetId.isNullOrBlank() && !sourceCardId.isNullOrBlank()) {
+        "source:${sourceSetId.lowercase()}:${sourceCardId.lowercase()}"
+    } else {
+        "product:$productId"
+    }
+    return "$sourceKey|${finish.orEmpty().trim().lowercase()}|${variant.orEmpty().trim().lowercase()}"
+}
+
 internal data class ScanCandidateResolution(
     val candidates: List<ScanCandidate>,
     val decision: ScannerDecisionResult,
@@ -67,8 +77,9 @@ internal data class ScanCandidateResolution(
 
 /**
  * Module 3 candidate reduction.  The visual catalogue supplies the authoritative German card
- * identity; Cardmarket products are used only when their own product metadata confirms the same
- * printed number and finish.  An absent price can therefore never turn into a guessed match.
+ * identity. Cardmarket's compact export has no collector number; pricing therefore reuses the
+ * same source-verified expansion/name/print-order bridge as manual set selection. An absent
+ * verified product stays unpriced and can never turn into a guessed match.
  */
 internal object CardScanCandidateResolver {
     suspend fun resolve(
@@ -76,13 +87,13 @@ internal object CardScanCandidateResolver {
         repository: CollectionRepository,
         visualCatalog: PokemonVisualCatalog,
     ): ScanCandidateResolution {
-        if (!analysis.imageQuality.cardDetected || analysis.imageQuality.reason.isNotBlank()) {
+        if (!analysis.manualIdentityConfirmed && (!analysis.imageQuality.cardDetected || analysis.imageQuality.reason.isNotBlank())) {
             return ScanCandidateResolution(emptyList(), ScannerDecisionResult(ScannerDecision.REJECTED, reason = analysis.imageQuality.reason.ifBlank { "card_frame_missing" }))
         }
         val number = analysis.collectorNumber ?: return ScanCandidateResolution(emptyList(), ScannerDecisionResult(ScannerDecision.REJECTED, reason = "collector_number_missing"))
-        val found = linkedMapOf<Long, CatalogSearchResult>()
-        val exactSetMatches = analysis.setIdentifier
+        val exactSetMatches = (analysis.manualSetSourceId ?: analysis.setIdentifier)
             ?.let { setCode -> visualCatalog.findExact(setCode, number) }
+            ?.filter { visualCard -> printedDenominatorMatches(number, visualCard.set.printedTotal) }
             .orEmpty()
         // A foil reflection can turn one letter of an otherwise valid set code
         // into another source code. An empty exact lookup must not dead-end the
@@ -90,77 +101,82 @@ internal object CardScanCandidateResolver {
         val visualMatches = exactSetMatches.ifEmpty {
             visualCatalog.findByPrintedTotalAndCollectorNumber(number)
         }
-        visualMatches.forEach { visualCard ->
-            val products = repository.searchCatalog(visualCard.name, 40)
-            visualCard.printVariants.forEach { printing ->
-                val exactProducts = products.filter { product ->
-                    // Cardmarket's product id is accepted only when the source-verified
-                    // expansion bridge agrees. If that bridge is not available, a matching
-                    // localised set name is still required; name + number alone is not safe.
-                    val verifiedExpansion = visualCard.set.cardmarketExpansionId
-                    val sameSet = verifiedExpansion?.let { it == product.expansionId }
-                        ?: (product.visualSetName?.let { canonicalMetadata(it) == canonicalMetadata(visualCard.set.name) } == true)
-                    product.collectorNumber?.isNotBlank() == true &&
-                        sameSet &&
-                        canonicalName(product.name) == canonicalName(visualCard.name) &&
-                        canonicalNumber(product.collectorNumber) == canonicalNumber(visualCard.number) &&
-                        (product.finish.isNullOrBlank() || canonicalMetadata(product.finish) == canonicalMetadata(printing.finish))
-                }
-                if (exactProducts.isNotEmpty()) {
-                    exactProducts.forEach { product ->
-                        found.putIfAbsent(product.productId, product.copy(
-                            name = visualCard.name,
-                            visualSetName = visualCard.set.name,
-                            collectorNumber = visualCard.number,
-                            imageUrl = visualCard.largeImageUrl,
-                            language = if (visualCard.hasGermanLocalizedName) "GERMAN" else "SOURCE_FALLBACK",
-                            finish = printing.finish,
-                            variant = printing.variant,
-                            rarity = visualCard.rarity,
-                            mainSetSize = visualCard.set.printedTotal,
-                            setCode = PokemonSetRegistry.metadata(visualCard.set).setCode,
-                            marketSearchName = visualCard.marketSearchName,
-                        ))
-                    }
-                } else {
-                    // This is a real TCGdex identity, not a synthetic market-price record.
-                    // It remains explicitly unpriced until a verified Cardmarket product exists.
-                    val localId = -(("${visualCard.set.id}|${visualCard.id}|${visualCard.number}|${printing.id}".hashCode().toLong() and 0x7fff_ffffL) + 1L)
-                    found.putIfAbsent(localId, CatalogSearchResult(
-                        productId = localId,
-                        name = visualCard.name,
-                        expansionId = visualCard.set.id,
-                        trendPriceEur = null,
-                        currency = null,
-                        visualSetName = visualCard.set.name,
-                        collectorNumber = visualCard.number,
-                        imageUrl = visualCard.largeImageUrl,
-                        language = if (visualCard.hasGermanLocalizedName) "GERMAN" else "SOURCE_FALLBACK",
-                        finish = printing.finish,
-                        variant = printing.variant,
-                        rarity = visualCard.rarity,
-                        hasMarketProduct = false,
-                        mainSetSize = visualCard.set.printedTotal,
-                        setCode = PokemonSetRegistry.metadata(visualCard.set).setCode,
-                        marketSearchName = visualCard.marketSearchName,
-                    ))
-                }
+        data class PreparedCandidate(
+            val visualCard: PokemonVisualCard,
+            val printing: PokemonPrintVariant,
+            val unpriced: CatalogSearchResult,
+            val score: Int,
+        )
+
+        // Reduce on authoritative source identity first. Cardmarket lookup is intentionally
+        // deferred until only a handful of plausible physical printings remain.
+        val prepared = visualMatches
+            .flatMap { visualCard -> visualCard.printVariants.map { printing -> visualCard to printing } }
+            .distinctBy { (visualCard, printing) ->
+                "${visualCard.set.id.lowercase()}|${visualCard.id.lowercase()}|${canonicalMetadata(printing.finish)}|${canonicalMetadata(printing.variant)}"
             }
-        }
-        val candidates = found.values
-            .distinctBy { "${canonicalName(it.name)}|${it.visualSetName ?: it.expansionId}|${it.collectorNumber.orEmpty()}|${it.finish.orEmpty()}|${it.variant.orEmpty()}" }
-            .map { ScanCandidate(it, CardRecognitionRanker.score(analysis, it)) }
+            .map { (visualCard, printing) ->
+                val unpriced = scannerCatalogResult(visualCard, printing, marketProduct = null)
+                PreparedCandidate(visualCard, printing, unpriced, CardRecognitionRanker.score(analysis, unpriced))
+            }
             .filter { it.score >= ScannerDecisionPolicy.MIN_CANDIDATE_SCORE }
-            .sortedByDescending { it.score }
+            .sortedByDescending(PreparedCandidate::score)
             .take(8)
+
+        val cardsBySet = mutableMapOf<String, List<PokemonVisualCard>>()
+        val expansionBySet = mutableMapOf<String, String?>()
+        val candidatesBySearch = mutableMapOf<String, List<CatalogSearchResult>>()
+        val candidates = prepared.map { preparedCandidate ->
+            val visualCard = preparedCandidate.visualCard
+            val setCards = cardsBySet.getOrPut(visualCard.set.id) {
+                runCatching { visualCatalog.cards(visualCard.set) }.getOrDefault(listOf(visualCard))
+            }
+            val expansionId = if (expansionBySet.containsKey(visualCard.set.id)) {
+                expansionBySet[visualCard.set.id]
+            } else {
+                val resolved = visualCard.set.cardmarketExpansionId ?: run {
+                    val names = setCards.map { it.marketSearchName ?: it.name }.distinct()
+                    val marketCandidates = names.associateWith { name ->
+                        candidatesBySearch.getOrPut(name) { repository.searchCatalog(name, 500) }
+                    }
+                    resolveCardmarketExpansionId(setCards, marketCandidates)
+                }
+                expansionBySet[visualCard.set.id] = resolved
+                resolved
+            }
+            val searchName = visualCard.marketSearchName ?: visualCard.name
+            val marketCandidates = candidatesBySearch.getOrPut(searchName) {
+                repository.searchCatalog(searchName, 500)
+            }
+            val verifiedProduct = visualCardmarketProducts(
+                card = visualCard,
+                cardsInSet = setCards,
+                candidates = marketCandidates,
+                resolvedExpansionId = expansionId,
+            ).firstOrNull()
+            ScanCandidate(
+                card = scannerCatalogResult(visualCard, preparedCandidate.printing, verifiedProduct),
+                score = preparedCandidate.score,
+            )
+        }
         return ScanCandidateResolution(candidates, ScannerDecisionPolicy.decide(candidates.map(ScanCandidate::score)))
     }
 
-    private fun canonicalName(value: String) = Normalizer.normalize(value, Normalizer.Form.NFD)
-        .lowercase().replace("ß", "ss").filter(Char::isLetterOrDigit)
-    private fun canonicalNumber(value: String) = value.substringBefore('/').filter(Char::isLetterOrDigit).trimStart('0').ifBlank { "0" }
     private fun canonicalMetadata(value: String) = value.lowercase().filter(Char::isLetterOrDigit)
 }
+
+/** A physically printed denominator may reduce candidates, but may never be averaged away. */
+internal fun printedDenominatorMatches(collectorNumber: String, candidatePrintedTotal: Int): Boolean {
+    val denominator = printedCollectorDenominator(collectorNumber) ?: return true
+    return candidatePrintedTotal > 0 && candidatePrintedTotal == denominator
+}
+
+internal fun printedCollectorDenominator(collectorNumber: String): Int? =
+    Regex("^\\s*\\d{1,4}\\s*/\\s*(\\d{1,4})\\s*$")
+        .matchEntire(collectorNumber)
+        ?.groupValues
+        ?.get(1)
+        ?.toIntOrNull()
 
 /** A pure transition guard that keeps a queued item truthful even when a worker fails. */
 internal fun ScanPipelineStage.canTransitionTo(next: ScanPipelineStage): Boolean = when (this) {

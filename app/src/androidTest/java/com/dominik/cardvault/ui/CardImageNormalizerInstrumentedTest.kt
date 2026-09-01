@@ -5,15 +5,47 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.media.ExifInterface
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CardImageNormalizerInstrumentedTest {
+    @Test fun appliesAllEightExifTransformsToPixels() {
+        val a = Color.rgb(255, 0, 0); val b = Color.rgb(0, 255, 0)
+        val c = Color.rgb(0, 0, 255); val d = Color.rgb(255, 255, 0)
+        val e = Color.rgb(0, 255, 255); val f = Color.rgb(255, 0, 255)
+        val expected = mapOf(
+            ExifInterface.ORIENTATION_NORMAL to listOf(listOf(a, b), listOf(c, d), listOf(e, f)),
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL to listOf(listOf(b, a), listOf(d, c), listOf(f, e)),
+            ExifInterface.ORIENTATION_ROTATE_180 to listOf(listOf(f, e), listOf(d, c), listOf(b, a)),
+            ExifInterface.ORIENTATION_FLIP_VERTICAL to listOf(listOf(e, f), listOf(c, d), listOf(a, b)),
+            ExifInterface.ORIENTATION_TRANSPOSE to listOf(listOf(a, c, e), listOf(b, d, f)),
+            ExifInterface.ORIENTATION_ROTATE_90 to listOf(listOf(e, c, a), listOf(f, d, b)),
+            ExifInterface.ORIENTATION_TRANSVERSE to listOf(listOf(f, d, b), listOf(e, c, a)),
+            ExifInterface.ORIENTATION_ROTATE_270 to listOf(listOf(b, d, f), listOf(a, c, e)),
+        )
+        expected.forEach { (orientation, rows) ->
+            val source = Bitmap.createBitmap(2, 3, Bitmap.Config.ARGB_8888).apply {
+                setPixel(0, 0, a); setPixel(1, 0, b)
+                setPixel(0, 1, c); setPixel(1, 1, d)
+                setPixel(0, 2, e); setPixel(1, 2, f)
+            }
+            val transformed = CardImageNormalizer.applyExifDisplayOrientation(source, orientation)
+            assertEquals(rows.first().size, transformed.width)
+            assertEquals(rows.size, transformed.height)
+            rows.forEachIndexed { y, row -> row.forEachIndexed { x, color ->
+                assertEquals("EXIF $orientation at $x,$y", color, transformed.getPixel(x, y))
+            } }
+            transformed.recycle()
+        }
+    }
+
     @Test fun normalizesPlausibleCardFrameOnDevice() {
         val source = Bitmap.createBitmap(900, 1_200, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(source)
@@ -87,17 +119,18 @@ class CardImageNormalizerInstrumentedTest {
         assertNotNull("holo normalization failed: ${result.quality}", result.bitmap)
         assertTrue(result.quality.cardDetected)
         assertTrue(result.quality.glare > 0f)
-        assertTrue(result.recognitionBitmap != null)
+        assertEquals(2, result.analysisVariants.size)
     }
 
-    @Test fun landscapeCameraStillIsRotatedBeforeOcrRegionsAreUsed() {
+    @Test fun landscapeCardProducesOnlyAspectCorrectCanonicalCandidates() {
         val source = Bitmap.createBitmap(1_200, 900, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(source)
         canvas.drawColor(Color.rgb(18, 20, 27))
         val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(72, 106, 152) }
         canvas.drawRect(215f, 175f, 985f, 725f, cardPaint)
-        canvas.drawRect(895f, 175f, 985f, 725f, Paint().apply { color = Color.rgb(220, 35, 48) })
-        canvas.drawRect(215f, 175f, 305f, 725f, Paint().apply { color = Color.rgb(25, 55, 215) })
+        // DomiDex's scanner guidance keeps the printed top on the source's left edge.
+        canvas.drawRect(215f, 175f, 305f, 725f, Paint().apply { color = Color.rgb(220, 35, 48) })
+        canvas.drawRect(895f, 175f, 985f, 725f, Paint().apply { color = Color.rgb(25, 55, 215) })
         canvas.drawRect(215f, 175f, 985f, 725f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 14f
         })
@@ -119,12 +152,15 @@ class CardImageNormalizerInstrumentedTest {
 
         val result = CardImageNormalizer.normalize(source)
 
-        assertNotNull("landscape normalization failed: ${result.quality}", result.bitmap)
-        val normalized = result.bitmap!!
-        val top = normalized.getPixel(normalized.width / 2, normalized.height / 24)
-        val bottom = normalized.getPixel(normalized.width / 2, normalized.height * 23 / 24)
-        assertTrue("printed top was not rotated to the OCR top", Color.red(top) > Color.blue(top))
-        assertTrue("printed bottom did not remain opposite the top", Color.blue(bottom) > Color.red(bottom))
+        assertNotNull("landscape card was rejected: ${result.quality}", result.bitmap)
+        assertEquals(
+            listOf(AnalysisOrientation.DEG_90, AnalysisOrientation.DEG_270),
+            result.analysisVariants.map(CanonicalCardAnalysisVariant::orientation),
+        )
+        assertTrue(result.analysisVariants.all {
+            it.bitmap.width == CardScanConfiguration.RECOGNITION_WIDTH &&
+                it.bitmap.height == CardScanConfiguration.RECOGNITION_HEIGHT
+        })
     }
 
     @Test fun completesSmallInterruptionsInLowContrastOuterBorder() {

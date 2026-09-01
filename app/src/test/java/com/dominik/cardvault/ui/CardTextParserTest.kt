@@ -199,6 +199,9 @@ class CardTextParserTest {
             "XY01" to "xyp",
             "SM01" to "smp",
             "SWSH001" to "swshp",
+            "SVP173" to "svp",
+            "MEP001" to "mep",
+            "DP01" to "dpp",
         )
 
         cases.forEach { (printedNumber, expectedSetId) ->
@@ -211,6 +214,17 @@ class CardTextParserTest {
             assertEquals(printedNumber, result.collectorNumber)
             assertEquals(expectedSetId, result.setIdentifier)
         }
+    }
+
+    @Test fun extractsSourceBackedSubsetCollectorPairs() {
+        val result = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Galeriekarte"),
+            preferredNameText = "Galeriekarte",
+            preferredSetText = "TG05/TG30",
+            preferredNumberText = "TG05/TG30\nTG05/TG30",
+        )
+
+        assertEquals("TG05/TG30", result.collectorNumber)
     }
 
     @Test fun repeatedLowerBorderReadsOutrankOneEarlyWrongCollectorNumber() {

@@ -37,7 +37,7 @@ class HybridCandidateFusionTest {
         val ranked = HybridCandidateFusion.rank(
             analysis,
             listOf(ScanCandidate(candidate(1), 100)),
-            mapOf(1L to ArtworkVerification(ArtworkMatch.CONTRADICTS, .80f, .20f)),
+            mapOf(candidate(1).scanIdentityKey() to ArtworkVerification(ArtworkMatch.CONTRADICTS, .80f, .20f)),
         )
         assertEquals(RecognitionConfidence.LOW, ranked.single().evidence?.confidence)
         assertEquals(ScannerDecision.REJECTED, HybridCandidateFusion.decide(ranked).decision)
@@ -49,8 +49,8 @@ class HybridCandidateFusionTest {
             ScanCandidate(candidate(2, "Reverse Holo"), 100),
         )
         val artwork = mapOf(
-            1L to ArtworkVerification(ArtworkMatch.CORROBORATES, .93f, .93f),
-            2L to ArtworkVerification(ArtworkMatch.CORROBORATES, .93f, .93f),
+            candidates[0].card.scanIdentityKey() to ArtworkVerification(ArtworkMatch.CORROBORATES, .93f, .93f),
+            candidates[1].card.scanIdentityKey() to ArtworkVerification(ArtworkMatch.CORROBORATES, .93f, .93f),
         )
         assertEquals(ScannerDecision.AMBIGUOUS, HybridCandidateFusion.decide(HybridCandidateFusion.rank(analysis, candidates, artwork)).decision)
     }
@@ -74,7 +74,7 @@ class HybridCandidateFusionTest {
         val ranked = HybridCandidateFusion.rank(
             noBorder,
             listOf(ScanCandidate(candidate(1), 80)),
-            mapOf(1L to ArtworkVerification(ArtworkMatch.CORROBORATES, .93f, .93f)),
+            mapOf(candidate(1).scanIdentityKey() to ArtworkVerification(ArtworkMatch.CORROBORATES, .93f, .93f)),
         )
 
         assertEquals(RecognitionConfidence.MEDIUM, ranked.single().evidence?.confidence)
@@ -86,7 +86,7 @@ class HybridCandidateFusionTest {
         val ranked = HybridCandidateFusion.rank(
             wrongNumber,
             listOf(ScanCandidate(candidate(1), 90)),
-            mapOf(1L to ArtworkVerification(ArtworkMatch.CORROBORATES, .96f, .96f)),
+            mapOf(candidate(1).scanIdentityKey() to ArtworkVerification(ArtworkMatch.CORROBORATES, .96f, .96f)),
         )
 
         assertTrue("collector_number" in ranked.single().evidence!!.contradictions)
@@ -97,7 +97,7 @@ class HybridCandidateFusionTest {
         val ranked = HybridCandidateFusion.rank(
             analysis,
             listOf(ScanCandidate(candidate(1), 90)),
-            mapOf(1L to ArtworkVerification(ArtworkMatch.INCONCLUSIVE, .65f, .65f)),
+            mapOf(candidate(1).scanIdentityKey() to ArtworkVerification(ArtworkMatch.INCONCLUSIVE, .65f, .65f)),
         )
 
         assertEquals(RecognitionConfidence.HIGH, ranked.single().evidence?.confidence)
@@ -128,10 +128,11 @@ class HybridCandidateFusionTest {
         val ranked = HybridCandidateFusion.rank(noSetCode, listOf(ScanCandidate(wrongSet, 80)), emptyMap())
 
         assertEquals(0, ranked.single().evidence?.setScore)
-        assertEquals(ScannerDecision.AMBIGUOUS, HybridCandidateFusion.decide(ranked).decision)
+        assertTrue("printed_total" in ranked.single().evidence!!.contradictions)
+        assertEquals(ScannerDecision.REJECTED, HybridCandidateFusion.decide(ranked).decision)
     }
 
-    @Test fun `verified set and collector use canonical catalogue identity despite denominator ocr`() {
+    @Test fun `verified set and collector cannot override contradictory physical denominator`() {
         val noisyPrintedTotal = analysis.copy(collectorNumber = "117/080")
         val canonicalSourceCard = candidate(1).copy(mainSetSize = 84, collectorNumber = "117")
         val ranked = HybridCandidateFusion.rank(
@@ -140,8 +141,9 @@ class HybridCandidateFusionTest {
             emptyMap(),
         )
 
-        assertEquals(100, ranked.single().evidence?.setScore)
-        assertEquals(ScannerDecision.ACCEPTED, HybridCandidateFusion.decide(ranked).decision)
+        assertEquals(0, ranked.single().evidence?.setScore)
+        assertTrue("printed_total" in ranked.single().evidence!!.contradictions)
+        assertEquals(ScannerDecision.REJECTED, HybridCandidateFusion.decide(ranked).decision)
     }
 
     @Test fun `source language fallback waits for artwork without contradicting German name ocr`() {
@@ -158,5 +160,32 @@ class HybridCandidateFusionTest {
 
         assertTrue("name" !in evidence.contradictions)
         assertTrue(evidence.finalConfidence >= 85)
+    }
+
+    @Test fun `manual catalogue source is matched in source namespace not as printed code`() {
+        val manual = analysis.copy(
+            setIdentifier = null,
+            manualSetSourceId = "sv08.5",
+            manualIdentityConfirmed = true,
+        )
+        val sourceCard = candidate(1).copy(expansionId = "sv08.5", setCode = "PBL", mainSetSize = 84)
+
+        val evidence = HybridCandidateFusion.score(manual, sourceCard, null)
+
+        assertEquals(100, evidence.setScore)
+        assertTrue("set" !in evidence.contradictions)
+        assertTrue("manual_set_source" !in evidence.contradictions)
+    }
+
+    @Test fun `manual catalogue source contradiction is a hard rejection`() {
+        val manual = analysis.copy(
+            manualSetSourceId = "sv08.5",
+            manualIdentityConfirmed = true,
+        )
+        val wrongSource = candidate(1).copy(expansionId = "sv07", mainSetSize = 84)
+        val ranked = HybridCandidateFusion.rank(manual, listOf(ScanCandidate(wrongSource, 95)), emptyMap())
+
+        assertTrue("manual_set_source" in ranked.single().evidence!!.contradictions)
+        assertEquals(ScannerDecision.REJECTED, HybridCandidateFusion.decide(ranked).decision)
     }
 }

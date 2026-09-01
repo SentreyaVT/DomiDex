@@ -10,9 +10,11 @@ import org.junit.Test
 class CardRarityResolverTest {
     private val prismatic = PokemonSet("sv08.5", "Prismatische Entwicklungen", "Deutsch · TCGdex", 131, 180, "2025-01-17", null, null)
 
-    @Test fun preResolvesToTheSourceSetAndSvpDoesNot() {
+    @Test fun preAndSvpResolveOnlyToTheirOwnSourceSets() {
+        val promo = PokemonSet("svp", "SVP Black Star Promos", "Scarlet & Violet", 225, 225, "2023-01-01", null, null)
         assertEquals(prismatic, PokemonSetRegistry.resolve("PRE", listOf(prismatic)))
         assertEquals(null, PokemonSetRegistry.resolve("SVP", listOf(prismatic)))
+        assertEquals(promo, PokemonSetRegistry.resolve("SVP", listOf(prismatic, promo)))
     }
 
     @Test fun aboveMainSetIsDerivedFromTheSetSpecificMainSize() {

@@ -5,6 +5,14 @@ import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import java.util.UUID
+
+const val GUEST_OWNER_UID = "__domidex_guest__"
+const val SYNC_LOCAL_ONLY = "LOCAL_ONLY"
+const val SYNC_PENDING = "PENDING"
+const val SYNC_CLEAN = "CLEAN"
+const val SYNC_CONFLICT = "CONFLICT"
+const val SYNC_ERROR = "ERROR"
 
 @Entity(tableName = "catalog_cards", indices = [Index(value = ["tcg", "setId", "collectorNumber", "language", "finish", "variant"]), Index(value = ["externalSource", "externalProductId"], unique = true)])
 data class CatalogCardEntity(
@@ -28,6 +36,7 @@ data class CatalogCardEntity(
 /** Read-only catalog slot for a Binder master-set page; never an owned entry. */
 data class CatalogReferenceProjection(
     val cardId: String,
+    val setId: String,
     val name: String,
     val setName: String,
     val collectorNumber: String,
@@ -58,6 +67,9 @@ data class BinderEntity(
         Index("cardId"),
         Index(value = ["externalProductSource", "externalProductId"]),
         Index("binderId"),
+        Index(value = ["ownerUid", "syncId"], unique = true),
+        Index(value = ["ownerUid", "deletedAtEpochMillis"]),
+        Index(value = ["ownerUid", "sourceSetId", "sourceCardId"]),
     ],
 )
 data class CollectionEntryEntity(
@@ -76,6 +88,69 @@ data class CollectionEntryEntity(
     val externalProductSource: String? = null,
     val externalProductId: Long? = null,
     @ColumnInfo(defaultValue = "'inbox'") val binderId: String = "inbox",
+    @ColumnInfo(defaultValue = "'__domidex_guest__'") val ownerUid: String = GUEST_OWNER_UID,
+    @ColumnInfo(defaultValue = "'pending'") val syncId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val syncState: String = SYNC_LOCAL_ONLY,
+    @ColumnInfo(defaultValue = "0") val remoteRevision: Long = 0L,
+    val deletedAtEpochMillis: Long? = null,
+    val finishOverride: String? = null,
+    val variantOverride: String? = null,
+    val effectOverride: String? = null,
+    /** Stable TCGdex printing identity. It is independent from Cardmarket price linkage. */
+    val sourceSetId: String? = null,
+    val sourceCardId: String? = null,
+)
+
+/** One coalesced, idempotent cloud mutation per user-owned collection entry. */
+@Entity(
+    tableName = "collection_sync_outbox",
+    indices = [Index(value = ["ownerUid", "state", "createdAtEpochMillis"])],
+)
+data class CollectionSyncOutboxEntity(
+    @PrimaryKey val entryKey: String,
+    val mutationId: String,
+    val ownerUid: String,
+    val syncId: String,
+    val operation: String,
+    val expectedRemoteRevision: Long,
+    val state: String = SYNC_PENDING,
+    val createdAtEpochMillis: Long,
+    val lastError: String? = null,
+)
+
+/** Complete user-owned snapshot used only at the Room/Firestore replication boundary. */
+data class CollectionSyncProjection(
+    val entryId: Long,
+    val ownerUid: String,
+    val syncId: String,
+    val syncState: String,
+    val remoteRevision: Long,
+    val deletedAtEpochMillis: Long?,
+    val updatedAtEpochMillis: Long,
+    val name: String,
+    val setId: String,
+    val setName: String,
+    val collectorNumber: String,
+    val language: String,
+    val finish: String,
+    val variant: String,
+    val rarity: String,
+    val quantity: Int,
+    val condition: String,
+    val notes: String,
+    val acquisitionPriceMinor: Long?,
+    val acquisitionCurrency: String?,
+    val acquisitionDateEpochDay: Long?,
+    val externalProductSource: String?,
+    val externalProductId: Long?,
+    val imageUrl: String?,
+    val effectOverride: String?,
+    val sourceSetId: String?,
+    val sourceCardId: String?,
+    val binderId: String,
+    val binderSetKey: String,
+    val binderName: String,
+    val binderHeroAsset: String?,
 )
 
 @Entity(
@@ -193,6 +268,8 @@ data class CollectionProjection(
     val binderId: String,
     val rarity: String,
     val effectOverride: String?,
+    val sourceSetId: String?,
+    val sourceCardId: String?,
 )
 
 data class BinderProjection(
@@ -216,6 +293,7 @@ data class CatalogSearchProjection(
     val variant: String,
     val imageUrl: String?,
     val marketValueMinor: Long?,
+    val holoMarketValueMinor: Long?,
     val currency: String?,
     val rarity: String?,
 )

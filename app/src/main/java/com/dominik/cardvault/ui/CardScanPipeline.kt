@@ -138,11 +138,43 @@ internal data class NormalizedCardCapture(
     val recognitionBitmap: Bitmap? = null,
     /** Unwarped bounding crop retained only until OCR input creation. */
     val originalCrop: Bitmap? = null,
+    /**
+     * Temporary, perspective-corrected analysis planes.  They are distinct views of the same
+     * unchanged capture; only OCR/artwork code may consume them and must recycle every bitmap.
+     */
+    val analysisVariants: List<CanonicalCardAnalysisVariant> = emptyList(),
 )
 
+internal enum class AnalysisOrientation(val degrees: Int, internal val cornerShift: Int) {
+    DEG_0(0, 0),
+    DEG_90(90, 1),
+    DEG_180(180, 2),
+    DEG_270(270, 3),
+}
+
+internal data class CanonicalCardAnalysisVariant(
+    val orientation: AnalysisOrientation,
+    /** Canonical portrait card plane used only for recognition. */
+    val bitmap: Bitmap,
+)
+
+/** One and only one transform: source quad -> canonical portrait analysis plane. */
+internal fun cornersForAnalysisOrientation(points: List<Point>, orientation: AnalysisOrientation): List<Point> {
+    if (points.size != 4) return points
+    return cornerIndicesForAnalysisOrientation(orientation).map(points::get)
+}
+
+internal fun cornerIndicesForAnalysisOrientation(orientation: AnalysisOrientation): List<Int> =
+    List(4) { index -> (index + orientation.cornerShift) % 4 }
+
+internal fun aspectCorrectAnalysisOrientations(portraitQuad: Boolean): List<AnalysisOrientation> =
+    if (portraitQuad) listOf(AnalysisOrientation.DEG_0, AnalysisOrientation.DEG_180)
+    else listOf(AnalysisOrientation.DEG_90, AnalysisOrientation.DEG_270)
+
 /**
- * Module 1. It locates a card-shaped quadrilateral, rejects implausible rectangles, corrects
- * EXIF rotation and perspective, then produces the one normalized image used by all later stages.
+ * Module 1. It locates a physical card-shaped quadrilateral in either screen axis, rejects implausible rectangles,
+ * respects the camera's EXIF display orientation and corrects perspective, then produces the one
+ * normalized image used by all later stages. It never rotates the card independently of the photo.
  * It never falls back to whole-photo OCR when the physical-card gate fails.
  */
 internal object CardImageNormalizer {
@@ -246,8 +278,26 @@ internal object CardImageNormalizer {
                 )
             }
             val perspectiveStarted = SystemClock.elapsedRealtime()
-            val portraitCorners = orientForPortrait(candidate.corners)
-            val output = warp(sourceMat, portraitCorners)
+            // Geometry alone cannot tell which printed edge is the top.  Preserve the source file
+            // and build the two aspect-correct canonical analysis planes instead. A later OCR stage
+            // selects an orientation only from coherent identity evidence.
+            val preferredOrientation = if (isPortraitQuad(candidate.corners)) {
+                AnalysisOrientation.DEG_0
+            } else {
+                AnalysisOrientation.DEG_90
+            }
+            val preferredRecognition = warp(
+                sourceMat,
+                cornersForAnalysisOrientation(candidate.corners, preferredOrientation),
+                CardScanConfiguration.RECOGNITION_WIDTH,
+                CardScanConfiguration.RECOGNITION_HEIGHT,
+            )
+            val output = Bitmap.createScaledBitmap(
+                preferredRecognition,
+                CardScanConfiguration.NORMALIZED_WIDTH,
+                CardScanConfiguration.NORMALIZED_HEIGHT,
+                true,
+            )
             val perspectiveDuration = SystemClock.elapsedRealtime() - perspectiveStarted
             val quality = evaluate(output, candidate).copy(
                 geometryDurationMillis = geometryFinished - geometryStarted,
@@ -256,21 +306,33 @@ internal object CardImageNormalizer {
             val normalizedCorners = candidate.corners.map { it.x.toFloat() / source.width to it.y.toFloat() / source.height }
             if (quality.reason.isNotBlank()) {
                 output.recycle()
+                preferredRecognition.recycle()
                 return NormalizedCardCapture(null, quality, normalizedCorners)
             }
-            val recognitionSource = warp(
-                sourceMat,
-                portraitCorners,
-                CardScanConfiguration.RECOGNITION_WIDTH,
-                CardScanConfiguration.RECOGNITION_HEIGHT,
+            // A 63:88 quadrilateral has only two aspect-correct canonical mappings. Cyclic shifts
+            // by one corner swap width/height, so generating all four at one fixed 1200x1680 size
+            // would stretch two planes and invalidate the relative ROIs. Across portrait and
+            // landscape captures these pairs still cover the full 0/90/180/270 domain.
+            val aspectCorrectOrientations = aspectCorrectAnalysisOrientations(
+                preferredOrientation == AnalysisOrientation.DEG_0,
             )
-            val recognitionOutput = try { contrastRecognitionImage(recognitionSource) } finally { recognitionSource.recycle() }
+            val variants = aspectCorrectOrientations.map { orientation ->
+                CanonicalCardAnalysisVariant(
+                    orientation = orientation,
+                    bitmap = if (orientation == preferredOrientation) preferredRecognition else warp(
+                        sourceMat,
+                        cornersForAnalysisOrientation(candidate.corners, orientation),
+                        CardScanConfiguration.RECOGNITION_WIDTH,
+                        CardScanConfiguration.RECOGNITION_HEIGHT,
+                    ),
+                )
+            }
             return NormalizedCardCapture(
                 bitmap = output,
                 quality = quality,
                 corners = normalizedCorners,
-                recognitionBitmap = recognitionOutput,
                 originalCrop = boundingCrop(source, candidate.corners),
+                analysisVariants = variants,
             )
         } finally {
             sourceMat.release(); gray.release(); normalized.release(); rawBlurred.release(); normalizedBlurred.release()
@@ -308,7 +370,10 @@ internal object CardImageNormalizer {
                 try {
                     Imgproc.approxPolyDP(curve, approximation, Imgproc.arcLength(curve, true) * .028, true)
                     val approximatedPoints = approximation.toArray()
-                    val exactQuadrilateral = approximatedPoints.size == 4 && Imgproc.isContourConvex(MatOfPoint(*approximatedPoints))
+                    val exactQuadrilateral = if (approximatedPoints.size == 4) {
+                        val polygon = MatOfPoint(*approximatedPoints)
+                        try { Imgproc.isContourConvex(polygon) } finally { polygon.release() }
+                    } else false
                     val (points, measuredArea, structuralConfidence) = if (exactQuadrilateral) {
                         Triple(approximatedPoints.toList(), area, 1f)
                     } else {
@@ -422,14 +487,8 @@ internal object CardImageNormalizer {
         return listOf(top[0], top[1], bottom[0], bottom[1])
     }
 
-    /**
-     * CameraX may save a still in landscape even though the physical card is upright relative to
-     * the user. Map the card's long axis to the normalized vertical axis before any OCR ROI is
-     * cropped. The real-device capture direction places the printed top at the source's right
-     * edge, hence the one-corner shift (TR, BR, BL, TL).
-     */
-    private fun orientForPortrait(corners: List<Point>): List<Point> {
-        if (corners.size != 4) return corners
+    private fun isPortraitQuad(corners: List<Point>): Boolean {
+        if (corners.size != 4) return true
         val horizontalEdges = (
             hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y) +
                 hypot(corners[2].x - corners[3].x, corners[2].y - corners[3].y)
@@ -438,7 +497,7 @@ internal object CardImageNormalizer {
             hypot(corners[2].x - corners[1].x, corners[2].y - corners[1].y) +
                 hypot(corners[3].x - corners[0].x, corners[3].y - corners[0].y)
             ) / 2.0
-        return if (horizontalEdges > verticalEdges) corners.drop(1) + corners.first() else corners
+        return verticalEdges >= horizontalEdges
     }
 
     private fun warp(
@@ -551,12 +610,48 @@ internal object CardImageNormalizer {
         val largest = max(options.outWidth, options.outHeight).coerceAtLeast(1)
         val sample = decodeSampleForLargestEdge(largest)
         val decoded = BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 }) ?: return@runCatching null
-        val rotation = when (ExifInterface(file.absolutePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-            else -> 0f
-        }
-        if (rotation == 0f) decoded else Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, Matrix().apply { postRotate(rotation) }, true)
+        val orientation = ExifInterface(file.absolutePath).getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL,
+        )
+        applyExifDisplayOrientation(decoded, orientation)
     }.getOrNull()
+
+    /** Applies EXIF in memory and consumes [decoded] only when a transformed bitmap is created. */
+    internal fun applyExifDisplayOrientation(decoded: Bitmap, orientation: Int): Bitmap {
+        val matrix = exifBitmapMatrix(orientation) ?: return decoded
+        return try {
+            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, false).also { transformed ->
+                if (transformed !== decoded && !decoded.isRecycled) decoded.recycle()
+            }
+        } catch (error: Throwable) {
+            if (!decoded.isRecycled) decoded.recycle()
+            throw error
+        }
+    }
+
+    private fun exifBitmapMatrix(orientation: Int): Matrix? = Matrix().apply {
+        when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f, 1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> { setRotate(180f); postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSPOSE -> { setRotate(90f); postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> { setRotate(-90f); postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(-90f)
+            else -> return null
+        }
+    }
+}
+
+/** Pure EXIF mapping used to verify every mirrored/rotated metadata case without Android pixels. */
+internal fun exifDisplayPoint(orientation: Int, x: Float, y: Float): Pair<Float, Float> = when (orientation) {
+    ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> 1f - x to y
+    ExifInterface.ORIENTATION_ROTATE_180 -> 1f - x to 1f - y
+    ExifInterface.ORIENTATION_FLIP_VERTICAL -> x to 1f - y
+    ExifInterface.ORIENTATION_TRANSPOSE -> y to x
+    ExifInterface.ORIENTATION_ROTATE_90 -> 1f - y to x
+    ExifInterface.ORIENTATION_TRANSVERSE -> 1f - y to 1f - x
+    ExifInterface.ORIENTATION_ROTATE_270 -> y to 1f - x
+    else -> x to y
 }

@@ -43,16 +43,21 @@ object PokemonSetRegistry {
         "sm1" to "SUM", "sm2" to "GRI", "sm3" to "BUS", "sm35" to "SLG", "sm4" to "CIN", "sm5" to "UPR", "sm6" to "FLI", "sm7" to "CES", "sm75" to "DRM", "sm8" to "LOT", "sm9" to "TEU", "sm10" to "UNB", "sm11" to "UNM", "sm12" to "CEC", "sm115" to "HIF", "sma" to "HIF", "det1" to "DET",
         "swsh1" to "SSH", "swsh2" to "RCL", "swsh3" to "DAA", "swsh35" to "CPA", "swsh4" to "VIV", "swsh45" to "SHF", "swsh5" to "BST", "swsh6" to "CRE", "swsh7" to "EVS", "swsh8" to "FST", "swsh9" to "BRS", "swsh10" to "ASR", "swsh11" to "LOR", "swsh12" to "SIT", "swsh12pt5" to "CRZ", "cel25" to "CEL", "pgo" to "PGO",
         "sv1" to "SVI", "sv2" to "PAL", "sv3" to "OBF", "sv35" to "MEW", "sv4" to "PAR", "sv45" to "PAF", "sv5" to "TEF", "sv6" to "TWM", "sv65" to "SFA", "sv7" to "SCR", "sv8" to "SSP", "sv85" to "PRE", "sv9" to "JTG", "sv10" to "DRI",
+        "dpp" to "DP", "hgssp" to "HGSS", "bwp" to "BW", "xyp" to "XY", "smp" to "SM", "swshp" to "SWSH", "svp" to "SVP", "mep" to "MEP",
         "me1" to "MEG", "me2" to "PFL", "me25" to "ASC", "me3" to "POR", "me4" to "CRI", "me5" to "PBL",
     )
 
     /** Source-backed collector prefixes used by Black Star promo printings. */
-    private val promoSetIdByCollectorPrefix = mapOf(
-        "HGSS" to "hgssp",
-        "BW" to "bwp",
-        "XY" to "xyp",
-        "SM" to "smp",
-        "SWSH" to "swshp",
+    private data class PromoSetIdentity(val setId: String, val numberWidth: Int)
+    private val promoSetByCollectorPrefix = mapOf(
+        "DP" to PromoSetIdentity("dpp", 2),
+        "HGSS" to PromoSetIdentity("hgssp", 2),
+        "BW" to PromoSetIdentity("bwp", 2),
+        "XY" to PromoSetIdentity("xyp", 2),
+        "SM" to PromoSetIdentity("smp", 2),
+        "SWSH" to PromoSetIdentity("swshp", 3),
+        "SVP" to PromoSetIdentity("svp", 3),
+        "MEP" to PromoSetIdentity("mep", 3),
     )
 
     /**
@@ -115,7 +120,6 @@ object PokemonSetRegistry {
 
     fun resolve(input: String, sourceSets: List<PokemonSet>): PokemonSet? {
         val normalized = normalize(input)
-        if (normalized == "svp") return null
         val declaredSourceId = sourceSetIdByDeclaredCode[normalized]
         return sourceSets.firstOrNull { set ->
             val metadata = metadata(set)
@@ -136,10 +140,17 @@ object PokemonSetRegistry {
     fun legacyOfflineSets(): List<PokemonSet> = legacyOfflineSets.toList()
 
     fun promoSetIdForCollectorNumber(value: String): String? {
+        val canonical = canonicalPromoCollectorNumber(value) ?: return null
+        val prefix = canonical.takeWhile(Char::isLetter)
+        return promoSetByCollectorPrefix[prefix]?.setId
+    }
+
+    /** Canonicalises only source-registered promo prefixes; arbitrary OCR letters stay invalid. */
+    fun canonicalPromoCollectorNumber(value: String): String? {
         val compact = value.uppercase().filter(Char::isLetterOrDigit)
-        val prefix = Regex("^([A-Z]{2,4})\\d{1,3}$").matchEntire(compact)?.groupValues?.get(1)
-            ?: return null
-        return promoSetIdByCollectorPrefix[prefix]
+        val match = Regex("^([A-Z]{2,4})(\\d{1,3})$").matchEntire(compact) ?: return null
+        val identity = promoSetByCollectorPrefix[match.groupValues[1]] ?: return null
+        return match.groupValues[1] + match.groupValues[2].trimStart('0').ifBlank { "0" }.padStart(identity.numberWidth, '0')
     }
 
     fun isAboveMainSet(collectorNumber: String, set: PokemonSet): Boolean {

@@ -27,9 +27,12 @@ class FirebaseGoogleAuthGateway(
     private val context: Context,
     private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
 ) {
-    fun currentAccount(): GoogleAccountState = auth.currentUser?.let {
-        GoogleAccountState(true, it.displayName?.takeIf(String::isNotBlank))
-    } ?: GoogleAccountState(false, null)
+    fun currentAccount(): GoogleAccountState {
+        val user = auth.currentUser
+        val google = user?.providerData?.firstOrNull { it.providerId == GOOGLE_FIREBASE_PROVIDER_ID }
+            ?: return GoogleAccountState(false, null)
+        return GoogleAccountState(true, google.displayName?.takeIf(String::isNotBlank) ?: user.displayName?.takeIf(String::isNotBlank))
+    }
 
     suspend fun signIn(): GoogleLoginResult {
         return try {

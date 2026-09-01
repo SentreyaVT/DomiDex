@@ -20,6 +20,9 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -38,6 +41,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -153,7 +158,7 @@ private data class FrameQuality(
     val corners: List<Pair<Float, Float>> = emptyList(),
     val glare: Float = 0f,
     val frameQualityScore: Float = 0f,
-    val cardPresent: Boolean = false,
+    val captureEligible: Boolean = false,
     val fingerprint: IntArray? = null,
 )
 internal enum class QualityLevel { RED, YELLOW, GREEN }
@@ -216,6 +221,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     var captureMessage by remember { mutableStateOf<Int?>(null) }
     var confirmedOutlineCorners by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
+    var autoCaptureEnabled by rememberSaveable { mutableStateOf(true) }
     var captureInProgress by remember { mutableStateOf(false) }
     var activeCaptureId by remember { mutableLongStateOf(0L) }
     var latestCapture by remember { mutableStateOf<File?>(null) }
@@ -224,12 +230,13 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     val maxTorchStrength = remember(cameraManager, torchCameraId) { if (Build.VERSION.SDK_INT >= 33 && torchCameraId != null) cameraManager.getCameraCharacteristics(torchCameraId).get(CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL) ?: 1 else 1 }
     var torchEnabled by rememberSaveable { mutableStateOf(false) }
     var torchStrength by rememberSaveable { mutableIntStateOf(1) }
+    val autoCaptureGate = remember { AutoCaptureGate(missingFramesToRearm = 3, readyFramesToCapture = 1) }
     val controller = remember {
         LifecycleCameraController(context).apply {
             setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
-            // A scan is a still-document capture: prefer readable pixels over
-            // shutter speed. Analysis still drops old frames to keep the overlay live.
-            setImageCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+            // CameraX still writes the full JPEG, but does not hold the shutter for an
+            // additional quality-selection cycle. OCR/cropping run afterwards in the queue.
+            setImageCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             setImageAnalysisBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             cameraSelector = selectBestScannerCamera(cameraManager)
         }
@@ -256,7 +263,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
             torchEnabled = enabled; torchStrength = strength.coerceIn(1, maxTorchStrength)
         } }, mainExecutor)
     }
-    fun capture() {
+    fun capture(automatic: Boolean = false) {
         if (captureInProgress) return
         val captureOutlineCorners = quality.corners
         captureInProgress = true; captureMessage = null; confirmedOutlineCorners = emptyList()
@@ -266,9 +273,9 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         val contributionEligible = quality.level == QualityLevel.GREEN && quality.corners.size == 4
         activeCaptureId = captureId
         val files = mutableListOf<File>()
-        // A deliberate shutter press always records a two-frame safety pair. The queue can use
-        // both stills for temporal OCR/artwork evidence without racing an automatic capture.
-        val frameCount = 2
+        // One full-resolution still reaches the queue substantially faster than the former
+        // sequential two-shot burst and also prevents parallel OCR/native bitmap pressure.
+        val frameCount = 1
         fun finishSuccessful() {
             if (activeCaptureId != captureId || files.isEmpty()) return
             activeCaptureId = 0L
@@ -291,7 +298,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                 "captureTimestamp" to System.currentTimeMillis(),
                 "captureLatencyMs" to (SystemClock.elapsedRealtime() - captureStartedAt),
                 "frameCount" to files.size,
-                "auto" to false,
+                "auto" to automatic,
                 "selectedBestFrame" to 0,
                 "sharpnessScore" to quality.sharpness,
                 "glarePercentage" to quality.glare,
@@ -319,7 +326,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
             if (activeCaptureId == captureId && captureInProgress) {
                 failCapture()
             }
-        }, 16_000L)
+        }, 7_000L)
         fun takeFrame(index: Int) {
             if (activeCaptureId != captureId) return
             val file = File(context.cacheDir, "cardvault-capture-${captureId}-${index}.jpg")
@@ -345,11 +352,48 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         }
         takeFrame(0)
     }
+    LaunchedEffect(autoCaptureEnabled) {
+        if (autoCaptureEnabled) autoCaptureGate.arm()
+        else autoCaptureGate.disarm(quality.fingerprint)
+    }
+    LaunchedEffect(
+        autoCaptureEnabled,
+        captureInProgress,
+        quality.captureEligible,
+        quality.fingerprint?.contentHashCode(),
+    ) {
+        if (
+            autoCaptureEnabled &&
+            !captureInProgress &&
+            autoCaptureGate.onFrame(quality.captureEligible, quality.fingerprint)
+        ) capture(automatic = true)
+    }
     val captureConfirmed = captureMessage == R.string.capture_saved
     val outlineTarget = if (captureConfirmed && confirmedOutlineCorners.size == 4) confirmedOutlineCorners else quality.corners
-    // Detection already applies bounded temporal smoothing. A second 280 ms animation used to
-    // restart eight coroutines for every proposal and made the guide visibly trail the card.
-    val animatedOutline = outlineTarget
+    var animatedOutline by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
+    // Analysis deliberately drops stale frames and therefore publishes fewer positions than the
+    // preview renders. Interpolate the complete quadrilateral with one animation so the visible
+    // guide glides between detector samples without changing the geometry used for recognition.
+    LaunchedEffect(outlineTarget) {
+        if (outlineTarget.size != 4) {
+            animatedOutline = outlineTarget
+            return@LaunchedEffect
+        }
+        val start = animatedOutline.takeIf { it.size == 4 } ?: outlineTarget
+        if (start == outlineTarget) {
+            animatedOutline = outlineTarget
+            return@LaunchedEffect
+        }
+        Animatable(0f).animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 135, easing = FastOutSlowInEasing),
+        ) {
+            animatedOutline = start.zip(outlineTarget) { old, target ->
+                (old.first + (target.first - old.first) * value) to
+                    (old.second + (target.second - old.second) * value)
+            }
+        }
+    }
     Box(modifier.fillMaxSize().background(Color.Black)) {
         Box(Modifier.matchParentSize()) {
             // Preserve the webcam's complete 4:3 scene. FIT_CENTER intentionally letterboxes
@@ -359,6 +403,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                 message = when {
                     captureMessage != null -> captureMessage?.let { stringResource(it) }
                     captureInProgress -> "Aufnahme läuft …"
+                    quality.level == QualityLevel.GREEN && autoCaptureEnabled -> "Bereit – automatische Aufnahme"
                     quality.level == QualityLevel.GREEN -> "Bereit – Auslöser drücken"
                     else -> "Karte ruhig halten"
                 },
@@ -441,14 +486,21 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                             Text(if (torchEnabled) "Blitz an" else "Blitz", color = if (torchEnabled) MewIce else VaultTextMuted, fontSize = 9.sp)
                         }
                     }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        DomiLineIcon(DomiIconKind.CHECK, VaultTextMuted, Modifier.size(18.dp))
-                        Text("Manuell", color = VaultTextMuted, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                    TextButton(onClick = { autoCaptureEnabled = !autoCaptureEnabled }) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            DomiLineIcon(DomiIconKind.CHECK, if (autoCaptureEnabled) VaultPositive else VaultTextMuted, Modifier.size(18.dp))
+                            Text(if (autoCaptureEnabled) "Auto an" else "Auto aus", color = if (autoCaptureEnabled) VaultPositive else VaultTextMuted, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                     Button(
-                        onClick = { capture() },
+                        onClick = {
+                            autoCaptureGate.disarm(quality.fingerprint)
+                            capture(automatic = false)
+                        },
                         enabled = !captureInProgress,
-                        modifier = Modifier.size(58.dp),
+                        modifier = Modifier
+                            .size(58.dp)
+                            .semantics { contentDescription = "Foto aufnehmen" },
                         shape = RoundedCornerShape(29.dp),
                         contentPadding = PaddingValues(0.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MewPlumDeep, contentColor = VaultText),
@@ -509,30 +561,24 @@ internal class AutoCaptureGate(
     private var readyFrames = 0
     private var capturedFingerprint: IntArray? = null
 
-    fun onFrame(
-        level: QualityLevel,
-        guidance: QualityGuidance,
-        cardPresent: Boolean = guidance != QualityGuidance.FIND_CARD,
-        fingerprint: IntArray? = null,
-    ): Boolean {
-        val ready = level == QualityLevel.GREEN && guidance == QualityGuidance.READY
+    fun onFrame(captureEligible: Boolean, fingerprint: IntArray? = null): Boolean {
         if (!armed) {
-            // A replacement must visibly move through a non-ready phase and its normalized card
-            // interior must differ from the last capture. Merely shaking/refocusing the same card
-            // can therefore never create a duplicate automatic scan.
-            if (!ready || !cardPresent) transitionFrames += 1
+            // Overlay colour is deliberately irrelevant here. A replacement may remain a valid
+            // contour while it is moved into view, but its normalized interior still has to differ
+            // from the last capture so shaking/refocusing cannot create an automatic duplicate.
             val previous = capturedFingerprint
             val differentCard = when {
                 fingerprint == null -> previous == null
                 previous == null -> true
                 else -> cardFingerprintDifference(previous, fingerprint) >= minimumNewCardDifference
             }
-            if (ready && transitionFrames >= missingFramesToRearm && differentCard) {
+            if (!captureEligible || differentCard) transitionFrames += 1
+            if (captureEligible && transitionFrames >= missingFramesToRearm && differentCard) {
                 armed = true
                 transitionFrames = 0
             }
         }
-        readyFrames = if (armed && ready) readyFrames + 1 else 0
+        readyFrames = if (armed && captureEligible) readyFrames + 1 else 0
         if (readyFrames >= readyFramesToCapture) {
             armed = false
             readyFrames = 0
@@ -635,7 +681,9 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
 
     override fun analyze(image: ImageProxy) {
         try {
-            val now = SystemClock.elapsedRealtime(); if (now - lastPublished < 180) return
+            // Roughly 7 lightweight boundary checks per second feel immediate while CameraX
+            // keeps every preview frame independent and discards stale analyzer input.
+            val now = SystemClock.elapsedRealtime(); if (now - lastPublished < 140) return
             val plane = image.planes.first(); val buffer = plane.buffer; val width = image.width; val height = image.height
             var index = 0; var bright = 0; var dark = 0; var total = 0.0; var detail = 0.0; var centerDetail = 0.0; var centerPairs = 0
             for (gy in 0 until 20) for (gx in 0 until 16) {
@@ -656,7 +704,8 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             val sharpnessScore = (detail / (samples.size - 20) / 28.0).toFloat().coerceIn(0f, 1f)
             val centeredCardEvidence = (centerDetail / centerPairs.coerceAtLeast(1) / 24.0).toFloat().coerceIn(0f, 1f)
             val stabilityScore = (1f - motion / 32f).coerceIn(0f, 1f)
-            val detectedFrame = detector.detect(buffer, width, height, plane.rowStride, plane.pixelStride)
+            val rotationDegrees = image.imageInfo.rotationDegrees
+            val detectedFrame = detector.detect(buffer, width, height, plane.rowStride, plane.pixelStride, rotationDegrees)
             val frame = track(detectedFrame)
             val contourStability = contourStability(detectedFrame)
             val glareQuality = (1f - clippedBright / .42f).coerceIn(0f, 1f)
@@ -667,9 +716,13 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             // FIT_CENTER deliberately leaves more context around a physical card.
             // The former thresholds effectively required a close-up, so an otherwise
             // clearly visible card in the wide scanner view could never auto-capture.
-            val hasCardEvidence = detectedFrame.found && detectedFrame.coverage in .11f..1.12f && detectedFrame.perspective >= .54f
-            val cardFingerprint = if (hasCardEvidence) {
-                sampleCardFingerprint(buffer, width, height, plane.rowStride, plane.pixelStride, detectedFrame.corners)
+            // Live preview answers one question only: is the complete, physical trading card
+            // inside a plausible outer rectangle? OCR, variants and prices belong to the queue.
+            // Inner artwork/text boxes are therefore never sufficient for a green capture state.
+            val hasCardEvidence = isWholeTradingCardFrame(detectedFrame)
+            val captureEligible = isCaptureEligibleTradingCardFrame(detectedFrame)
+            val cardFingerprint = if (captureEligible) {
+                sampleCardFingerprint(buffer, width, height, plane.rowStride, plane.pixelStride, detectedFrame.corners, rotationDegrees)
             } else null
             // A textured background alone must never arm auto capture.  Centre
             // detail remains a guidance fallback, while capture requires an actual
@@ -677,7 +730,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             val stableQuality = if (hasCardEvidence && stabilityScore >= .47f) qualityWindow.add(frameQualityScore) else { qualityWindow.clear(); false }
             val baseReady = mean in 45.0..225.0 && clippedBright <= .32f && clippedDark <= .48f && stabilityScore >= .47f && sharpnessScore >= .15f && contourStability >= .60f && frameQualityScore >= .52f && stableQuality && hasCardEvidence
             stableReadyFrames = if (baseReady) stableReadyFrames + 1 else 0
-            val guidance = when { mean < 45 || clippedDark > .48f -> QualityGuidance.MORE_LIGHT; mean > 225 || clippedBright > .32f -> QualityGuidance.LESS_GLARE; stabilityScore < .47f || (frame.found && contourStability < .60f) -> QualityGuidance.HOLD_STILL; sharpnessScore < .15f -> QualityGuidance.FOCUS; !frame.found && centeredCardEvidence < .30f -> QualityGuidance.FIND_CARD; frame.found && frame.coverage < .11f -> QualityGuidance.MOVE_CLOSER; frame.found && frame.coverage > .96f -> QualityGuidance.MOVE_AWAY; frame.found && frame.perspective < .54f -> QualityGuidance.ALIGN_PARALLEL; stableReadyFrames >= 2 -> QualityGuidance.READY; else -> QualityGuidance.HOLD_STILL }
+            val guidance = when { mean < 45 || clippedDark > .48f -> QualityGuidance.MORE_LIGHT; mean > 225 || clippedBright > .32f -> QualityGuidance.LESS_GLARE; stabilityScore < .47f || (frame.found && contourStability < .60f) -> QualityGuidance.HOLD_STILL; sharpnessScore < .15f -> QualityGuidance.FOCUS; !frame.found && centeredCardEvidence < .30f -> QualityGuidance.FIND_CARD; frame.found && frame.coverage < .15f -> QualityGuidance.MOVE_CLOSER; frame.found && frame.coverage > .96f -> QualityGuidance.MOVE_AWAY; frame.found && (frame.perspective < .56f || frame.aspectRatio !in .58f..0.84f) -> QualityGuidance.ALIGN_PARALLEL; stableReadyFrames >= 2 -> QualityGuidance.READY; else -> QualityGuidance.HOLD_STILL }
             val level = when { guidance == QualityGuidance.READY -> QualityLevel.GREEN; guidance in setOf(QualityGuidance.FIND_CARD, QualityGuidance.MOVE_CLOSER, QualityGuidance.MOVE_AWAY, QualityGuidance.ALIGN_PARALLEL) || baseReady -> QualityLevel.YELLOW; else -> QualityLevel.RED }
             val displayedCorners = overlayCorners.update(frame.corners, locked = level == QualityLevel.GREEN)
             val scanState = when {
@@ -701,7 +754,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                     usedMultiFrameEvidence = qualityWindow.hasTemporalEvidence,
                     reason = if (ScannerDebugState.snapshot.scanId.isBlank()) guidance.name else ScannerDebugState.snapshot.reason,
                 )
-                onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, displayedCorners, clippedBright, frameQualityScore, hasCardEvidence, cardFingerprint))
+                onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, displayedCorners, clippedBright, frameQualityScore, captureEligible, cardFingerprint))
             }
         } finally { image.close() }
     }
@@ -718,6 +771,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
         rowStride: Int,
         pixelStride: Int,
         corners: List<Pair<Float, Float>>,
+        rotationDegrees: Int,
     ): IntArray? {
         if (corners.size != 4) return null
         val ordered = corners.sortedBy { it.second }.let { vertical ->
@@ -737,10 +791,9 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                 val u = (column + .5f) / 6f
                 val previewX = leftX + (rightX - leftX) * u
                 val previewY = leftY + (rightY - leftY) * u
-                // CardFrameDetector maps the landscape analysis buffer into portrait preview
-                // coordinates as (1-y, x); invert that mapping for luma sampling.
-                val x = (previewY * (width - 1)).toInt().coerceIn(0, width - 1)
-                val y = ((1f - previewX) * (height - 1)).toInt().coerceIn(0, height - 1)
+                val (sourceX, sourceY) = previewToSource(previewX, previewY, rotationDegrees)
+                val x = (sourceX * (width - 1)).toInt().coerceIn(0, width - 1)
+                val y = (sourceY * (height - 1)).toInt().coerceIn(0, height - 1)
                 output[index++] = buffer.get(y * rowStride + x * pixelStride).toInt() and 0xFF
             }
         }
@@ -770,7 +823,9 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                 coverage = previousFrame.coverage * .60f + detected.coverage * .40f,
                 perspective = previousFrame.perspective * .60f + detected.perspective * .40f,
                 geometryScore = previousFrame.geometryScore * .60f + detected.geometryScore * .40f,
+                aspectRatio = previousFrame.aspectRatio * .60f + detected.aspectRatio * .40f,
                 usedFallbackGeometry = previousFrame.usedFallbackGeometry || detected.usedFallbackGeometry,
+                portraitAligned = detected.portraitAligned,
                 corners = previousFrame.corners.zip(detected.corners) { old, fresh ->
                     old.first * .60f + fresh.first * .40f to old.second * .60f + fresh.second * .40f
                 },
@@ -781,9 +836,40 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
     }
 }
 
-internal data class CardFrame(val found: Boolean, val coverage: Float, val perspective: Float, val corners: List<Pair<Float, Float>> = emptyList(), val geometryScore: Float = 0f, val usedFallbackGeometry: Boolean = false)
+internal data class CardFrame(
+    val found: Boolean,
+    val coverage: Float,
+    val perspective: Float,
+    val corners: List<Pair<Float, Float>> = emptyList(),
+    val geometryScore: Float = 0f,
+    val usedFallbackGeometry: Boolean = false,
+    val aspectRatio: Float = 0f,
+    val portraitAligned: Boolean = true,
+)
 
-internal class CardFrameDetector(private val maxAnalysisEdge: Int = 720) : AutoCloseable {
+/** Strict live gate for the outer 63:88 Pokémon card, never an internal artwork/text panel. */
+internal fun isWholeTradingCardFrame(frame: CardFrame): Boolean =
+    frame.found &&
+        frame.portraitAligned &&
+        frame.coverage in .15f..1.12f &&
+        frame.aspectRatio in .58f..0.84f &&
+        frame.geometryScore >= .56f &&
+        frame.perspective >= .56f
+
+/**
+ * Coarse live-capture gate only. The overlay may remain yellow while this accepts a rotated,
+ * offset or mildly distorted four-corner card proposal. The saved full-resolution image is still
+ * re-detected, rectified and quality-checked by [CardImageNormalizer] before OCR/matching.
+ */
+internal fun isCaptureEligibleTradingCardFrame(frame: CardFrame): Boolean =
+    frame.found &&
+        frame.corners.size == 4 &&
+        frame.coverage in .09f..1.38f &&
+        frame.aspectRatio in .50f..0.92f &&
+        frame.geometryScore >= .45f &&
+        frame.perspective >= .32f
+
+internal class CardFrameDetector(private val maxAnalysisEdge: Int = 600) : AutoCloseable {
     private val available = runCatching { OpenCVLoader.initLocal() }.getOrDefault(false)
     private var lumaBytes = ByteArray(0)
     private val gray = Mat()
@@ -800,7 +886,14 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 720) : AutoC
     private val claheDelegate = lazy { Imgproc.createCLAHE(2.0, Size(8.0, 8.0)) }
     private val clahe by claheDelegate
 
-    fun detect(buffer: java.nio.ByteBuffer, sourceWidth: Int, sourceHeight: Int, rowStride: Int, pixelStride: Int): CardFrame {
+    fun detect(
+        buffer: java.nio.ByteBuffer,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        rowStride: Int,
+        pixelStride: Int,
+        rotationDegrees: Int = 0,
+    ): CardFrame {
         if (!available) return CardFrame(false, 0f, 0f)
         val scale = min(1f, maxAnalysisEdge.toFloat() / maxOf(sourceWidth, sourceHeight).coerceAtLeast(1))
         val width = (sourceWidth * scale).toInt().coerceAtLeast(1)
@@ -847,14 +940,34 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 720) : AutoC
                     val rightAngles = liveRightAngleScore(ordered)
                     val margin = points.all { it.x > width * .015 && it.x < width * .985 && it.y > height * .015 && it.y < height * .985 }
                     val perspective = min(min(opposite, aspectScore), rightAngles) * if (margin) 1f else .5f
-                    val visualCorners = points.sortedWith(compareBy<Point> { it.y }.thenBy { it.x }).let { sorted ->
+                    val sourceCorners = points.sortedWith(compareBy<Point> { it.y }.thenBy { it.x }).let { sorted ->
                         val top = sorted.take(2).sortedBy { it.x }; val bottom = sorted.takeLast(2).sortedByDescending { it.x }; top + bottom
-                    }.map { (1f - (it.y / height).toFloat()).coerceIn(0f, 1f) to (it.x / width).toFloat().coerceIn(0f, 1f) }
+                    }
+                    val visualCorners = sourceCorners.map {
+                        sourceToPreview(
+                            (it.x / width).toFloat().coerceIn(0f, 1f),
+                            (it.y / height).toFloat().coerceIn(0f, 1f),
+                            rotationDegrees,
+                        )
+                    }
                     val rawCoverage = (area / imageArea).toFloat()
                     val coverageScore = (1f - abs(rawCoverage - .42f) / .42f).coerceIn(0f, 1f)
                     val score = (aspectScore * .32f + rightAngles * .28f + opposite * .22f + coverageScore * .18f) * if (margin) 1f else .70f
                     if (score > bestScore) {
-                        best = CardFrame(true, (area / (imageArea * .62)).toFloat(), perspective, visualCorners, score, usedFallback)
+                        best = CardFrame(
+                            found = true,
+                            coverage = (area / (imageArea * .62)).toFloat(),
+                            perspective = perspective,
+                            corners = visualCorners,
+                            geometryScore = score,
+                            usedFallbackGeometry = usedFallback,
+                            aspectRatio = aspect.toFloat(),
+                            portraitAligned = visualCorners.let { displayed ->
+                                val displayedWidth = displayed.maxOf { it.first } - displayed.minOf { it.first }
+                                val displayedHeight = displayed.maxOf { it.second } - displayed.minOf { it.second }
+                                displayedHeight > displayedWidth
+                            },
+                        )
                         bestScore = score
                     }
                 }
@@ -889,10 +1002,7 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 720) : AutoC
 
     /** Detects a still image in its own (unrotated) coordinate system. */
     fun detectPhoto(luma: ByteArray, width: Int, height: Int): CardFrame {
-        val liveCoordinates = detect(java.nio.ByteBuffer.wrap(luma), width, height, width, 1)
-        // The live analyzer rotates CameraX's landscape analysis coordinates for its portrait preview.
-        // A gallery/captured bitmap is displayed unrotated, so map them back before editing.
-        return liveCoordinates.copy(corners = liveCoordinates.corners.map { it.second.coerceIn(0f, 1f) to (1f - it.first).coerceIn(0f, 1f) })
+        return detect(java.nio.ByteBuffer.wrap(luma), width, height, width, 1, rotationDegrees = 0)
     }
 
     override fun close() {
@@ -910,3 +1020,21 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 720) : AutoC
         lumaBytes = ByteArray(0)
     }
 }
+
+/** Maps CameraX analysis-buffer coordinates into the fixed portrait preview without guessing. */
+internal fun sourceToPreview(x: Float, y: Float, rotationDegrees: Int): Pair<Float, Float> =
+    when (((rotationDegrees % 360) + 360) % 360) {
+        90 -> (1f - y) to x
+        180 -> (1f - x) to (1f - y)
+        270 -> y to (1f - x)
+        else -> x to y
+    }.let { (mappedX, mappedY) -> mappedX.coerceIn(0f, 1f) to mappedY.coerceIn(0f, 1f) }
+
+/** Inverse of [sourceToPreview], used only for sampling the unrotated CameraX luma buffer. */
+internal fun previewToSource(x: Float, y: Float, rotationDegrees: Int): Pair<Float, Float> =
+    when (((rotationDegrees % 360) + 360) % 360) {
+        90 -> y to (1f - x)
+        180 -> (1f - x) to (1f - y)
+        270 -> (1f - y) to x
+        else -> x to y
+    }.let { (mappedX, mappedY) -> mappedX.coerceIn(0f, 1f) to mappedY.coerceIn(0f, 1f) }
