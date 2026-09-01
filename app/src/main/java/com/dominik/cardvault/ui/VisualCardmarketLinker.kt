@@ -4,6 +4,7 @@ import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
 import com.dominik.cardvault.model.CatalogSearchResult
+import com.dominik.cardvault.model.CollectionCard
 import java.text.Normalizer
 
 /**
@@ -41,6 +42,28 @@ internal fun visualCardmarketProducts(
         imageUrl = card.largeImageUrl,
         marketSearchName = card.marketSearchName,
     )?.let(::listOf).orEmpty()
+}
+
+/** Resolves a grey Binder slot only through its stable source identity and verified printing. */
+internal fun binderReferenceCardmarketProducts(
+    reference: CollectionCard,
+    sourceCard: PokemonVisualCard,
+    cardsInSet: List<PokemonVisualCard>,
+    candidates: List<CatalogSearchResult>,
+): List<CatalogSearchResult> {
+    if (reference.sourceSetId != sourceCard.set.id.lowercase() || reference.sourceCardId != sourceCard.id.lowercase()) return emptyList()
+    return visualCardmarketProducts(sourceCard, cardsInSet, candidates, reference.marketExpansionId).map { product ->
+        product.copy(
+            name = reference.name,
+            visualSetName = reference.set,
+            collectorNumber = reference.number,
+            finish = reference.finish,
+            variant = reference.variant,
+            trendPriceEur = product.realTrendFor(reference.finish),
+            sourceSetId = reference.sourceSetId,
+            sourceCardId = reference.sourceCardId,
+        )
+    }
 }
 
 /**

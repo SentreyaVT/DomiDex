@@ -173,6 +173,37 @@ class CardVaultDatabaseTest {
         assertEquals(42L, stored.externalProductId)
     }
 
+    @Test fun pricedBinderAddUpdatesQuantityPortfolioAndRemovalFromOneRoomSource() = runBlocking {
+        val dao = database.cardVaultDao()
+        val now = System.currentTimeMillis()
+        dao.insertCatalogCard(
+            CatalogCardEntity(
+                id = "cm-pokemon-42", tcg = "POKEMON", setId = "6209", setName = "Cardmarket Set",
+                name = "Mew", collectorNumber = "", language = "UNKNOWN", finish = "UNKNOWN",
+                variant = "Cardmarket-Produkt", createdAtEpochMillis = now,
+                externalSource = "CARDMARKET_PUBLIC_DOWNLOAD", externalProductId = 42L,
+            ),
+        )
+        dao.insertRawPrices(listOf(RawPriceSnapshotEntity(
+            cardId = "cm-pokemon-42", source = "CARDMARKET_PUBLIC_DOWNLOAD", currency = "EUR",
+            lowValueMinor = 300, averageValueMinor = 330, trendValueMinor = 345, marketValueMinor = 345,
+            fetchedAtEpochMillis = now, effectiveAtEpochMillis = now,
+        )))
+        val repository = RoomCollectionRepository(database, MutableStateFlow("A"))
+
+        assertEquals(AddCardOutcome.CREATED, repository.addManualCard(sourceInput(42L)))
+        assertEquals(3.45, repository.portfolio.first().totalValue, .001)
+        assertEquals(AddCardOutcome.QUANTITY_INCREMENTED, repository.addManualCard(sourceInput(42L)))
+        val doubled = repository.portfolio.first()
+        assertEquals(2, doubled.totalCards)
+        assertEquals(6.90, doubled.totalValue, .001)
+        assertEquals(6.90, repository.binders.first().single().marketValueEur, .001)
+
+        repository.deleteEntry(doubled.cards.single().entryId)
+        assertEquals(0, repository.portfolio.first().totalCards)
+        assertEquals(0.0, repository.portfolio.first().totalValue, .001)
+    }
+
     @Test fun deleteThenReaddKeepsTombstoneAndUsesFreshSyncGeneration() = runBlocking {
         val repository = RoomCollectionRepository(database, MutableStateFlow("A"))
         repository.addManualCard(sourceInput())

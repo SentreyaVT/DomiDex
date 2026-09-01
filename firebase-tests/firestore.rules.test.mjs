@@ -22,6 +22,17 @@ function entry(ownerUid, revision = 1, deleted = false) {
   };
 }
 
+function evidence(fingerprint) {
+  return {
+    fingerprint, confirmedCardId: "source:sv1:sv1-001|normal|standard",
+    sourceSetId: "sv1", cardNumber: "001/198", setCode: "SV1",
+    ocrTokens: ["pikachu", "001198"], visualFingerprint: "a".repeat(64),
+    candidateIds: ["source:sv1:sv1-001|normal|standard"], originalConfidence: 84,
+    corrected: false, scannerVersion: "scanner-v2.1", knowledgeVersion: 1,
+    observedAtClient: 1_788_220_800_000, updatedAt: serverTimestamp(),
+  };
+}
+
 before(async () => {
   environment = await initializeTestEnvironment({
     projectId: "demo-domidex-firestore",
@@ -71,4 +82,32 @@ test("source identity is optional but must be a valid complete pair", async () =
   const malformedId = "33333333-3333-4333-8333-333333333333";
   const malformed = { ...entry("A"), syncId: malformedId, sourceSetId: "SV 08", sourceCardId: "001" };
   await assertFails(setDoc(doc(userA, `users/A/collectionEntries/${malformedId}`), malformed));
+});
+
+test("scan evidence is private, idempotent and shape constrained", async () => {
+  const fingerprint = "a".repeat(64);
+  const userA = environment.authenticatedContext("A").firestore();
+  const userB = environment.authenticatedContext("B").firestore();
+  const reference = doc(userA, `users/A/scanEvidence/${fingerprint}`);
+  await assertSucceeds(setDoc(reference, evidence(fingerprint)));
+  await assertSucceeds(setDoc(reference, { ...evidence(fingerprint), originalConfidence: 90 }));
+  await assertFails(getDoc(doc(userB, `users/A/scanEvidence/${fingerprint}`)));
+  await assertFails(setDoc(doc(userA, `users/A/scanEvidence/${"b".repeat(64)}`), evidence(fingerprint)));
+  await assertFails(setDoc(reference, { ...evidence(fingerprint), status: "STABLE" }));
+});
+
+test("clients can read but never publish shared stable knowledge", async () => {
+  const fingerprint = "a".repeat(64);
+  await environment.withSecurityRulesDisabled(async context => {
+    await setDoc(doc(context.firestore(), `scanKnowledge/${fingerprint}`), {
+      fingerprint, cardId: "source:sv1:sv1-001|normal|standard", status: "STABLE",
+    });
+  });
+  const userA = environment.authenticatedContext("A").firestore();
+  await assertSucceeds(getDoc(doc(userA, `scanKnowledge/${fingerprint}`)));
+  await assertFails(setDoc(doc(userA, `scanKnowledge/${fingerprint}`), {
+    fingerprint, cardId: "forged", status: "STABLE",
+  }));
+  const anonymous = environment.unauthenticatedContext().firestore();
+  await assertFails(getDoc(doc(anonymous, `scanKnowledge/${fingerprint}`)));
 });

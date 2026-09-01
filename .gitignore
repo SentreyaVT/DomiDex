@@ -27,6 +27,7 @@ keystore.properties
 secrets.properties
 /app/google-services.json
 /firebase-tests/node_modules/
+/functions/node_modules/
 /firebase-tests/*-debug.log
 /firebase-debug.log
 /firestore-debug.log

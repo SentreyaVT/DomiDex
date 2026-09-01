@@ -2,7 +2,10 @@ package com.dominik.cardvault.ui
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
+import android.content.ContentResolver
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -38,6 +41,8 @@ import coil3.compose.AsyncImage
 import androidx.core.content.ContextCompat
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.hypot
@@ -49,6 +54,46 @@ internal data class CardBoundary(val corners: List<Pair<Float, Float>>) {
     }
 }
 internal data class CenteringFrames(val outer: CardBoundary, val inner: CardBoundary)
+
+internal fun boundaryDecodeSample(width: Int, height: Int, maxEdge: Int = 2048): Int {
+    var sample = 1
+    val largest = maxOf(width, height)
+    while (largest / sample > maxEdge) sample *= 2
+    return sample
+}
+
+/** Bounded gallery decode for UI and boundary analysis; content URIs never become file paths. */
+internal fun decodeBoundaryBitmap(resolver: ContentResolver, uri: Uri, maxEdge: Int = 2048): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    val boundsInput = resolver.openInputStream(uri) ?: return null
+    boundsInput.use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val decoded = resolver.openInputStream(uri)?.use { input ->
+        BitmapFactory.decodeStream(input, null, BitmapFactory.Options().apply {
+            inSampleSize = boundaryDecodeSample(bounds.outWidth, bounds.outHeight, maxEdge)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        })
+    } ?: return null
+    val orientation = resolver.openInputStream(uri)?.use { input ->
+        runCatching { ExifInterface(input).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
+            .getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+    } ?: ExifInterface.ORIENTATION_NORMAL
+    val matrix = Matrix().apply {
+        when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f, 1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> { setRotate(180f); postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSPOSE -> { setRotate(90f); postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> { setRotate(-90f); postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(-90f)
+        }
+    }
+    if (matrix.isIdentity) return decoded
+    return Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true).also { rotated ->
+        if (rotated !== decoded) decoded.recycle()
+    }
+}
 
 /** Deliberately minimal camera for centering photos: no auto-capture, just a guide and shutter. */
 @Composable internal fun CenteringCameraCapture(onDismiss: () -> Unit, onCaptured: (Uri) -> Unit) {
@@ -118,7 +163,20 @@ internal fun CardBoundaryEditor(
     var editingInner by remember { mutableStateOf(false) }
     var selectedCorner by remember { mutableIntStateOf(0) }
     var detecting by remember { mutableStateOf(false) }
-    LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream) } }
+    var decodeFailed by remember(uri) { mutableStateOf(false) }
+    LaunchedEffect(uri) {
+        val decoded = runCatching { withContext(Dispatchers.IO) { decodeBoundaryBitmap(context.contentResolver, uri) } }.getOrNull()
+        runCatching { currentCoroutineContext().ensureActive() }.onFailure {
+            decoded?.takeIf { bitmap -> !bitmap.isRecycled }?.recycle()
+            throw it
+        }
+        bitmap?.takeIf { it !== decoded && !it.isRecycled }?.recycle()
+        bitmap = decoded
+        decodeFailed = decoded == null
+    }
+    DisposableEffect(Unit) {
+        onDispose { bitmap?.takeIf { !it.isRecycled }?.recycle() }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Kartenrahmen ausrichten") },
@@ -142,7 +200,9 @@ internal fun CardBoundaryEditor(
                         }, enabled = !detecting, modifier = Modifier.weight(1f)) { Text(if (detecting) "Erkenne…" else "Automatisch erkennen") }
                         TextButton(onClick = { outerBoundary = CardBoundary.Default; innerBoundary = CardBoundary.InnerDefault }) { Text("Zurücksetzen") }
                     }
-                } ?: CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
+                } ?: if (decodeFailed) {
+                    Text("Dieses Bild konnte nicht verarbeitet werden. Bitte wähle ein anderes Foto.", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                } else CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
             }
         },
         confirmButton = { TextButton(onClick = { onApply(CenteringFrames(outerBoundary, innerBoundary)) }, enabled = bitmap != null && !detecting) { Text("Rahmen übernehmen") } },
@@ -197,9 +257,18 @@ internal fun CardBoundaryEditor(
 private fun detectBoundary(bitmap: Bitmap): CardBoundary? {
     val maxSide = 1400
     val scale = minOf(1f, maxSide.toFloat() / maxOf(bitmap.width, bitmap.height))
-    val sampled = if (scale < 1f) Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true) else bitmap
-    val pixels = IntArray(sampled.width * sampled.height); sampled.getPixels(pixels, 0, sampled.width, 0, 0, sampled.width, sampled.height)
-    val luma = ByteArray(pixels.size) { i -> ((android.graphics.Color.red(pixels[i]) * 299 + android.graphics.Color.green(pixels[i]) * 587 + android.graphics.Color.blue(pixels[i]) * 114) / 1000).toByte() }
-    val frame = CardFrameDetector().detectPhoto(luma, sampled.width, sampled.height)
-    return frame.corners.takeIf { frame.found && it.size == 4 }?.let(::CardBoundary)
+    // Detection owns its working copy so leaving the editor can safely release the UI bitmap.
+    val sampled = if (scale < 1f) {
+        Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
+    } else {
+        bitmap.copy(Bitmap.Config.ARGB_8888, false)
+    }
+    return try {
+        val pixels = IntArray(sampled.width * sampled.height); sampled.getPixels(pixels, 0, sampled.width, 0, 0, sampled.width, sampled.height)
+        val luma = ByteArray(pixels.size) { i -> ((android.graphics.Color.red(pixels[i]) * 299 + android.graphics.Color.green(pixels[i]) * 587 + android.graphics.Color.blue(pixels[i]) * 114) / 1000).toByte() }
+        val frame = CardFrameDetector().detectPhoto(luma, sampled.width, sampled.height)
+        frame.corners.takeIf { frame.found && it.size == 4 }?.let(::CardBoundary)
+    } finally {
+        if (!sampled.isRecycled) sampled.recycle()
+    }
 }

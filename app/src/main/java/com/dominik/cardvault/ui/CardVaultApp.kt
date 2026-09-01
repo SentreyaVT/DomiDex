@@ -107,6 +107,7 @@ import com.dominik.cardvault.data.feedback.ScanFeedback
 import com.dominik.cardvault.data.feedback.ScanFeedbackAnnotation
 import com.dominik.cardvault.data.feedback.ScanFeedbackAnnotationType
 import com.dominik.cardvault.data.feedback.ScanFeedbackStore
+import com.dominik.cardvault.data.knowledge.FirebaseScanKnowledge
 import com.dominik.cardvault.data.storage.CatalogContributionReceipt
 import com.dominik.cardvault.data.storage.FirebaseDomiDexStorageGateway
 import com.dominik.cardvault.data.storage.StorageFailureReason
@@ -128,6 +129,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import org.json.JSONArray
@@ -1070,6 +1072,7 @@ private fun isOnline(context: Context): Boolean {
 ) {
     val visualCatalog = remember { PokemonVisualCatalog() }
     var setReferences by remember(setName) { mutableStateOf<List<CollectionCard>>(emptyList()) }
+    var sourceSetCards by remember(setName) { mutableStateOf<List<PokemonVisualCard>>(emptyList()) }
     var referencesLoading by remember(setName) { mutableStateOf(true) }
     var refreshVersion by rememberSaveable(setName) { mutableIntStateOf(0) }
     LaunchedEffect(setName, refreshVersion) {
@@ -1097,6 +1100,7 @@ private fun isOnline(context: Context): Boolean {
                 return@LaunchedEffect
             }
             val downloadedCards = visualCatalog.cards(set)
+            sourceSetCards = downloadedCards
             // Cache source metadata and licensed image URLs locally for this
             // master set.  These are reference slots only, never owned cards.
             // Show the numbered grey slots immediately, then enrich them in
@@ -1281,6 +1285,7 @@ private fun isOnline(context: Context): Boolean {
         CardPreviewDialog(
             card = card,
             repository = repository,
+            sourceSetCards = sourceSetCards,
             onDismiss = { selectedCard = null },
             onEdit = card.takeIf { it.entryId > 0L }?.let { { selectedCard = null; editingCard = card } },
             // Catalog/reference slots use entryId 0 and are intentionally never removable.
@@ -2220,6 +2225,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
 @Composable private fun CardPreviewDialog(
     card: CollectionCard,
     repository: CollectionRepository,
+    sourceSetCards: List<PokemonVisualCard> = emptyList(),
     onDismiss: () -> Unit,
     onEdit: (() -> Unit)?,
     onDelete: (() -> Unit)? = null,
@@ -2231,17 +2237,27 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     val effect = remember(card.id, card.finish, card.variant) { CardEffectResolver.resolve(card) }
     val priceHistory by repository.priceHistory(card).collectAsState(initial = emptyList())
     var referenceProducts by remember(card.id, card.marketExpansionId) { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
-    var selectedMarketProductId by rememberSaveable(card.entryId) { mutableStateOf(card.externalProductId) }
+    var selectedMarketProductId by rememberSaveable(card.entryId, card.sourceSetId, card.sourceCardId, card.finish, card.variant) { mutableStateOf(card.externalProductId) }
     var priceChoicesExpanded by rememberSaveable(card.entryId) { mutableStateOf(false) }
-    LaunchedEffect(card.id, card.externalProductId, card.marketExpansionId, card.marketSearchName) {
+    var priceLookupComplete by remember(card.id, card.sourceCardId, card.finish, card.variant) { mutableStateOf(false) }
+    val isReferenceAdd = onAdd != null
+    LaunchedEffect(card.id, card.externalProductId, card.marketExpansionId, card.marketSearchName, card.finish, card.variant, sourceSetCards) {
+        priceLookupComplete = false
         val query = card.marketSearchName ?: card.name
         val matches = runCatching { repository.searchCatalog(query, 100) }.getOrDefault(emptyList())
-        val linkedProduct = card.externalProductId?.let { productId -> matches.firstOrNull { it.productId == productId } }
-        val verifiedExpansion = card.marketExpansionId ?: linkedProduct?.expansionId
-        val cardMatches = verifiedExpansion?.let { expansion ->
-            matches.filter { it.expansionId == expansion && isSameNamePriceCandidate(query, it) }
-        } ?: linkedProduct?.let(::listOf).orEmpty()
-        referenceProducts = cardMatches
+        referenceProducts = if (isReferenceAdd) {
+            val sourceCard = sourceSetCards.firstOrNull {
+                it.set.id.equals(card.sourceSetId, ignoreCase = true) && it.id.equals(card.sourceCardId, ignoreCase = true)
+            }
+            sourceCard?.let { binderReferenceCardmarketProducts(card, it, sourceSetCards, matches) }.orEmpty()
+        } else {
+            val linkedProduct = card.externalProductId?.let { productId -> matches.firstOrNull { it.productId == productId } }
+            val verifiedExpansion = card.marketExpansionId ?: linkedProduct?.expansionId
+            verifiedExpansion?.let { expansion ->
+                matches.filter { it.expansionId == expansion && isSameNamePriceCandidate(query, it) }
+            } ?: linkedProduct?.let(::listOf).orEmpty()
+        }
+        priceLookupComplete = true
     }
     val marketPriceChoices = binderCardmarketPriceChoices(card, referenceProducts)
     val preferredMarketProduct = defaultBinderCardmarketProduct(card, referenceProducts)
@@ -2251,7 +2267,6 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     val storedTrendPrice = card.currentValueEur.takeIf { card.priceUpdatedAtEpochMillis != null && it > 0.0 }
     val displayedTrendPrice = selectedMarketProduct?.trendPriceEur ?: storedTrendPrice
     val priceDate = card.priceUpdatedAtEpochMillis?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, Locale.GERMANY).format(java.util.Date(it)) }
-    val isReferenceAdd = onAdd != null
     AlertDialog(
         onDismissRequest = { if (!addInProgress) onDismiss() },
         containerColor = VaultNightRaised,
@@ -2265,7 +2280,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                     Box(Modifier.size(36.dp).background(MewPlumDeep.copy(alpha = .68f), RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.MARKET, MewRose, Modifier.size(19.dp)) }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("CARDMARKET-TRENDPREIS", color = VaultTextMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
-                        Text(displayedTrendPrice?.let(::euro) ?: "Wird abgeglichen …", color = if (displayedTrendPrice != null) VaultText else VaultTextMuted, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                        Text(displayedTrendPrice?.let(::euro) ?: if (priceLookupComplete) "Preis nicht verfügbar" else "Wird abgeglichen …", color = if (displayedTrendPrice != null) VaultText else VaultTextMuted, fontSize = 20.sp, fontWeight = FontWeight.Black)
                     }
                     if (displayedTrendPrice != null) DomiLineIcon(DomiIconKind.CHECK, VaultPositive, Modifier.size(18.dp))
                 }
@@ -2849,7 +2864,16 @@ private fun parsePrice(value: String): Double? = if (value.isBlank()) null else 
 private fun parseDate(value: String): Long? = if (value.isBlank()) null else runCatching { LocalDate.parse(value).toEpochDay() }.getOrNull() ?: Long.MIN_VALUE
 
 /** A locally verified suggestion waiting for the collector's explicit selection. */
-private data class ScanRailResult(val candidate: CatalogSearchResult, val score: Int)
+private data class SelectedScanKnowledgeContext(
+    val analysis: CardTextAnalysis,
+    val candidates: List<ScanCandidate>,
+)
+
+private data class ScanRailResult(
+    val candidate: CatalogSearchResult,
+    val score: Int,
+    val knowledgeContext: SelectedScanKnowledgeContext? = null,
+)
 
 private fun artworkLabel(result: ArtworkVerification): String = when (result.match) {
     ArtworkMatch.CORROBORATES -> "passt zur Referenz"
@@ -2880,6 +2904,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     var queueReviewMode by remember { mutableStateOf(false) }
     var queueExpanded by remember { mutableStateOf(false) }
     var selectedCandidate by remember { mutableStateOf<CatalogSearchResult?>(null) }
+    var selectedKnowledgeContext by remember { mutableStateOf<SelectedScanKnowledgeContext?>(null) }
     var scanAddRunning by remember { mutableStateOf(false) }
     var scanAddError by remember { mutableStateOf<String?>(null) }
     var manualEvidence by rememberSaveable { mutableStateOf(false) }
@@ -2895,6 +2920,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     var contributionReceipt by remember { mutableStateOf<CatalogContributionReceipt?>(null) }
     var contributionFailure by remember { mutableStateOf<StorageFailureReason?>(null) }
     val contributionStorage = remember(context) { FirebaseDomiDexStorageGateway(context) }
+    val scanKnowledge = remember(context) { FirebaseScanKnowledge(context) }
     val scannerAppVersion = remember(context) {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }
@@ -2989,7 +3015,11 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             // Fast scan mode never adds a card silently. It clears the blocking
             // sheet and keeps the best evidence-backed result in the lower rail,
             // ready for a deliberate tap while the camera continues with the next.
-            val result = ScanRailResult(ranked.first().first, ranked.first().second)
+            val result = ScanRailResult(
+                ranked.first().first,
+                ranked.first().second,
+                resolution?.let { SelectedScanKnowledgeContext(current, it.candidates) },
+            )
             recentResults = (listOf(result) + recentResults)
                 .distinctBy { it.candidate.scanIdentityKey() }
                 .take(12)
@@ -3084,6 +3114,11 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     terminal(ScanPipelineStage.FAILED, "Texterkennung fehlgeschlagen: ${error?.javaClass?.simpleName ?: "Unbekannt"}")
                     return@withPermit
                 }
+                val knowledgeFingerprint = scanKnowledgeFingerprint(currentAnalysis)
+                val latestKnowledge = AtomicReference(knowledgeFingerprint?.let(scanKnowledge::cached))
+                val knowledgeListener = knowledgeFingerprint?.let { fingerprint ->
+                    scanKnowledge.observeRelevant(fingerprint, latestKnowledge::set)
+                }
                 try {
                 ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
                     geometryScore = currentAnalysis.imageQuality.geometryScore,
@@ -3171,7 +3206,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     }
                 }.orEmpty()
                 val fusionStarted = SystemClock.elapsedRealtime()
-                val fused = HybridCandidateFusion.rank(currentAnalysis, resolution.candidates, artwork)
+                val fused = ScanKnowledgeCandidateRanker.apply(
+                    HybridCandidateFusion.rank(currentAnalysis, resolution.candidates, artwork),
+                    latestKnowledge.get(),
+                )
                 val finalDecision = HybridCandidateFusion.decide(fused)
                 val fusionDuration = SystemClock.elapsedRealtime() - fusionStarted
                 updateQueuedScan(scan.id) { it.copy(candidates = fused, artwork = artwork, decision = finalDecision) }
@@ -3237,6 +3275,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     scanId = scan.id,
                 )
                 } finally {
+                    knowledgeListener?.close()
                     currentAnalysis.normalizedCard?.let { bitmap ->
                         if (!bitmap.isRecycled) bitmap.recycle()
                     }
@@ -3334,7 +3373,17 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                         } else {
                             Text("Sortiert nach lokalem OCR-Abgleich", color = MewRoseSoft, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                             candidates.take(5).forEachIndexed { index, candidate ->
-                                ElevatedCard(onClick = { selectedCandidate = candidate; analysis = null; queueReviewMode = false }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) {
+                                ElevatedCard(onClick = {
+                                    selectedKnowledgeContext = analysis?.let { current ->
+                                        SelectedScanKnowledgeContext(
+                                            current,
+                                            candidates.map { item -> ScanCandidate(item, candidateScores[item.scanIdentityKey()] ?: 0) },
+                                        )
+                                    }
+                                    selectedCandidate = candidate
+                                    analysis = null
+                                    queueReviewMode = false
+                                }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.elevatedCardColors(containerColor = VaultPlumSurface)) {
                                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Text("${index + 1}", color = MewRoseSoft, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 12.dp))
                                         Column(Modifier.weight(1f)) {
@@ -3471,7 +3520,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                                     contributionReceipt = null
                                     contributionFailure = null
                                     when (scan.stage) {
-                                        ScanPipelineStage.MATCHED -> best?.let { selectedCandidate = it.card }
+                                        ScanPipelineStage.MATCHED -> best?.let {
+                                            selectedKnowledgeContext = scan.analysis?.let { current -> SelectedScanKnowledgeContext(current, scan.candidates) }
+                                            selectedCandidate = it.card
+                                        }
                                         ScanPipelineStage.AMBIGUOUS -> {
                                             queueReviewMode = true
                                             analysis = scan.analysis
@@ -3512,7 +3564,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                         }
                         items(recentResults, key = { it.candidate.scanIdentityKey() }) { result ->
                             OutlinedCard(
-                                onClick = { selectedCandidate = result.candidate },
+                                onClick = {
+                                    selectedKnowledgeContext = result.knowledgeContext
+                                    selectedCandidate = result.candidate
+                                },
                                 modifier = Modifier.width(152.dp),
                                 colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface),
                             ) {
@@ -3539,7 +3594,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             candidate = candidate,
             adding = scanAddRunning,
             error = scanAddError,
-            onDismiss = { if (!scanAddRunning) selectedCandidate = null },
+            onDismiss = { if (!scanAddRunning) { selectedCandidate = null; selectedKnowledgeContext = null } },
         ) { input ->
             if (scanAddRunning) return@ScanAddDialog
             scanAddRunning = true
@@ -3547,6 +3602,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             scope.launch {
                 runCatching { repository.addManualCard(input) }
                     .onSuccess {
+                        selectedKnowledgeContext?.let { knowledgeContext ->
+                            buildScanKnowledgeEvidence(knowledgeContext.analysis, knowledgeContext.candidates, candidate)
+                                ?.let(scanKnowledge::enqueue)
+                        }
                         selectedScanId?.let { scanId ->
                             updateQueuedScan(scanId) { scan ->
                                 if (scan.stage == ScanPipelineStage.MATCHED) {
@@ -3556,6 +3615,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                             }
                         }
                         selectedCandidate = null
+                        selectedKnowledgeContext = null
                         selectedScanId = null
                     }
                     .onFailure { error ->

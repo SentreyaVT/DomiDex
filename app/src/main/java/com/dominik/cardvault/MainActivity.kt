@@ -9,6 +9,7 @@ import com.dominik.cardvault.data.RoomCollectionRepository
 import com.dominik.cardvault.data.local.CardVaultDatabase
 import com.dominik.cardvault.data.sync.CardmarketSyncScheduler
 import com.dominik.cardvault.data.sync.FirebaseCollectionSession
+import com.dominik.cardvault.data.knowledge.ScanKnowledgeScheduler
 import com.dominik.cardvault.data.content.ContentUpdateCoordinator
 import com.dominik.cardvault.data.content.PlayUpdateGateway
 import com.dominik.cardvault.ui.CardVaultApp
@@ -35,6 +36,8 @@ class MainActivity : ComponentActivity() {
         val contentUpdates = ContentUpdateCoordinator(applicationContext)
         lifecycleScope.launch { repository.seedIfNeeded() }
         syncScheduler.schedule()
+        // Separate best-effort outbox: failures here can never block collection persistence/sync.
+        ScanKnowledgeScheduler.schedule(applicationContext)
         lifecycleScope.launch { contentUpdates.refreshIfConfigured(syncScheduler::refresh) }
         playUpdateGateway = PlayUpdateGateway(this).also(PlayUpdateGateway::checkForPlayUpdate)
         setContent {

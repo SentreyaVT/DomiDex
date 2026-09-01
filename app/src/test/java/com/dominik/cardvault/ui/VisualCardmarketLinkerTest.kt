@@ -3,7 +3,9 @@ package com.dominik.cardvault.ui
 import com.dominik.cardvault.data.catalog.PokemonSet
 import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
+import com.dominik.cardvault.model.CardLanguage
 import com.dominik.cardvault.model.CatalogSearchResult
+import com.dominik.cardvault.model.CollectionCard
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -74,6 +76,56 @@ class VisualCardmarketLinkerTest {
         assertEquals(normal.sourceCardId, reverse.sourceCardId)
         assertTrue(normal.scanIdentityKey() != reverse.scanIdentityKey())
     }
+
+    @Test
+    fun greyBinderSlotUsesExactSourceIdentityAndItsHoloTrend() {
+        val card = visual("source-set-001", "001", "Bisasam")
+        val reference = binderReference(card, finish = "Holo", variant = "Holo")
+        val product = product(41, "Bulbasaur [Tackle]", "900", 2.35).copy(holoTrendPriceEur = 4.75)
+
+        val resolved = binderReferenceCardmarketProducts(reference, card, listOf(card), listOf(product)).single()
+
+        assertEquals(41L, resolved.productId)
+        assertEquals(4.75, resolved.trendPriceEur!!, 0.0)
+        assertEquals("Holo", resolved.finish)
+    }
+
+    @Test
+    fun greyBinderSlotRejectsDifferentSourceCardIdentity() {
+        val card = visual("source-set-001", "001", "Bisasam")
+        val wrongReference = binderReference(card, sourceCardId = "another-card")
+
+        assertTrue(binderReferenceCardmarketProducts(wrongReference, card, listOf(card), listOf(product(41, "Bulbasaur", "900", 2.35))).isEmpty())
+    }
+
+    private fun binderReference(
+        card: PokemonVisualCard,
+        finish: String = "Normal",
+        variant: String = "Standard",
+        sourceCardId: String = card.id,
+    ) = CollectionCard(
+        entryId = 0L,
+        id = "${card.id}-$variant",
+        name = card.name,
+        set = set.name,
+        number = card.number,
+        language = CardLanguage.GERMAN,
+        finish = finish,
+        variant = variant,
+        condition = "Nicht im Besitz",
+        quantity = 0,
+        currentValueEur = 0.0,
+        changePercent = 0.0,
+        priceUpdatedAtEpochMillis = null,
+        notes = "",
+        acquisitionPriceEur = null,
+        acquisitionDateEpochDay = null,
+        accent = 0L,
+        marketSearchName = "Bulbasaur",
+        marketExpansionId = "900",
+        sourceSetId = set.id,
+        sourceCardId = sourceCardId,
+    )
 
     private fun visual(id: String, number: String, germanName: String) = PokemonVisualCard(
         id = id,

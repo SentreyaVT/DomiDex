@@ -7,6 +7,35 @@ service cloud.firestore {
       return value == null || (value is string && value.size() <= maximum);
     }
     function nullableInt(value) { return value == null || value is int; }
+    function validScanEvidence(uid, fingerprint) {
+      let data = request.resource.data;
+      return own(uid)
+        && fingerprint.matches('[a-f0-9]{64}')
+        && data.keys().hasOnly([
+          'fingerprint', 'confirmedCardId', 'sourceSetId', 'cardNumber', 'setCode',
+          'ocrTokens', 'visualFingerprint', 'candidateIds', 'originalConfidence',
+          'corrected', 'scannerVersion', 'knowledgeVersion', 'observedAtClient', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'fingerprint', 'confirmedCardId', 'cardNumber', 'ocrTokens', 'candidateIds',
+          'originalConfidence', 'corrected', 'scannerVersion', 'knowledgeVersion',
+          'observedAtClient', 'updatedAt'
+        ])
+        && data.fingerprint == fingerprint
+        && data.confirmedCardId is string && data.confirmedCardId.size() > 0 && data.confirmedCardId.size() <= 400
+        && nullableString(data.sourceSetId, 120)
+        && data.cardNumber is string && data.cardNumber.size() > 0 && data.cardNumber.size() <= 24
+        && nullableString(data.setCode, 20)
+        && data.ocrTokens is list && data.ocrTokens.size() <= 24
+        && nullableString(data.visualFingerprint, 64)
+        && data.candidateIds is list && data.candidateIds.size() <= 8
+        && data.originalConfidence is int && data.originalConfidence >= 0 && data.originalConfidence <= 100
+        && data.corrected is bool
+        && data.scannerVersion is string && data.scannerVersion.size() > 0 && data.scannerVersion.size() <= 40
+        && data.knowledgeVersion == 1
+        && data.observedAtClient is int && data.observedAtClient > 0
+        && data.updatedAt == request.time;
+    }
     function validCollectionEntry(uid, entryId) {
       let data = request.resource.data;
       return own(uid)
@@ -75,6 +104,22 @@ service cloud.firestore {
         && (!resource.data.deleted || request.resource.data.deleted);
       // Deletes are replicated as tombstones so an offline device cannot resurrect a card.
       allow delete: if false;
+    }
+
+    // One idempotent vote per authenticated user and deterministic scan fingerprint.
+    // Only the trusted backend aggregates these private observations.
+    match /users/{uid}/scanEvidence/{fingerprint} {
+      allow create, update: if validScanEvidence(uid, fingerprint)
+        && (resource == null || request.resource.data.fingerprint == resource.data.fingerprint);
+      allow get: if own(uid);
+      allow list, delete: if false;
+    }
+
+    // Shared, identity-free aggregate. Android clients can read one relevant document only;
+    // writes and STABLE transitions are exclusively performed through the Admin SDK.
+    match /scanKnowledge/{fingerprint} {
+      allow get: if signedIn() && fingerprint.matches('[a-f0-9]{64}');
+      allow list, create, update, delete: if false;
     }
 
     match /communitySubmissions/{submissionId} {
