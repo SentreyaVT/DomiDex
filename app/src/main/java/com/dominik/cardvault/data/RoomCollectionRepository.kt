@@ -449,6 +449,28 @@ class RoomCollectionRepository(
             }
         }
     }
+    override suspend fun catalogProducts(productIds: List<Long>): List<CatalogSearchResult> = withContext(Dispatchers.IO) {
+        productIds.filter { it > 0L }.distinct().chunked(900).flatMap { batch ->
+            dao.catalogProducts(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, batch).map {
+                CatalogSearchResult(
+                    productId = it.externalProductId,
+                    name = it.name,
+                    expansionId = it.setId,
+                    trendPriceEur = it.marketValueMinor?.div(100.0),
+                    currency = it.currency,
+                    visualSetName = it.setName,
+                    collectorNumber = it.collectorNumber,
+                    imageUrl = it.imageUrl,
+                    language = it.language,
+                    finish = it.finish,
+                    variant = it.variant,
+                    rarity = it.rarity,
+                    holoTrendPriceEur = it.holoMarketValueMinor?.div(100.0),
+                )
+            }
+        }
+    }
+
     override suspend fun linkCatalogProduct(entryId: Long, productId: Long?) {
         val ownerUid = activeOwnerUid.value
         val queued = database.withTransaction {
@@ -459,13 +481,13 @@ class RoomCollectionRepository(
     }
 
     override fun priceHistory(card: CollectionCard): Flow<List<CardPricePoint>> {
-        val usesHoloPrice = card.finish.contains("holo", ignoreCase = true)
+        val usesReverseHoloPrice = card.finish.contains("reverse", ignoreCase = true)
         return activeOwnerUid.flatMapLatest { ownerUid ->
             dao.observeCardPriceHistory(
                 entryId = card.entryId,
                 fallbackCardId = card.id,
                 source = com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE,
-                useHoloPrice = usesHoloPrice,
+                useHoloPrice = usesReverseHoloPrice,
                 ownerUid = ownerUid,
             ).map { rows ->
                 rows.map { row ->
@@ -513,9 +535,9 @@ class RoomCollectionRepository(
         return match
     }
 
-    /** The whole portfolio follows the same exact Normal/Holo/Reverse trend as each card row. */
+    /** Normal/Holo use the product trend; Reverse Holo requires its own source observation. */
     private fun RawPriceSnapshotEntity.trendValueFor(finish: String): Long? =
-        if (finish.contains("holo", ignoreCase = true)) holoTrendValueMinor?.takeIf { it > 0 } ?: trendValueMinor else trendValueMinor
+        if (finish.contains("reverse", ignoreCase = true)) holoTrendValueMinor?.takeUnless { it == 0L } else trendValueMinor
 
     private fun accentFor(name: String): Long = when {
         name.contains("Charizard", true) -> 0xFFF06445; name.contains("Pikachu", true) -> 0xFFFFC83D

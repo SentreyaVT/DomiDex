@@ -1133,6 +1133,7 @@ private fun isOnline(context: Context): Boolean {
                 batch.map { reference -> async { runCatching { visualCatalog.withDeclaredPrintVariants(reference) }.getOrDefault(reference) } }
                     .map { it.await() }
             }
+            sourceSetCards = detailedCards
             repository.cacheGermanMasterSetCards(
                 GermanMasterSetDefinition(set.id, set.name, set.logoUrl),
                 detailedCards.flatMap { reference -> reference.binderPrintVariants().map { printing ->
@@ -1167,6 +1168,8 @@ private fun isOnline(context: Context): Boolean {
     // Reconcile presentation state before rendering or handling page navigation.
     if (page !in faces.indices) page = page.coerceIn(0, faces.lastIndex)
     var selectedCard by remember { mutableStateOf<CollectionCard?>(null) }
+    var choosingAddCard by remember { mutableStateOf(false) }
+    var selectedAddCard by remember { mutableStateOf<CatalogSearchResult?>(null) }
     var addingReferenceId by remember { mutableStateOf<String?>(null) }
     var editingCard by remember { mutableStateOf<CollectionCard?>(null) }
     var linkingCard by remember { mutableStateOf<CollectionCard?>(null) }
@@ -1282,11 +1285,15 @@ private fun isOnline(context: Context): Boolean {
       insertionCard?.let { BinderInsertionOverlay(it) }
       if (readerStage in setOf(BinderPresentationStage.CLOSING, BinderPresentationStage.RETURNING)) BinderOpeningOverlay(setName, readerStage)
     }
-    selectedCard?.let { card ->
+    selectedCard?.let { clickedCard ->
+        val card = if (clickedCard.entryId == 0L) {
+            refreshedBinderSelection(clickedCard, setReferences)
+        } else cards.firstOrNull { it.entryId == clickedCard.entryId } ?: clickedCard
         CardPreviewDialog(
             card = card,
             repository = repository,
             sourceSetCards = sourceSetCards,
+            visualCatalog = visualCatalog,
             onDismiss = { selectedCard = null },
             onEdit = card.takeIf { it.entryId > 0L }?.let { { selectedCard = null; editingCard = card } },
             // Catalog/reference slots use entryId 0 and are intentionally never removable.
@@ -1330,7 +1337,15 @@ private fun isOnline(context: Context): Boolean {
                 }
             } } else null,
             addInProgress = addingReferenceId == card.id,
+            onChangeSelection = if (card.entryId == 0L) { { selectedCard = null; choosingAddCard = true } } else null,
         )
+    }
+    if (choosingAddCard) CatalogProductPicker(repository, onDismiss = { choosingAddCard = false }) { selection ->
+        choosingAddCard = false
+        selectedAddCard = selection
+    }
+    selectedAddCard?.let { selection ->
+        ManualCardDialog(repository, initialCatalog = selection, onDismiss = { selectedAddCard = null })
     }
     editingCard?.let { card ->
         EditEntryDialog(
@@ -1675,6 +1690,20 @@ private fun hasSameMasterSourceIdentity(reference: CollectionCard, owned: Collec
     !reference.sourceSetId.isNullOrBlank() && !reference.sourceCardId.isNullOrBlank() &&
         reference.sourceSetId.equals(owned.sourceSetId, ignoreCase = true) &&
         reference.sourceCardId.equals(owned.sourceCardId, ignoreCase = true)
+
+/** Detail loading replaces provisional index IDs; an open preview must follow its source slot. */
+internal fun refreshedBinderSelection(clicked: CollectionCard, references: List<CollectionCard>): CollectionCard {
+    references.firstOrNull { it.id == clicked.id }?.let { return it }
+    val sameCard = references.filter { hasSameMasterSourceIdentity(clicked, it) }
+    sameCard.firstOrNull { masterFinishOrder(it) == masterFinishOrder(clicked) && masterEdition(it) == masterEdition(clicked) }
+        ?.let { return it }
+    // The lightweight index has no finish metadata and creates this provisional
+    // Normal slot. Only that placeholder may adopt the now-declared base printing.
+    if (clicked.id == "${clicked.sourceCardId}-normal" && clicked.finish == "Normal" && clicked.variant == "Standard") {
+        sameCard.filter { masterFinishOrder(it) != 2 }.singleOrNull()?.let { return it }
+    }
+    return clicked
+}
 
 private fun isSameMasterCard(reference: CollectionCard, owned: CollectionCard): Boolean {
     if (hasSameMasterSourceIdentity(reference, owned)) return true
@@ -2303,15 +2332,17 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     )
 }
 
-@Composable private fun CardPreviewDialog(
+@Composable internal fun CardPreviewDialog(
     card: CollectionCard,
     repository: CollectionRepository,
     sourceSetCards: List<PokemonVisualCard> = emptyList(),
+    visualCatalog: PokemonVisualCatalog = remember { PokemonVisualCatalog() },
     onDismiss: () -> Unit,
     onEdit: (() -> Unit)?,
     onDelete: (() -> Unit)? = null,
     onAdd: ((CatalogSearchResult) -> Unit)? = null,
     addInProgress: Boolean = false,
+    onChangeSelection: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2322,17 +2353,33 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     var selectedMarketProductId by rememberSaveable(card.entryId, card.sourceSetId, card.sourceCardId, card.finish, card.variant) { mutableStateOf(card.externalProductId) }
     var priceChoicesExpanded by rememberSaveable(card.entryId) { mutableStateOf(false) }
     var priceLookupComplete by remember(card.id, card.sourceCardId, card.finish, card.variant) { mutableStateOf(false) }
+    val catalogSync by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
     val isReferenceAdd = onAdd != null
-    LaunchedEffect(card.id, card.externalProductId, card.marketExpansionId, card.marketSearchName, card.finish, card.variant, sourceSetCards) {
+    LaunchedEffect(card.id, card.externalProductId, card.marketExpansionId, card.marketSearchName, card.finish, card.variant, sourceSetCards, catalogSync.lastSuccessAtEpochMillis) {
         priceLookupComplete = false
         val query = card.marketSearchName ?: card.name
-        val matches = runCatching { repository.searchCatalog(query, 100) }.getOrDefault(emptyList())
         referenceProducts = if (isReferenceAdd) {
             val sourceCard = sourceSetCards.firstOrNull {
                 it.set.id.equals(card.sourceSetId, ignoreCase = true) && it.id.equals(card.sourceCardId, ignoreCase = true)
             }
-            sourceCard?.let { binderReferenceCardmarketProducts(card, it, sourceSetCards, matches) }.orEmpty()
+            sourceCard?.let { source ->
+                val detailed = try { visualCatalog.withDeclaredPrintVariants(source) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { source }
+                val matches = try { loadVisualCardmarketCandidates(detailed, repository) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { emptyList() }
+                binderReferenceCardmarketProducts(card, detailed, sourceSetCards, matches)
+            }.orEmpty()
+        } else if (card.externalProductId != null) {
+            // Reopening an owned card must retain its explicit product, not pick
+            // the first cheaper main-set namesake returned by a name search.
+            val products = try { repository.catalogProducts(listOf(card.externalProductId)) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { emptyList() }
+            products.map { it.copy(trendPriceEur = it.realTrendFor(card.finish)) }
         } else {
+            val matches = runCatching { repository.searchCatalog(query, 100) }.getOrDefault(emptyList())
             val linkedProduct = card.externalProductId?.let { productId -> matches.firstOrNull { it.productId == productId } }
             val verifiedExpansion = card.marketExpansionId ?: linkedProduct?.expansionId
             verifiedExpansion?.let { expansion ->
@@ -2367,6 +2414,12 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
                     if (displayedTrendPrice != null) DomiLineIcon(DomiIconKind.CHECK, VaultPositive, Modifier.size(18.dp))
                 }
             }
+        }
+        if (isReferenceAdd) item {
+            BinderDestinationSummary(card.set, card.number, card.finish,
+                sourceConfirmed = !card.sourceSetId.isNullOrBlank() && !card.sourceCardId.isNullOrBlank(),
+                onChange = onChangeSelection,
+                enabled = !addInProgress)
         }
         if (!isReferenceAdd) {
             if (card.entryId > 0L && marketPriceChoices.isNotEmpty()) item {
@@ -2428,7 +2481,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
         }
     } }, confirmButton = {
         Row {
-            if (onAdd != null) Button(enabled = preferredMarketProduct != null && !addInProgress, onClick = { onAdd(preferredMarketProduct!!) }) { Text(if (addInProgress) "Wird hinzugefügt …" else "Zum Binder hinzufügen") }
+            if (onAdd != null) Button(enabled = preferredMarketProduct != null && !addInProgress, onClick = { onAdd(preferredMarketProduct!!) }) { Text(if (addInProgress) "Wird hinzugefügt …" else "In diesen Binder hinzufügen") }
             if (onDelete != null) TextButton(onClick = onDelete) { Text("Aus Binder entfernen", color = MaterialTheme.colorScheme.error) }
             if (onEdit != null) TextButton(onClick = onEdit) { Text(stringResource(R.string.card_preview_edit)) }
         }
@@ -2509,7 +2562,7 @@ private fun normalizeBinderMetadata(value: String): String = value.lowercase(Loc
         openOfficialPage(context, OfficialSourceLinks.PSA_AUCTION_PRICES)
     }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.open_psa_research)) }
     Text(stringResource(R.string.psa_research_hint, OfficialSourceLinks.psaSearchText(card)), color = VaultTextMuted, fontSize = 10.sp)
-    Text("Portfoliowert nutzt ausschließlich den Cardmarket-Trendpreis des ausdrücklich verknüpften Produkts. Holo und Reverse Holo nutzen den zugehörigen Holo-Trendpreis. Ohne Verknüpfung wird kein Wert geschätzt.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+    Text("Portfoliowert nutzt ausschließlich den Cardmarket-Trendpreis des ausdrücklich verknüpften Produkts. Normal und Holo nutzen den Produkt-Trendpreis, Reverse Holo den zugehörigen Reverse-Preis. Ohne Verknüpfung wird kein Wert geschätzt.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
 }
 
 private fun openOfficialPage(context: Context, url: String) {
@@ -2538,8 +2591,8 @@ private fun openOfficialPage(context: Context, url: String) {
     } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } }
 )
 
-@Composable private fun CatalogProductPicker(repository: CollectionRepository, onDismiss: () -> Unit, onSelected: (CatalogSearchResult) -> Unit) {
-    val visualCatalog = remember { PokemonVisualCatalog() }
+@Composable internal fun CatalogProductPicker(repository: CollectionRepository, onDismiss: () -> Unit,
+    visualCatalog: PokemonVisualCatalog = remember { PokemonVisualCatalog() }, onSelected: (CatalogSearchResult) -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var sets by remember { mutableStateOf<List<PokemonSet>>(emptyList()) }
     var selectedSet by remember { mutableStateOf<PokemonSet?>(null) }
@@ -2579,8 +2632,7 @@ private fun openOfficialPage(context: Context, url: String) {
         // publish collector numbers in its compact catalogue. A source-verified
         // expansion bridge plus the print order is therefore required here.
         runCatching {
-            val priceSearchName = detailed.marketSearchName ?: detailed.name
-            val candidates = repository.searchCatalog(priceSearchName, 500)
+            val candidates = loadVisualCardmarketCandidates(detailed, repository)
             visualCardmarketProducts(detailed, cards, candidates, resolvedCardmarketExpansionId)
         }.onSuccess { products = it }
             .onFailure { products = emptyList(); error = true }
@@ -2698,10 +2750,11 @@ private fun openOfficialPage(context: Context, url: String) {
                 }
                 selectedSet != null -> items(cards.filter { matchesCardInSelectedSet(it.name, it.number, query) }, key = { it.id }) { card -> VisualCardRow(card, setCardPrices[card.id]) { selectedCard = card } }
                 searchByPokemon -> items(pokemonResults, key = { it.productId }) { result -> CatalogResultRow(result) {
-                    // A Cardmarket result already is a concrete priced product. Pass it through
-                    // the established add dialog so finish, condition and quantity stay explicit,
-                    // while the entry is created in its Cardmarket set binder with that price link.
-                    onSelected(result)
+                    // The compact market catalogue has no printed number/source card ID.
+                    // Confirm the actual set/card before assigning an official Binder slot.
+                    searchByPokemon = false
+                    query = ""
+                    setConfirmationHint = true
                 } }
                 else -> {
                     if (query.isBlank() && !showAllSets) item {
@@ -2724,23 +2777,25 @@ private fun openOfficialPage(context: Context, url: String) {
  * sentinel and is deliberately never persisted as a Cardmarket linkage.
  */
 internal fun catalogResultForVisualCard(card: PokemonVisualCard, marketProduct: CatalogSearchResult? = null): CatalogSearchResult {
-    // A price product may omit foil metadata. Keep the exact source printing instead
-    // of turning a source-declared Holo into a new, unmatched Normal binder entry.
-    val printing = card.printVariants.firstOrNull { it.finish.equals(marketProduct?.finish, ignoreCase = true) }
-        ?: card.binderPrintVariants().first()
-    fun known(value: String?) = value?.takeIf { it.isNotBlank() && !it.equals("UNKNOWN", ignoreCase = true) }
+    // Cardmarket's catalogue variant ("Cardmarket-Produkt") is not a physical
+    // printing. Only the selected source printing determines the Binder slot.
+    val printings = card.binderPrintVariants()
+    val linkedPrintings = printings.filter { marketProduct != null && it.cardmarketProductId == marketProduct.productId }
+    val eligiblePrintings = linkedPrintings.ifEmpty { printings }
+    val printing = eligiblePrintings.firstOrNull { it.finish.equals(marketProduct?.finish, ignoreCase = true) }
+        ?: eligiblePrintings.first()
     return CatalogSearchResult(
         productId = marketProduct?.productId ?: 0L,
         name = card.name,
         expansionId = marketProduct?.expansionId ?: card.set.id,
-        trendPriceEur = marketProduct?.trendPriceEur,
+        trendPriceEur = marketProduct?.realTrendFor(printing.finish),
         currency = marketProduct?.currency,
         visualSetName = card.set.name,
         collectorNumber = card.number,
         imageUrl = fallbackCardImageUrl(card.largeImageUrl, marketProduct?.imageUrl),
         language = "Deutsch",
-        finish = known(marketProduct?.finish) ?: printing.finish,
-        variant = known(marketProduct?.variant) ?: printing.variant,
+        finish = printing.finish,
+        variant = printing.variant,
         rarity = card.rarity,
         hasMarketProduct = marketProduct?.hasMarketProduct ?: false,
         mainSetSize = card.set.total.takeIf { it > 0 },
@@ -2802,12 +2857,39 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
     }
 }
 
-@Composable private fun ManualCardDialog(
+@Composable private fun BinderDestinationSummary(
+    setName: String,
+    number: String,
+    finish: String,
+    sourceConfirmed: Boolean,
+    onChange: (() -> Unit)?,
+    enabled: Boolean = true,
+) {
+    DomiGlassCard(Modifier.fillMaxWidth(), highlighted = sourceConfirmed) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("Ziel-Binder", color = VaultTextMuted, fontSize = 11.sp)
+            Text(setName.ifBlank { "Set auswählen" }, color = VaultText, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            if (number.isNotBlank()) {
+                Text(
+                    "${if (sourceConfirmed) "Offizieller Sammelplatz" else "Kartennummer"} $number · $finish",
+                    color = MewIce,
+                    fontSize = 12.sp,
+                )
+            }
+            Text("Die Karte wird im Binder ihres Sets gespeichert.", color = VaultTextMuted, fontSize = 11.sp)
+            if (onChange != null) TextButton(onClick = onChange, enabled = enabled) { Text("Karte/Set ändern") }
+        }
+    }
+}
+
+@Composable internal fun ManualCardDialog(
     repository: CollectionRepository,
     initialCatalog: CatalogSearchResult? = null,
     onDismiss: () -> Unit,
     onSaved: (AddCardOutcome) -> Unit = {},
 ) {
+    var selectedCatalog by remember(initialCatalog) { mutableStateOf(initialCatalog) }
+    var choosingCatalog by remember { mutableStateOf(false) }
     var name by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.name ?: "") }; var set by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.visualSetName ?: initialCatalog?.let { "Cardmarket-Erweiterung ${it.expansionId}" } ?: "") }; var number by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.collectorNumber ?: "") }
     var language by rememberSaveable { mutableStateOf(CardLanguage.GERMAN) }; var finish by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.finish ?: "Normal") }; var variant by rememberSaveable(initialCatalog?.productId) { mutableStateOf(initialCatalog?.variant ?: "Standard") }; var effectOverride by rememberSaveable(initialCatalog?.productId) { mutableStateOf<String?>(null) }
     var quantity by rememberSaveable { mutableStateOf("1") }; var condition by rememberSaveable { mutableStateOf("Nahezu neuwertig") }; var notes by rememberSaveable { mutableStateOf("") }
@@ -2819,35 +2901,71 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
     var selectedMarketProductId by rememberSaveable { mutableStateOf<Long?>(initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }) }
     val scope = rememberCoroutineScope()
     val catalogSync by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
-    // The display name stays German. When the card came from TCGdex, use its
-    // matching English source name only for the Cardmarket catalogue lookup.
-    val priceSearchName = initialCatalog?.takeIf { name == initialCatalog.name }?.marketSearchName ?: name
-    LaunchedEffect(name, set, number, finish, priceSearchName, catalogSync.lastSuccessAtEpochMillis) {
+    val identitySelection = selectedCatalog?.takeIf { it.matchesManualCatalogSelection(name, set, number) }
+    val sourceSelection = identitySelection?.takeIf { !it.sourceSetId.isNullOrBlank() && !it.sourceCardId.isNullOrBlank() }
+    val sourceConfirmed = sourceSelection != null
+    val priceSearchName = identitySelection?.marketSearchName ?: name
+    fun clearCatalogSelection() {
+        selectedCatalog = null
+        selectedMarketProductId = null
+        marketProducts = emptyList()
+        saveError = null
+    }
+    LaunchedEffect(selectedCatalog, name, set, number, finish, priceSearchName, catalogSync.lastSuccessAtEpochMillis) {
+        marketProducts = emptyList()
         if (name.trim().length < 2 || set.isBlank() || number.isBlank()) {
-            marketProducts = emptyList(); marketLoading = false; selectedMarketProductId = initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }
+            marketLoading = false
+            selectedMarketProductId = identitySelection?.takeIf { it.hasMarketProduct }?.productId
             return@LaunchedEffect
         }
         marketLoading = true
-        val sameNameProducts = runCatching { repository.searchCatalog(priceSearchName, 60) }
-            .getOrDefault(emptyList())
-            .filter { product -> isSameNamePriceCandidate(priceSearchName, product) }
-            .distinctBy { it.productId }
-        val exactProducts = sameNameProducts.filter { product -> isExactManualPriceMatch(priceSearchName, set, number, product) }
-        val manualProducts = sameNameProducts.filterNot { product -> isExactManualPriceMatch(priceSearchName, set, number, product) }
-        marketProducts = (exactProducts + manualProducts)
-            .sortedByDescending { product -> product.productId == initialCatalog?.productId }
-        selectedMarketProductId = selectedMarketProductId?.takeIf { id -> marketProducts.any { it.productId == id } }
-            ?: exactProducts.firstOrNull { it.trendPriceEur != null }?.productId
-            ?: exactProducts.firstOrNull()?.productId
-        marketLoading = false
+        try {
+            val declaredProductId = identitySelection?.takeIf { it.hasMarketProduct && it.productId > 0L }?.productId
+            val matches = if (declaredProductId != null) {
+                // The selected source product remains exact even when its English name is
+                // absent from a truncated name search or differs from the German display.
+                repository.catalogProducts(listOf(declaredProductId))
+            } else {
+                repository.searchCatalog(priceSearchName, 60)
+                    .filter { isExactManualPriceMatch(priceSearchName, set, number, it) }
+            }
+            marketProducts = matches.distinctBy { it.productId }.map { it.copy(trendPriceEur = it.realTrendFor(finish)) }
+            selectedMarketProductId = selectedMarketProductId?.takeIf { id -> marketProducts.any { it.productId == id } }
+                ?: marketProducts.firstOrNull { it.trendPriceEur != null }?.productId
+                ?: marketProducts.firstOrNull()?.productId
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            marketProducts = emptyList()
+        } finally {
+            marketLoading = false
+        }
     }
     val selectedMarketProduct = marketProducts.firstOrNull { it.productId == selectedMarketProductId }
     val valid = name.isNotBlank() && set.isNotBlank() && number.isNotBlank() && condition.isNotBlank() && (quantity.toIntOrNull() ?: 0) > 0 && parseDate(date) != Long.MIN_VALUE && parsePrice(price) != Double.NEGATIVE_INFINITY
+    if (choosingCatalog) {
+        CatalogProductPicker(repository, onDismiss = { choosingCatalog = false }, onSelected = { selection ->
+            selectedCatalog = selection
+            name = selection.name
+            set = selection.visualSetName ?: "Cardmarket-Erweiterung ${selection.expansionId}"
+            number = selection.collectorNumber.orEmpty()
+            finish = selection.finish?.takeUnless { it.equals("UNKNOWN", true) } ?: "Normal"
+            variant = selection.variant?.takeUnless { it.equals("UNKNOWN", true) } ?: "Standard"
+            effectOverride = null
+            selectedMarketProductId = selection.productId.takeIf { selection.hasMarketProduct }
+            marketProducts = emptyList()
+            saveError = null
+            choosingCatalog = false
+        })
+        return
+    }
     AlertDialog(onDismissRequest = { if (!saving) onDismiss() }, title = { Text(stringResource(R.string.manual_add_title)) }, text = {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             saveError?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) } }
-            item { Text(stringResource(if (initialCatalog == null) R.string.manual_add_boundary else R.string.catalog_add_linked_boundary), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
-            item { FormField(name, { name = it }, R.string.field_card_name) }; item { FormField(set, { set = it }, R.string.field_set_name) }; item { FormField(number, { number = it }, R.string.field_card_number_printed); Text(stringResource(R.string.field_card_number_hint), color = VaultTextMuted, fontSize = 10.sp) }
+            item { BinderDestinationSummary(set, number, finish, sourceConfirmed, onChange = { choosingCatalog = true }, enabled = !saving) }
+            item { OutlinedTextField(name, { name = it; clearCatalogSelection() }, readOnly = sourceConfirmed, enabled = !saving, label = { Text(stringResource(R.string.field_card_name)) }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field) }
+            item { OutlinedTextField(set, { set = it; clearCatalogSelection() }, readOnly = sourceConfirmed, enabled = !saving, label = { Text(stringResource(R.string.field_set_name)) }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field) }
+            item { OutlinedTextField(number, { number = it; clearCatalogSelection() }, readOnly = sourceConfirmed, enabled = !saving, label = { Text(stringResource(R.string.field_card_number_printed)) }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field); Text(stringResource(R.string.field_card_number_hint), color = VaultTextMuted, fontSize = 10.sp) }
             item { Text(stringResource(R.string.field_language), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); Text("Deutsch", color = MewIce, fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Text("DomiDex wird für deutsche Karten geführt.", color = VaultTextMuted, fontSize = 10.sp) }
             item { CardFinishAndEffectEditor(finish, { finish = it }, variant, { variant = it }, effectOverride, { effectOverride = it }) }
             item {
@@ -2856,9 +2974,6 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
                     marketLoading -> LinearProgressIndicator(Modifier.fillMaxWidth())
                     marketProducts.isEmpty() -> Text("Cardmarket-Preise werden noch synchronisiert oder dieses Produkt muss exakt verknüpft werden.", color = VaultTextMuted, fontSize = 11.sp)
                     else -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (marketProducts.none { product -> isExactManualPriceMatch(priceSearchName, set, number, product) }) {
-                            Text("Kein exakt prüfbarer Druck gefunden. Gleichnamige Cardmarket-Produkte sind unten auswählbar – bitte Set und Druck vor dem Speichern prüfen.", color = VaultGold, fontSize = 11.sp)
-                        }
                         marketProducts.forEach { product ->
                             OutlinedCard(
                                 onClick = { selectedMarketProductId = product.productId },
@@ -2868,8 +2983,8 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
                             ) {
                                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(product.trendPriceEur?.let { "Cardmarket-Trendpreis: ${euro(it)}" } ?: "Cardmarket-Trendpreis wird geladen", color = if (product.trendPriceEur != null) MewIce else VaultTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text(listOfNotNull(product.finish, product.variant).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "Exakter Druck" }, color = VaultTextMuted, fontSize = 11.sp)
-                                    Text(if (isExactManualPriceMatch(priceSearchName, set, number, product)) "Exakte Zuordnung" else "Gleichnamiger Druck – Auswahl vor dem Speichern prüfen", color = if (isExactManualPriceMatch(priceSearchName, set, number, product)) MewIce else VaultGold, fontSize = 10.sp)
+                                    Text("$finish · $variant", color = VaultTextMuted, fontSize = 11.sp)
+                                    Text("Passendes Preisprodukt für diese Karte", color = MewIce, fontSize = 10.sp)
                                 }
                             }
                         }
@@ -2881,8 +2996,8 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
         }
     }, confirmButton = {
         TextButton(enabled = valid && !saving, onClick = {
-            val sourceSelection = initialCatalog?.takeIf { it.matchesManualSourceSelection(set, number) }
-            val input = ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, selectedMarketProduct?.productId ?: initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }, fallbackCardImageUrl(initialCatalog?.imageUrl, selectedMarketProduct?.imageUrl), effectOverride = effectOverride, cardmarketExpansionId = selectedMarketProduct?.expansionId?.takeIf { selectedMarketProduct.hasMarketProduct } ?: initialCatalog?.expansionId?.takeIf { initialCatalog.hasMarketProduct }, sourceSetId = sourceSelection?.sourceSetId, sourceCardId = sourceSelection?.sourceCardId)
+            val selectedLink = selectedMarketProduct ?: identitySelection?.takeIf { it.hasMarketProduct }
+            val input = ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, selectedLink?.productId, fallbackCardImageUrl(identitySelection?.imageUrl, selectedMarketProduct?.imageUrl), rarity = identitySelection?.rarity, effectOverride = effectOverride, cardmarketExpansionId = selectedLink?.expansionId, sourceSetId = sourceSelection?.sourceSetId, sourceCardId = sourceSelection?.sourceCardId)
             saveError = null
             saving = true
             scope.launch {
@@ -2901,10 +3016,14 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
             }
         }) {
             if (saving) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            else Text(stringResource(R.string.action_save))
+            else Text("In diesen Binder hinzufügen")
         }
     }, dismissButton = { TextButton(enabled = !saving, onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } })
 }
+
+/** Also guard restored draft text: an earlier selected product cannot price a different card. */
+internal fun CatalogSearchResult.matchesManualCatalogSelection(name: String, set: String, number: String): Boolean =
+    normalizeCardName(this.name) == normalizeCardName(name) && matchesManualSourceSelection(set, number)
 
 private fun isExactManualPriceMatch(name: String, set: String, number: String, product: CatalogSearchResult): Boolean =
     normalizeCardName(name) == normalizeCardName(product.name) &&
@@ -3851,6 +3970,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     selectedCandidate?.let { candidate ->
         ScanAddDialog(
             candidate = candidate,
+            repository = repository,
             adding = scanAddRunning,
             error = scanAddError,
             onDismiss = { if (!scanAddRunning) { selectedCandidate = null; selectedKnowledgeContext = null } },
@@ -3861,7 +3981,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             scope.launch {
                 runCatching { repository.addManualCard(input) }
                     .onSuccess {
-                        selectedKnowledgeContext?.let { knowledgeContext ->
+                        selectedKnowledgeContext?.takeIf {
+                            input.sourceSetId == candidate.sourceSetId && input.sourceCardId == candidate.sourceCardId &&
+                                input.finish == candidate.finish && input.variant == candidate.variant
+                        }?.let { knowledgeContext ->
                             val evidence = buildScanKnowledgeEvidence(
                                 knowledgeContext.analysis,
                                 knowledgeContext.candidates,
@@ -4312,21 +4435,39 @@ private fun persistScanFeedback(context: Context, imageFile: File, marks: List<S
 
 @Composable private fun ScanAddDialog(
     candidate: CatalogSearchResult,
+    repository: CollectionRepository,
     adding: Boolean,
     error: String?,
     onDismiss: () -> Unit,
     onAdd: (ManualCardInput) -> Unit,
 ) {
+    var selectedCandidate by remember(candidate.scanIdentityKey()) { mutableStateOf(candidate) }
+    var choosingCatalog by remember { mutableStateOf(false) }
+    if (choosingCatalog) {
+        CatalogProductPicker(repository, onDismiss = { choosingCatalog = false }, onSelected = {
+            selectedCandidate = it
+            choosingCatalog = false
+        })
+        return
+    }
+    val selected = selectedCandidate
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Zum Binder hinzufügen") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(candidate.name, fontWeight = FontWeight.Bold)
-            Text("${candidate.visualSetName ?: candidate.expansionId} · ${candidate.collectorNumber ?: "ohne Nummer"}", color = VaultTextMuted, fontSize = 13.sp)
-            candidate.trendPriceEur?.let { price ->
+            Text(selected.name, fontWeight = FontWeight.Bold)
+            BinderDestinationSummary(
+                setName = selected.visualSetName ?: selected.expansionId,
+                number = selected.collectorNumber.orEmpty(),
+                finish = selected.finish ?: "Normal",
+                sourceConfirmed = !selected.sourceSetId.isNullOrBlank() && !selected.sourceCardId.isNullOrBlank(),
+                onChange = { choosingCatalog = true },
+                enabled = !adding,
+            )
+            selected.trendPriceEur?.let { price ->
                 Text("Cardmarket-Trendpreis: ${euro(price)}", color = MewIce, fontWeight = FontWeight.SemiBold)
             } ?: Text(
-                if (candidate.hasMarketProduct) "Für dieses Cardmarket-Produkt liegt aktuell kein Trendpreis vor."
+                if (selected.hasMarketProduct) "Für dieses Cardmarket-Produkt liegt aktuell kein Trendpreis vor."
                 else "Noch kein eindeutig passendes Cardmarket-Produkt – DomiDex erfindet keinen Preis.",
                 color = VaultTextMuted,
                 fontSize = 12.sp,
@@ -4335,8 +4476,8 @@ private fun persistScanFeedback(context: Context, imageFile: File, marks: List<S
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
         } },
         confirmButton = { TextButton(enabled = !adding, onClick = {
-            onAdd(ManualCardInput(candidate.name, candidate.visualSetName ?: candidate.expansionId, candidate.collectorNumber.orEmpty(), CardLanguage.GERMAN, candidate.finish ?: "Normal", candidate.variant ?: "Standard", 1, "Nahezu neuwertig", "", null, null, candidate.productId.takeIf { candidate.hasMarketProduct }, candidate.imageUrl, candidate.rarity, null, candidate.expansionId.takeIf { candidate.hasMarketProduct }, sourceSetId = candidate.sourceSetId, sourceCardId = candidate.sourceCardId))
-        }) { Text("Zum Binder hinzufügen") } },
+            onAdd(ManualCardInput(selected.name, selected.visualSetName ?: selected.expansionId, selected.collectorNumber.orEmpty(), CardLanguage.GERMAN, selected.finish ?: "Normal", selected.variant ?: "Standard", 1, "Nahezu neuwertig", "", null, null, selected.productId.takeIf { selected.hasMarketProduct }, selected.imageUrl, selected.rarity, null, selected.expansionId.takeIf { selected.hasMarketProduct }, sourceSetId = selected.sourceSetId, sourceCardId = selected.sourceCardId))
+        }) { Text("In diesen Binder hinzufügen") } },
         dismissButton = { TextButton(enabled = !adding, onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
 }

@@ -9,14 +9,30 @@ plugins {
 
 val releaseKeystorePropertiesFile = rootProject.file("keystore.properties")
 val releaseKeystoreProperties = Properties()
-val releaseSigningConfigured = releaseKeystorePropertiesFile.isFile
+if (releaseKeystorePropertiesFile.isFile) {
+    releaseKeystorePropertiesFile.inputStream().use(releaseKeystoreProperties::load)
+}
+// The Windows release helper decrypts credentials only for its short-lived build
+// process. No plaintext signing properties or passwords need to live in the repo.
+val releaseSigningEnvironment = mapOf(
+    "storeFile" to "DOMIDEX_UPLOAD_STORE_FILE",
+    "storePassword" to "DOMIDEX_UPLOAD_STORE_PASSWORD",
+    "keyAlias" to "DOMIDEX_UPLOAD_KEY_ALIAS",
+    "keyPassword" to "DOMIDEX_UPLOAD_KEY_PASSWORD",
+)
+releaseSigningEnvironment.forEach { (property, environment) ->
+    providers.environmentVariable(environment).orNull?.takeIf { it.isNotBlank() }?.let {
+        releaseKeystoreProperties.setProperty(property, it)
+    }
+}
+val releaseSigningConfigured = releaseKeystorePropertiesFile.isFile ||
+    releaseSigningEnvironment.keys.any { !releaseKeystoreProperties.getProperty(it).isNullOrBlank() }
 
 if (releaseSigningConfigured) {
-    releaseKeystorePropertiesFile.inputStream().use(releaseKeystoreProperties::load)
     val requiredKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
     val missingKeys = requiredKeys.filter { releaseKeystoreProperties.getProperty(it).isNullOrBlank() }
     require(missingKeys.isEmpty()) {
-        "keystore.properties is missing required release signing values: ${missingKeys.joinToString()}"
+        "Release signing is missing required values: ${missingKeys.joinToString()}"
     }
     val configuredStore = rootProject.file(releaseKeystoreProperties.getProperty("storeFile").trim())
     require(configuredStore.isFile) { "Release keystore does not exist: $configuredStore" }

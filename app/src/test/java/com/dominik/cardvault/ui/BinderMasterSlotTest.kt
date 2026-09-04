@@ -7,6 +7,26 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class BinderMasterSlotTest {
+    @Test fun openIndexPlaceholderFollowsSourceDeclaredHoloAfterDetailLoading() {
+        val clicked = sourceCard("Normal").copy(id = "sv03-001-normal")
+        val detailed = sourceCard("Holo").copy(id = "sv03-001-source-print-id", marketExpansionId = "900")
+        assertSame(detailed, refreshedBinderSelection(clicked, listOf(detailed)))
+    }
+
+    @Test fun openReverseSelectionKeepsItsPrintingWhenSourceReferenceIdsChange() {
+        val clicked = sourceCard("Reverse Holo")
+        val holo = sourceCard("Holo").copy(id = "new-holo")
+        val reverse = clicked.copy(id = "new-reverse", marketExpansionId = "900")
+        assertSame(reverse, refreshedBinderSelection(clicked, listOf(holo, reverse)))
+        assertSame(clicked, refreshedBinderSelection(clicked, listOf(holo)))
+    }
+
+    @Test fun refreshedPreviewCannotAdoptSameNumberFromAnotherSet() {
+        val clicked = sourceCard("Normal").copy(id = "sv03-001-normal")
+        val foreign = sourceCard("Holo").copy(sourceSetId = "sv02")
+        assertSame(clicked, refreshedBinderSelection(clicked, listOf(foreign)))
+    }
+
     @Test fun cachedPrintingAndAddedCanonicalReferenceRepresentOneSlot() {
         listOf("Normal", "Holo", "Reverse Holo").forEach { finish ->
             val reference = sourceCard(finish)

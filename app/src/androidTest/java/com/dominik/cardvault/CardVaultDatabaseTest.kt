@@ -67,7 +67,7 @@ class CardVaultDatabaseTest {
         val linked = dao.observeCollection().first().single()
         assertEquals("Mein Set", linked.setName)
         assertEquals("25/165", linked.collectorNumber)
-        assertEquals(512L, linked.marketValueMinor)
+        assertEquals(345L, linked.marketValueMinor)
         assertEquals(42L, linked.externalProductId)
         assertEquals(entryId, dao.findLinkedEntry("CARDMARKET_PUBLIC_DOWNLOAD", 42, "Sehr gut", "Holo", "Standard")?.id)
         assertEquals(null, dao.findLinkedEntry("CARDMARKET_PUBLIC_DOWNLOAD", 42, "Sehr gut", "Reverse-Holo", "Standard"))

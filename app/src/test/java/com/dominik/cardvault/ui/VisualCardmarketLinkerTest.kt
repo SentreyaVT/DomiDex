@@ -78,7 +78,7 @@ class VisualCardmarketLinkerTest {
     }
 
     @Test
-    fun greyBinderSlotUsesExactSourceIdentityAndItsHoloTrend() {
+    fun greyHoloBinderSlotUsesExactSourceIdentityAndItsRegularProductTrend() {
         val card = visual("source-set-001", "001", "Bisasam")
         val reference = binderReference(card, finish = "Holo", variant = "Holo")
         val product = product(41, "Bulbasaur [Tackle]", "900", 2.35).copy(holoTrendPriceEur = 4.75)
@@ -86,7 +86,7 @@ class VisualCardmarketLinkerTest {
         val resolved = binderReferenceCardmarketProducts(reference, card, listOf(card), listOf(product)).single()
 
         assertEquals(41L, resolved.productId)
-        assertEquals(4.75, resolved.trendPriceEur!!, 0.0)
+        assertEquals(2.35, resolved.trendPriceEur!!, 0.0)
         assertEquals("Holo", resolved.finish)
     }
 

@@ -40,7 +40,9 @@ class ManualCandidateLookupPerformanceTest {
         assertEquals(names.toSet(), fixture.queries.toSet())
         assertEquals(names.size, fixture.queries.size)
         assertTrue(result.candidates.all { it.card.hasMarketProduct })
-        assertEquals(listOf(1.25, 3.5), result.candidates.map { it.card.trendPriceEur })
+        // This fixture declares Normal + Holo, not Reverse Holo. Both use the
+        // regular product trend under the physically confirmed price fix.
+        assertEquals(listOf(1.25, 1.25), result.candidates.map { it.card.trendPriceEur })
     }
 
     @Test fun runnerUpExpansionEvidenceStillPreventsAmbiguousPriceLinking() = runBlocking {

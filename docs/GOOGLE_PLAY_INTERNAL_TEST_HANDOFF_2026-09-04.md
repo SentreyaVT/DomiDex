@@ -1,5 +1,7 @@
 # DomiDex – Google Play Internal Test: Übergabe
 
+> Historischer UNSIGNED-Vorbereitungslauf. Aktuelle Signierung, technische Freigabe und Live-Website-Befunde stehen in [GOOGLE_PLAY_SIGNED_RC_2026-09-04.md](GOOGLE_PLAY_SIGNED_RC_2026-09-04.md). Die unten beschriebene UNSIGNED-Datei ist nicht die finale Upload-Datei.
+
 Stand: 04.09.2026. Nur Vorbereitung, keine Veröffentlichung. Keine App-Funktion wurde in diesem Vorbereitungslauf geändert. Der zuvor erarbeitete Stand einschließlich Portrait und manuell bestätigtem ScanLab-Upload wurde unverändert gebaut.
 
 ## A. PRE-BETA BUILD

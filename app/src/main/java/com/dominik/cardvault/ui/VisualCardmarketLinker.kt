@@ -5,6 +5,7 @@ import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionCard
+import com.dominik.cardvault.model.CollectionRepository
 import java.text.Normalizer
 
 /**
@@ -20,6 +21,17 @@ internal fun visualCardmarketProducts(
     candidates: List<CatalogSearchResult>,
     resolvedExpansionId: String? = null,
 ): List<CatalogSearchResult> {
+    val declaredIds = card.printVariants.mapNotNull { it.cardmarketProductId }.distinct()
+    if (declaredIds.isNotEmpty()) {
+        // A source-declared product is stronger than a guessed expansion or name/order.
+        // If it is absent locally, never substitute another same-name printing.
+        return candidates.filter { it.hasMarketProduct && it.productId in declaredIds }
+            .distinctBy { it.productId }.map { product ->
+                product.copy(sourceSetId = card.set.id.lowercase(), sourceCardId = card.id.lowercase(),
+                    visualSetName = card.set.name, collectorNumber = card.number,
+                    imageUrl = card.largeImageUrl, marketSearchName = card.marketSearchName)
+            }
+    }
     val expansionId = resolvedExpansionId ?: card.set.cardmarketExpansionId ?: return emptyList()
     val searchName = card.marketSearchName ?: card.name
     val samePrintingCandidates = candidates
@@ -34,7 +46,10 @@ internal fun visualCardmarketProducts(
         .filter { canonicalCardName(it.marketSearchName ?: it.name) == canonicalCardName(searchName) }
         .sortedWith(compareBy({ canonicalCollectorNumber(it.number).toIntOrNull() ?: Int.MAX_VALUE }, { it.number }))
     val printedIndex = sameNamePrintings.indexOfFirst { it.id == card.id }
-    return samePrintingCandidates.getOrNull(printedIndex.coerceAtLeast(0))?.copy(
+    // An incomplete set list must not turn a missing secret printing into its
+    // first, usually main-set, namesake. Preserve the selected source identity.
+    if (printedIndex < 0) return emptyList()
+    return samePrintingCandidates.getOrNull(printedIndex)?.copy(
         sourceSetId = card.set.id.lowercase(),
         sourceCardId = card.id.lowercase(),
         visualSetName = card.set.name,
@@ -52,7 +67,14 @@ internal fun binderReferenceCardmarketProducts(
     candidates: List<CatalogSearchResult>,
 ): List<CatalogSearchResult> {
     if (reference.sourceSetId != sourceCard.set.id.lowercase() || reference.sourceCardId != sourceCard.id.lowercase()) return emptyList()
-    return visualCardmarketProducts(sourceCard, cardsInSet, candidates, reference.marketExpansionId).map { product ->
+    val matchingPrintings = sourceCard.printVariants.filter {
+        it.finish.equals(reference.finish, true) && it.variant.equals(reference.variant, true)
+    }
+    val declaredSource = if (sourceCard.printVariants.any { it.cardmarketProductId != null }) {
+        if (matchingPrintings.none { it.cardmarketProductId != null }) return emptyList()
+        sourceCard.copy(printVariants = matchingPrintings)
+    } else sourceCard
+    return visualCardmarketProducts(declaredSource, cardsInSet, candidates, reference.marketExpansionId).map { product ->
         product.copy(
             name = reference.name,
             visualSetName = reference.set,
@@ -64,6 +86,15 @@ internal fun binderReferenceCardmarketProducts(
             sourceCardId = reference.sourceCardId,
         )
     }
+}
+
+/** Use the existing local price guide by exact product ID, even when titles differ. */
+internal suspend fun loadVisualCardmarketCandidates(
+    card: PokemonVisualCard, repository: CollectionRepository,
+): List<CatalogSearchResult> {
+    val ids = card.printVariants.mapNotNull { it.cardmarketProductId }.distinct()
+    return if (ids.isNotEmpty()) repository.catalogProducts(ids)
+    else repository.searchCatalog(card.marketSearchName ?: card.name, 500)
 }
 
 /**
@@ -148,9 +179,9 @@ internal fun scannerCatalogResult(
     )
 }
 
-/** Normal and Holo are distinct Cardmarket source observations; neither is fabricated. */
+/** Pokémon Holo is the regular product; only Reverse Holo uses the alternate price field. */
 internal fun CatalogSearchResult.realTrendFor(finish: String): Double? =
-    if (finish.contains("holo", ignoreCase = true)) holoTrendPriceEur else trendPriceEur
+    if (finish.contains("reverse", ignoreCase = true)) holoTrendPriceEur?.takeUnless { it == 0.0 } else trendPriceEur
 
 private fun canonicalCardName(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFD)
     .lowercase()

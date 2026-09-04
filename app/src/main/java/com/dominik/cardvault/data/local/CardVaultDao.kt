@@ -11,16 +11,18 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface CardVaultDao {
+    // Pokémon's regular Holo printing uses the product trend. The download's
+    // holo field describes Reverse Holo and must not fall back to that trend.
     @Query("""
         SELECT e.id AS entryId, c.id AS cardId, c.name, c.setName, c.collectorNumber,
                c.language, COALESCE(e.finishOverride, c.finish) AS finish,
                COALESCE(e.variantOverride, c.variant) AS variant, c.rarity, e.quantity, e.condition,
                e.acquisitionPriceMinor, e.acquisitionCurrency, e.acquisitionDateEpochDay,
                e.notes,
-               CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%holo%' THEN NULLIF(p.holoTrendValueMinor, 0)
+               CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%reverse%' THEN NULLIF(p.holoTrendValueMinor, 0)
                     ELSE p.trendValueMinor END AS marketValueMinor,
                p.currency AS priceCurrency,
-               CASE WHEN CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%holo%' THEN NULLIF(p.holoTrendValueMinor, 0)
+               CASE WHEN CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%reverse%' THEN NULLIF(p.holoTrendValueMinor, 0)
                               ELSE p.trendValueMinor END IS NULL
                     THEN NULL ELSE p.effectiveAtEpochMillis END AS priceUpdatedAtEpochMillis,
                e.externalProductSource, e.externalProductId,
@@ -44,8 +46,8 @@ interface CardVaultDao {
         SELECT e.binderId AS id, MAX(c.setName) AS name, NULL AS heroAsset,
                COUNT(DISTINCT e.cardId) AS uniqueCards,
                COALESCE(SUM(e.quantity), 0) AS ownedCards,
-               SUM(CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%holo%' THEN NULLIF(p.holoTrendValueMinor, 0) ELSE p.trendValueMinor END * e.quantity) AS marketValueMinor,
-               MAX(CASE WHEN CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%holo%' THEN NULLIF(p.holoTrendValueMinor, 0) ELSE p.trendValueMinor END IS NULL THEN NULL ELSE p.effectiveAtEpochMillis END) AS lastPriceUpdatedAtEpochMillis
+               SUM(CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%reverse%' THEN NULLIF(p.holoTrendValueMinor, 0) ELSE p.trendValueMinor END * e.quantity) AS marketValueMinor,
+               MAX(CASE WHEN CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%reverse%' THEN NULLIF(p.holoTrendValueMinor, 0) ELSE p.trendValueMinor END IS NULL THEN NULL ELSE p.effectiveAtEpochMillis END) AS lastPriceUpdatedAtEpochMillis
         FROM collection_entries e
         JOIN catalog_cards c ON c.id = e.cardId
         LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource AND linked.externalProductId = e.externalProductId
@@ -86,6 +88,7 @@ interface CardVaultDao {
     /**
      * History stays tied to the exact Cardmarket product linked to this entry.
      * A catalog reference has entryId 0, where its catalog id is the safe fallback.
+     * useHoloPrice selects the download's Reverse Holo field, not regular Holo.
      */
     @Query("""
         SELECT p.effectiveAtEpochMillis,
@@ -144,11 +147,28 @@ interface CardVaultDao {
     suspend fun searchCatalog(source: String, query: String, limit: Int): List<CatalogSearchProjection>
 
     @Query("""
+        SELECT c.externalProductId, c.name, c.setId, c.setName,
+               c.collectorNumber, c.language, c.finish, c.variant, c.imageUrl,
+               p.trendValueMinor AS marketValueMinor,
+               NULLIF(p.holoTrendValueMinor, 0) AS holoMarketValueMinor,
+               p.currency, c.rarity
+        FROM catalog_cards c
+        LEFT JOIN raw_price_snapshots p ON p.id = (
+            SELECT p2.id FROM raw_price_snapshots p2
+            WHERE p2.cardId = c.id AND p2.source = :source
+            ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1
+        )
+        WHERE c.externalSource = :source AND c.externalProductId IN (:productIds)
+        ORDER BY c.externalProductId
+    """)
+    suspend fun catalogProducts(source: String, productIds: List<Long>): List<CatalogSearchProjection>
+
+    @Query("""
         SELECT c.id AS cardId, c.setId, c.name, c.setName, c.collectorNumber, c.language,
                c.finish, c.variant, c.imageUrl, c.externalProductId,
-               CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor)
+               CASE WHEN LOWER(c.finish) LIKE '%reverse%' THEN NULLIF(p.holoTrendValueMinor, 0)
                     ELSE p.trendValueMinor END AS marketValueMinor,
-               CASE WHEN CASE WHEN LOWER(c.finish) LIKE '%holo%' THEN COALESCE(NULLIF(p.holoTrendValueMinor, 0), p.trendValueMinor)
+               CASE WHEN CASE WHEN LOWER(c.finish) LIKE '%reverse%' THEN NULLIF(p.holoTrendValueMinor, 0)
                               ELSE p.trendValueMinor END IS NULL
                     THEN NULL ELSE p.effectiveAtEpochMillis END AS priceUpdatedAtEpochMillis
         FROM catalog_cards c

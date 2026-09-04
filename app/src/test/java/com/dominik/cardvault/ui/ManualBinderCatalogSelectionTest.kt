@@ -46,6 +46,27 @@ class ManualBinderCatalogSelectionTest {
         assertEquals("Reverse Holo", selected.finish)
         assertEquals("Reverse Holo", selected.variant)
         assertEquals(card.id, selected.sourceCardId)
+        assertEquals(product.holoTrendPriceEur, selected.trendPriceEur)
+    }
+
+    @Test fun cardmarketCatalogueLabelCannotCreateAnExtraPrinting() {
+        val source = card.copy(printVariants = listOf(PokemonPrintVariant("holo", "Holo", "Standard", 42L)))
+        val selected = catalogResultForVisualCard(source, product.copy(variant = "Cardmarket-Produkt"))
+        assertEquals("Holo", selected.finish)
+        assertEquals("Standard", selected.variant)
+        assertEquals(source.id, selected.sourceCardId)
+        assertEquals(source.set.id, selected.sourceSetId)
+    }
+
+    @Test fun exactDeclaredProductSelectsItsSourcePrintingNotTheFirstSlot() {
+        val source = card.copy(printVariants = listOf(
+            PokemonPrintVariant("normal", "Normal", "Standard", 21L),
+            PokemonPrintVariant("holo", "Holo", "Standard", 42L),
+        ))
+        val selected = catalogResultForVisualCard(source, product.copy(variant = "Cardmarket-Produkt"))
+        assertEquals("Holo", selected.finish)
+        assertEquals("Standard", selected.variant)
+        assertEquals(42L, selected.productId)
     }
 
     @Test fun blankSourceImageKeepsTheAvailableProductImage() {
@@ -71,5 +92,13 @@ class ManualBinderCatalogSelectionTest {
         assertFalse(selected.matchesManualSourceSelection("Anderes Set", "025"))
         assertFalse(selected.matchesManualSourceSelection(set.name, "026"))
         assertFalse(selected.matchesManualSourceSelection(set.name, ""))
+    }
+
+    @Test fun changedOrRestoredDraftIdentityCannotReuseAnEarlierPriceLink() {
+        val selected = catalogResultForVisualCard(card, product)
+        assertTrue(selected.matchesManualCatalogSelection(card.name, set.name, "025/100"))
+        assertFalse(selected.matchesManualCatalogSelection("Andere Karte", set.name, "025"))
+        assertFalse(selected.matchesManualCatalogSelection(card.name, "Anderes Set", "025"))
+        assertFalse(selected.matchesManualCatalogSelection(card.name, set.name, "026"))
     }
 }

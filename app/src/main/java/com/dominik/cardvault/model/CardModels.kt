@@ -129,6 +129,8 @@ interface CollectionRepository {
     suspend fun cacheGermanMasterSetCards(set: GermanMasterSetDefinition, cards: List<GermanMasterSetCardDefinition>)
     suspend fun clearGeneratedGermanMasterSetBinders()
     suspend fun searchCatalog(query: String, limit: Int = 30): List<CatalogSearchResult>
+    /** Exact source-declared Cardmarket ids, independent of names or inferred expansions. */
+    suspend fun catalogProducts(productIds: List<Long>): List<CatalogSearchResult> = emptyList()
     suspend fun linkCatalogProduct(entryId: Long, productId: Long?)
     /** Read-only Cardmarket snapshots for this exact linked product/finish. */
     fun priceHistory(card: CollectionCard): Flow<List<CardPricePoint>>

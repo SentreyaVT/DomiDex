@@ -48,7 +48,11 @@ private object CardmarketExpansionRegistry {
 }
 
 /** A separately collectible printing of the same numbered card. */
-data class PokemonPrintVariant(val id: String, val finish: String, val variant: String)
+data class PokemonPrintVariant(
+    val id: String, val finish: String, val variant: String,
+    /** Exact public source link, never inferred from a title or product order. */
+    val cardmarketProductId: Long? = null,
+)
 
 data class PokemonVisualCard(
     val id: String,
@@ -374,10 +378,20 @@ class PokemonVisualCatalog internal constructor(
             "rarity" -> rarity = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
             "variants_detailed" -> readArray(reader) { variantReader ->
                 var id = ""; var type = ""; var size = ""
+                var cardmarketProductId: Long? = null
                 variantReader.beginObject(); while (variantReader.hasNext()) when (variantReader.nextName()) {
                     "variantId" -> id = variantReader.nextString()
                     "type" -> type = variantReader.nextString()
                     "size" -> size = variantReader.nextString()
+                    "thirdParty" -> if (variantReader.peek() == JsonReader.Token.BEGIN_OBJECT) {
+                        variantReader.beginObject()
+                        while (variantReader.hasNext()) {
+                            if (variantReader.nextName() == "cardmarket" && variantReader.peek() == JsonReader.Token.NUMBER) {
+                                cardmarketProductId = variantReader.nextLong().takeIf { it > 0L }
+                            } else variantReader.skipValue()
+                        }
+                        variantReader.endObject()
+                    } else variantReader.skipValue()
                     else -> variantReader.skipValue()
                 }; variantReader.endObject()
                 val finish = when {
@@ -386,7 +400,7 @@ class PokemonVisualCatalog internal constructor(
                     type.equals("normal", true) -> "Normal"
                     else -> type.ifBlank { "Normal" }
                 }
-                if (id.isNotBlank()) result += PokemonPrintVariant(id, finish, size.takeIf { it.isNotBlank() } ?: finish)
+                if (id.isNotBlank()) result += PokemonPrintVariant(id, finish, size.takeIf { it.isNotBlank() } ?: finish, cardmarketProductId)
             }
             else -> reader.skipValue()
         }; reader.endObject()
