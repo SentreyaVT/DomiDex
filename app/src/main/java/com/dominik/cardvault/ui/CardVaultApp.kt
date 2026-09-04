@@ -1593,7 +1593,10 @@ internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, ca
         // A master binder is ordered by printed number, then its confirmed
         // printings (Normal, Holo, Reverse Holo). Existing variants replace
         // precisely their own slot rather than being appended at random.
-        val orderedReferences = references.sortedWith(compareBy<CollectionCard>(
+        // The cached printing row and the canonical row created by a collection add
+        // can describe the same source printing. They are one target slot, not two.
+        // Coalesce references before claiming owned entries; never alter collection rows.
+        val orderedReferences = references.distinctBy(::masterReferenceIdentity).sortedWith(compareBy<CollectionCard>(
             { collectorNumberOf(it.number) ?: Int.MAX_VALUE },
             { masterFinishOrder(it) },
             { it.variant.lowercase(Locale.ROOT) },
@@ -1650,11 +1653,22 @@ private fun CollectionCard.withReferenceImage(referenceImageUrl: String?): Colle
 
 private fun isSameMasterPrinting(reference: CollectionCard, owned: CollectionCard): Boolean {
     if (!isSameMasterCard(reference, owned) || masterFinishOrder(reference) != masterFinishOrder(owned)) return false
-    // Ordinary finish labels are aliases; a named special edition is a separate slot.
-    fun edition(card: CollectionCard): String = normalizeBinderMetadata(card.variant).let { variant ->
-        if (variant in setOf("", "unknown", "unbekannt", "standard", "normal", "holo", "holofoil", "reverse", "reverseholo", "reverseholofoil", "parallel")) "" else variant
+    return masterEdition(reference) == masterEdition(owned)
+}
+
+// Ordinary finish labels are aliases; a named special edition remains a separate slot.
+private fun masterEdition(card: CollectionCard): String = normalizeBinderMetadata(card.variant).let { variant ->
+    if (variant in setOf("", "unknown", "unbekannt", "standard", "normal", "holo", "holofoil", "reverse", "reverseholo", "reverseholofoil", "parallel")) "" else variant
+}
+
+private fun masterReferenceIdentity(card: CollectionCard): List<String> {
+    val source = if (!card.sourceSetId.isNullOrBlank() && !card.sourceCardId.isNullOrBlank()) {
+        listOf("source", card.sourceSetId.lowercase(Locale.ROOT), card.sourceCardId.lowercase(Locale.ROOT))
+    } else {
+        // No guessed identity by name/number: unverified legacy references stay distinct.
+        listOf("reference", card.id)
     }
-    return edition(reference) == edition(owned)
+    return source + listOf(card.language.name, masterFinishOrder(card).toString(), masterEdition(card))
 }
 
 private fun hasSameMasterSourceIdentity(reference: CollectionCard, owned: CollectionCard): Boolean =

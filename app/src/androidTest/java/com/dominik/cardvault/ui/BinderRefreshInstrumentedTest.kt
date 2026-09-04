@@ -46,7 +46,12 @@ class BinderRefreshInstrumentedTest {
                 "equals" -> proxy === args?.get(0)
                 "hashCode" -> System.identityHashCode(proxy)
                 "toString" -> "ReadOnlyBinderRegressionRepository"
-                "binderReferences" -> { reads.incrementAndGet(); references.take(2) }
+                "binderReferences" -> {
+                    reads.incrementAndGet()
+                    // A saved canonical catalogue row duplicates an existing printing
+                    // reference after add/reload, but must not create a third slot.
+                    references.take(2) + references.first().copy(id = "canonical-catalogue-row")
+                }
                 "searchCatalog" -> emptyList<CatalogSearchResult>()
                 "cacheGermanMasterSetCards" -> {
                     @Suppress("UNCHECKED_CAST")
@@ -127,5 +132,6 @@ class BinderRefreshInstrumentedTest {
         finish = finish, variant = "Standard", condition = "Nicht im Besitz", quantity = 0,
         currentValueEur = 0.0, changePercent = 0.0, priceUpdatedAtEpochMillis = null,
         notes = "", acquisitionPriceEur = null, acquisitionDateEpochDay = null, accent = 0,
+        sourceSetId = "binder-regression", sourceCardId = "binder-regression-$number",
     )
 }
