@@ -23,6 +23,54 @@ class HybridCandidateFusionTest {
         setCode = "PBL",
     )
 
+    @Test fun registeredPromoSourceEquatesPrintedPrefixAndNumericLocalId() {
+        mapOf("MEP071" to "mep", "SVP173" to "svp").forEach { (printed, source) ->
+            val localId = printed.filter(Char::isDigit)
+            val promo = analysis.copy(collectorNumber = printed, setIdentifier = source, numberConfidence = 1f)
+            val card = candidate(1).copy(collectorNumber = localId, sourceSetId = source, expansionId = "1234", setCode = source.uppercase())
+            val evidence = HybridCandidateFusion.score(promo, card, null)
+
+            assertEquals(100, evidence.numberScore)
+            assertTrue("collector_number" !in evidence.contradictions)
+            assertEquals(ScannerDecision.ACCEPTED, HybridCandidateFusion.decide(HybridCandidateFusion.rank(promo, listOf(ScanCandidate(card, 100)), emptyMap())).decision)
+            assertEquals(100, HybridCandidateFusion.score(promo.copy(collectorNumber = localId), card.copy(collectorNumber = printed), null).numberScore)
+        }
+    }
+
+    @Test fun sourceNamespaceExpansionCanSupportAnUnpricedPromo() {
+        val promo = analysis.copy(collectorNumber = "MEP071", setIdentifier = "MEP", numberConfidence = 1f)
+        val card = candidate(1).copy(collectorNumber = "071", expansionId = "mep", setCode = "MEP")
+
+        assertEquals(100, HybridCandidateFusion.score(promo, card, null).numberScore)
+    }
+
+    @Test fun foreignOrMissingSourceCannotAuthorizePromoPrefixRemoval() {
+        val promo = analysis.copy(collectorNumber = "MEP071", setIdentifier = "MEP", numberConfidence = 1f)
+        val card = candidate(1).copy(collectorNumber = "071", expansionId = "1234", setCode = "MEP")
+        listOf(
+            card.copy(sourceSetId = "svp", expansionId = "mep"),
+            card.copy(sourceSetId = "sv08.5"),
+            card,
+        ).forEach { wrongSource ->
+            val ranked = HybridCandidateFusion.rank(promo, listOf(ScanCandidate(wrongSource, 100)), emptyMap())
+            assertEquals(0, ranked.single().evidence?.numberScore)
+            assertTrue("collector_number" in ranked.single().evidence!!.contradictions)
+            assertEquals(ScannerDecision.REJECTED, HybridCandidateFusion.decide(ranked).decision)
+        }
+    }
+
+    @Test fun subsetPrefixesRemainSignificantEvenInsideAPromoSource() {
+        listOf("TG05" to "005", "GG71" to "071").forEach { (printed, localId) ->
+            val subset = analysis.copy(collectorNumber = printed, numberConfidence = 1f)
+            val card = candidate(1).copy(collectorNumber = localId, sourceSetId = "mep")
+            val evidence = HybridCandidateFusion.score(subset, card, null)
+
+            assertEquals(0, evidence.numberScore)
+            assertTrue("collector_number" in evidence.contradictions)
+            assertEquals(100, HybridCandidateFusion.score(subset, card.copy(collectorNumber = printed), null).numberScore)
+        }
+    }
+
     @Test fun `corroborating artwork and exact identity become very high`() {
         val evidence = HybridCandidateFusion.score(
             analysis,

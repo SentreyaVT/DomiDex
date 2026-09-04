@@ -1,11 +1,20 @@
 package com.dominik.cardvault.ui
 
-internal fun manualCollectorNumber(input: String, printedTotal: Int): String? {
-    val digits = input.substringBefore('/').filter(Char::isDigit).take(4)
-    if (digits.isBlank()) return null
-    val width = maxOf(3, digits.length, printedTotal.takeIf { it > 0 }?.toString()?.length ?: 0)
+import com.dominik.cardvault.data.catalog.PokemonSetRegistry
+
+internal fun manualCollectorNumber(
+    input: String,
+    printedTotal: Int,
+    setSourceId: String? = null,
+    printedSetCode: String? = null,
+): String? {
+    val digits = input.substringBefore('/').filter(Char::isDigit)
+    if (digits.isBlank() || digits.length > 4) return null
+    // Promo catalogue totals grow over time; they are not a denominator printed on the card.
+    val denominator = if (isSelectedPromoSet(setSourceId, printedSetCode)) 0 else printedTotal
+    val width = maxOf(3, digits.length, denominator.takeIf { it > 0 }?.toString()?.length ?: 0)
     val localNumber = digits.toIntOrNull()?.toString()?.padStart(width, '0') ?: return null
-    return if (printedTotal > 0) "$localNumber/${printedTotal.toString().padStart(width, '0')}" else localNumber
+    return if (denominator > 0) "$localNumber/${denominator.toString().padStart(width, '0')}" else localNumber
 }
 
 internal fun withManualScanIdentity(
@@ -15,16 +24,27 @@ internal fun withManualScanIdentity(
     collectorNumber: String,
 ): CardTextAnalysis {
     val current = base ?: CardTextAnalysis(emptyList(), null, null, null, emptyList())
-    val retained = current.roiEvidence.filterNot { it.region in setOf(CardOcrRegion.SET, CardOcrRegion.NUMBER) }
+    val selectedNumber = if (isSelectedPromoSet(setSourceId, printedSetCode)) {
+        manualCollectorNumber(collectorNumber, 0) ?: collectorNumber
+    } else collectorNumber
     return current.copy(
-        collectorNumber = collectorNumber,
+        collectorNumber = selectedNumber,
         setIdentifier = printedSetCode,
+        // A failed OCR name must not veto the collector's explicit catalogue set + number.
+        searchQueries = emptyList(),
+        hasNameRoiEvidence = false,
         numberConfidence = 1f,
-        roiEvidence = retained + listOf(
+        roiEvidence = listOf(
             CardOcrEvidence(CardOcrRegion.SET, listOf(printedSetCode), printedSetCode, 1f),
-            CardOcrEvidence(CardOcrRegion.NUMBER, listOf(collectorNumber), collectorNumber, 1f),
+            CardOcrEvidence(CardOcrRegion.NUMBER, listOf(selectedNumber), selectedNumber, 1f),
         ),
         manualSetSourceId = setSourceId,
         manualIdentityConfirmed = true,
     )
+}
+
+private fun isSelectedPromoSet(setSourceId: String?, printedSetCode: String?): Boolean {
+    if (setSourceId.isNullOrBlank() || printedSetCode.isNullOrBlank()) return false
+    val promoSourceId = PokemonSetRegistry.promoSetIdForCollectorNumber("${printedSetCode}1") ?: return false
+    return PokemonSetRegistry.normalize(promoSourceId) == PokemonSetRegistry.normalize(setSourceId)
 }

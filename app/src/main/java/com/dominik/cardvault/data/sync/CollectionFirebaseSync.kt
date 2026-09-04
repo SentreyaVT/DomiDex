@@ -11,6 +11,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.dominik.cardvault.auth.FirebaseEntitlements
+import com.dominik.cardvault.auth.canUseFirebaseAppBackend
 import com.dominik.cardvault.data.local.CardVaultDatabase
 import com.dominik.cardvault.data.local.CatalogCardEntity
 import com.dominik.cardvault.data.local.CollectionEntryEntity
@@ -21,6 +23,9 @@ import com.dominik.cardvault.data.local.SYNC_CLEAN
 import com.dominik.cardvault.data.local.SYNC_CONFLICT
 import com.dominik.cardvault.data.local.SYNC_PENDING
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
+import com.dominik.cardvault.auth.currentFirebaseEntitlementAccount
+import com.dominik.cardvault.auth.firebaseEntitlementAccount
+import com.dominik.cardvault.data.knowledge.ScanKnowledgeScheduler
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentChange
@@ -113,6 +118,12 @@ internal fun collectionSyncWorkName(uid: String): String =
     "domidex-collection-sync-${UUID.nameUUIDFromBytes(uid.toByteArray(StandardCharsets.UTF_8))}"
 internal fun shouldRunCollectionSync(expectedUid: String?, currentUid: String?): Boolean =
     !expectedUid.isNullOrBlank() && expectedUid == currentUid
+internal fun shouldRunEntitledCollectionSync(
+    expectedUid: String?,
+    currentUid: String?,
+    entitlements: FirebaseEntitlements,
+): Boolean = shouldRunCollectionSync(expectedUid, currentUid) &&
+    canUseFirebaseAppBackend(expectedUid, currentUid, entitlements)
 internal fun shouldScheduleCollectionSyncContinuation(processed: Int, limit: Int, hasPending: Boolean): Boolean =
     processed >= limit && hasPending
 internal fun shouldResumeServerReread(entryState: String, outboxState: String): Boolean =
@@ -142,45 +153,80 @@ class FirebaseCollectionSession(
     private val mutableOwnerUid = MutableStateFlow(collectionOwnerForUid(canonicalCollectionOwnerUid(auth.currentUser)))
     val ownerUid: StateFlow<String> = mutableOwnerUid
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val entitlementLock = Any()
     private var remoteListener: ListenerRegistration? = null
-    private var started = false
+    @Volatile private var started = false
+    @Volatile private var entitlementGeneration = 0L
+    @Volatile private var entitledOwnerUid: String? = null
 
-    private val authListener = FirebaseAuth.AuthStateListener(::handleAuthState)
+    private val idTokenListener = FirebaseAuth.IdTokenListener(::handleIdTokenState)
 
-    private fun handleAuthState(changedAuth: FirebaseAuth) {
-        val uid = canonicalCollectionOwnerUid(changedAuth.currentUser)
+    private fun handleIdTokenState(changedAuth: FirebaseAuth) {
+        val user = changedAuth.currentUser
+        val uid = canonicalCollectionOwnerUid(user)
         mutableOwnerUid.value = collectionOwnerForUid(uid)
-        attachRemoteListener(uid)
-        if (uid != null) requestSync()
+        val generation = synchronized(entitlementLock) {
+            entitlementGeneration += 1L
+            entitledOwnerUid = null
+            detachRemoteListenerLocked()
+            entitlementGeneration
+        }
+        if (uid == null || user == null) return
+        scope.launch {
+            val account = runCatching { user.firebaseEntitlementAccount(forceRefresh = false) }
+                .getOrNull() ?: return@launch
+            if (!account.entitlements.canUseAppBackend) return@launch
+            val activated = synchronized(entitlementLock) {
+                if (!started || entitlementGeneration != generation) return@synchronized false
+                if (canonicalCollectionOwnerUid(auth.currentUser) != uid || account.uid != uid) return@synchronized false
+                entitledOwnerUid = uid
+                attachRemoteListenerLocked(uid)
+                true
+            }
+            if (!activated) return@launch
+            requestSync()
+            // Wake any durable evidence queued while this same entitled account was offline.
+            ScanKnowledgeScheduler.schedule(context)
+        }
     }
 
     fun start() {
-        if (started) return
-        started = true
-        // Attach deterministically before relying on Firebase's documented initial callback.
-        handleAuthState(auth)
-        auth.addAuthStateListener(authListener)
+        synchronized(entitlementLock) {
+            if (started) return
+            started = true
+        }
+        // Resolve deterministically before relying on Firebase's documented initial callback.
+        handleIdTokenState(auth)
+        auth.addIdTokenListener(idTokenListener)
     }
 
-    fun requestSync() = CollectionSyncScheduler.schedule(context)
+    fun requestSync() {
+        val uid = synchronized(entitlementLock) { entitledOwnerUid } ?: return
+        if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return
+        CollectionSyncScheduler.schedule(context, uid)
+    }
 
-    private fun attachRemoteListener(uid: String?) {
+    private fun detachRemoteListenerLocked() {
         remoteListener?.remove()
         remoteListener = null
-        if (uid.isNullOrBlank()) return
+    }
+
+    private fun attachRemoteListenerLocked(uid: String) {
+        detachRemoteListenerLocked()
+        if (entitledOwnerUid != uid) return
         remoteListener = firestore.collection("users").document(uid).collection("collectionEntries")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.w(LOG_TAG, "Collection listener unavailable (${error.code}).")
                     return@addSnapshotListener
                 }
-                if (mutableOwnerUid.value != uid) return@addSnapshotListener
+                if (mutableOwnerUid.value != uid || entitledOwnerUid != uid) return@addSnapshotListener
                 snapshot?.documentChanges
                     ?.filter { it.type != DocumentChange.Type.REMOVED }
                     ?.forEach { change ->
                         scope.launchSafely {
                             applyRemoteDocumentToRoom(database, uid, change.document) {
-                                mutableOwnerUid.value == uid
+                                mutableOwnerUid.value == uid && entitledOwnerUid == uid
                             }
                         }
                     }
@@ -276,7 +322,8 @@ class FirebaseCollectionSession(
      * Offline/auth failures or a concurrently changed outbox leave that conflict untouched.
      */
     suspend fun keepCloudVersionsForConflicts(): Int = withContext(Dispatchers.IO) {
-        val uid = canonicalCollectionOwnerUid(auth.currentUser) ?: return@withContext 0
+        val uid = entitledOwnerUid ?: return@withContext 0
+        if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return@withContext 0
         val dao = database.cardVaultDao()
         var resolved = 0
         dao.conflictedSyncOutbox(uid).forEach { conflict ->
@@ -359,11 +406,14 @@ class FirebaseCollectionSession(
     }
 
     override fun close() {
-        if (!started) return
-        started = false
-        remoteListener?.remove()
-        remoteListener = null
-        auth.removeAuthStateListener(authListener)
+        synchronized(entitlementLock) {
+            if (!started) return
+            started = false
+            entitlementGeneration += 1L
+            entitledOwnerUid = null
+            detachRemoteListenerLocked()
+        }
+        auth.removeIdTokenListener(idTokenListener)
         scope.cancel()
     }
 
@@ -486,12 +536,33 @@ class CollectionSyncWorker(
         val uid = inputData.getString(CollectionSyncScheduler.INPUT_OWNER_UID)
             ?.takeIf(String::isNotBlank)
             ?: return@withContext Result.success()
-        if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) return@withContext Result.success()
+        suspend fun accessStillCurrent(): Boolean {
+            val account = auth.currentFirebaseEntitlementAccount(forceRefresh = false) ?: return false
+            return shouldRunEntitledCollectionSync(
+                expectedUid = uid,
+                currentUid = canonicalCollectionOwnerUid(auth.currentUser),
+                entitlements = account.entitlements,
+            ) && account.uid == uid
+        }
+        val initiallyAllowed = try {
+            accessStillCurrent()
+        } catch (error: Throwable) {
+            Log.w("DomiDexCollectionSync", "Entitlement konnte nicht geprüft werden (${error.javaClass.simpleName}).")
+            return@withContext Result.retry()
+        }
+        if (!initiallyAllowed) return@withContext Result.success()
         val database = CardVaultDatabase.get(applicationContext)
         val dao = database.cardVaultDao()
         val firestore = FirebaseFirestore.getInstance()
         var processed = 0
         while (processed < MAX_MUTATIONS_PER_RUN) {
+            val stillAllowed = try {
+                accessStillCurrent()
+            } catch (error: Throwable) {
+                Log.w("DomiDexCollectionSync", "Entitlement konnte nicht erneut geprüft werden (${error.javaClass.simpleName}).")
+                return@withContext Result.retry()
+            }
+            if (!stillAllowed) return@withContext Result.success()
             // An auth switch ends this owner's run immediately. Its durable outbox remains for
             // the next time that same UID signs in; it is never sent under the new identity.
             if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) return@withContext Result.success()
@@ -581,9 +652,12 @@ class CollectionSyncWorker(
             processed++
         }
         val hasPending = dao.pendingSyncOutbox(uid, 1).isNotEmpty()
-        if (shouldScheduleCollectionSyncContinuation(processed, MAX_MUTATIONS_PER_RUN, hasPending) &&
-            shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
-        ) {
+        val mayContinue = try {
+            accessStillCurrent()
+        } catch (error: Throwable) {
+            return@withContext Result.retry()
+        }
+        if (shouldScheduleCollectionSyncContinuation(processed, MAX_MUTATIONS_PER_RUN, hasPending) && mayContinue) {
             // Finishing a successful batch is not an error. Append the next bounded batch
             // immediately instead of applying WorkManager's exponential failure backoff.
             CollectionSyncScheduler.schedule(applicationContext, uid)

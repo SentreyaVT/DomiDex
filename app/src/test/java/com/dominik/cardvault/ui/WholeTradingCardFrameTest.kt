@@ -1,6 +1,7 @@
 package com.dominik.cardvault.ui
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,6 +31,39 @@ class WholeTradingCardFrameTest {
             assertTrue(kotlin.math.abs(restored.first - source.first) < .0001f)
             assertTrue(kotlin.math.abs(restored.second - source.second) < .0001f)
         }
+    }
+
+    @Test fun cameraCoordinatesRespectCurrentCropAndRotatedFrameAspect() {
+        val geometry = CameraFrameGeometry(
+            bufferWidth = 1_000,
+            bufferHeight = 800,
+            cropLeft = 100,
+            cropTop = 100,
+            cropRight = 900,
+            cropBottom = 700,
+            rotationDegrees = 90,
+        )
+        val source = .25f to .3125f
+        val preview = geometry.sourceToPreview(source.first, source.second)
+        val restored = geometry.previewToSource(preview.first, preview.second)
+
+        assertEquals(.75f, preview.first, .0001f)
+        assertEquals(.1875f, preview.second, .0001f)
+        assertEquals(source.first, restored.first, .0001f)
+        assertEquals(source.second, restored.second, .0001f)
+        assertEquals(.75f, geometry.previewAspectRatio, .0001f)
+    }
+
+    @Test fun fitCenterAndVisualGuideUseRealViewWithTradingCardRatio() {
+        val content = fitCenterPreviewBounds(viewWidth = 1_920f, viewHeight = 1_080f, imageAspectRatio = 4f / 3f)
+        assertEquals(240f, content.left, .01f)
+        assertEquals(1_440f, content.width, .01f)
+        assertEquals(1_080f, content.height, .01f)
+
+        val guide = guidedCardZone(content)
+        assertEquals(CardScanConfiguration.CARD_RATIO, guide.width / guide.height, .0001f)
+        assertTrue(guide.left >= content.left && guide.right <= content.right)
+        assertTrue(guide.top >= content.top && guide.bottom <= content.bottom)
     }
 
     private fun frame(

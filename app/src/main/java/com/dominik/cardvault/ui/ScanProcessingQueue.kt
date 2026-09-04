@@ -1,8 +1,10 @@
 package com.dominik.cardvault.ui
 
 import com.dominik.cardvault.data.catalog.PokemonPrintVariant
+import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
+import com.dominik.cardvault.data.catalog.collectorIdentityForSourceLookup
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionRepository
 import java.io.File
@@ -14,7 +16,30 @@ internal object ScanQueuePolicy {
     // native bitmap/OpenCV pressure when two captures arrive close together.
     const val MAX_PARALLEL_WORKERS = 1
     const val MAX_VISUAL_CANDIDATES = 4
+    /** Four automatic items leave two deterministic slots for deliberate manual captures. */
+    const val MAX_AUTOMATIC_BACKLOG = 4
+    const val MAX_TOTAL_BACKLOG = 6
+    const val MAX_RETAINED_TERMINAL_RESULTS = 3
+
+    fun allowsAutomaticCapture(scans: List<QueuedCardScan>, capturePending: Boolean): Boolean =
+        !capturePending &&
+            scans.size < MAX_AUTOMATIC_BACKLOG &&
+            scans.size < MAX_TOTAL_BACKLOG
+
+    /** Manual intake may reclaim an old result or a not-yet-started item, never active work. */
+    fun evictionCandidateForManualCapture(
+        scans: List<QueuedCardScan>,
+        protectedScanId: String? = null,
+    ): QueuedCardScan? = scans
+        .filter { it.id != protectedScanId && it.stage.isTerminal }
+        .minByOrNull(QueuedCardScan::capturedAtMillis)
+        ?: scans
+            .filter { it.id != protectedScanId && it.stage == ScanPipelineStage.CAPTURED }
+            .sortedWith(compareBy<QueuedCardScan> { it.origin != ScanCaptureOrigin.AUTOMATIC }.thenBy(QueuedCardScan::capturedAtMillis))
+            .firstOrNull()
 }
+
+internal enum class ScanCaptureOrigin { AUTOMATIC, MANUAL, GALLERY }
 
 /**
  * One immutable, locally scoped work item for the rapid scanner.  The image stays in the app
@@ -27,6 +52,7 @@ internal data class QueuedCardScan(
     val evidenceFiles: List<File> = emptyList(),
     val capturedAtMillis: Long = System.currentTimeMillis(),
     val qualityEligible: Boolean,
+    val origin: ScanCaptureOrigin = ScanCaptureOrigin.AUTOMATIC,
     val stage: ScanPipelineStage = ScanPipelineStage.CAPTURED,
     val analysis: CardTextAnalysis? = null,
     val candidates: List<ScanCandidate> = emptyList(),
@@ -54,6 +80,15 @@ internal enum class ScanPipelineStage(val label: String) {
     SAVED("Zum Binder hinzugefügt"),
 }
 
+internal val ScanPipelineStage.isTerminal: Boolean
+    get() = this in setOf(
+        ScanPipelineStage.MATCHED,
+        ScanPipelineStage.AMBIGUOUS,
+        ScanPipelineStage.MANUAL_REVIEW,
+        ScanPipelineStage.FAILED,
+        ScanPipelineStage.SAVED,
+    )
+
 internal data class ScanCandidate(
     val card: CatalogSearchResult,
     val score: Int,
@@ -75,6 +110,52 @@ internal data class ScanCandidateResolution(
     val decision: ScannerDecisionResult,
 )
 
+/** Manual identity or missing card geometry always leaves a candidate for explicit selection. */
+internal fun constrainManualWholeImageDecision(
+    analysis: CardTextAnalysis,
+    decision: ScannerDecisionResult,
+): ScannerDecisionResult = when {
+    decision.decision != ScannerDecision.ACCEPTED -> decision
+    analysis.manualIdentityConfirmed && !analysis.manualSetSourceId.isNullOrBlank() -> decision.copy(
+        decision = ScannerDecision.AMBIGUOUS,
+        reason = "manual_set_number_requires_selection",
+    )
+    !analysis.imageQuality.cardDetected && analysis.imageQuality.reason == MANUAL_WHOLE_IMAGE_FALLBACK_REASON -> decision.copy(
+        decision = ScannerDecision.AMBIGUOUS,
+        reason = "manual_whole_image_requires_review",
+    )
+    analysis.imageQuality.isManualRecognitionFallback -> decision.copy(
+        decision = ScannerDecision.AMBIGUOUS,
+        reason = "soft_card_image_requires_review",
+    )
+    else -> decision
+}
+
+/** Explicit source selection never expands into another set, even when the exact lookup is empty. */
+internal suspend fun lookupScannerVisualMatches(
+    analysis: CardTextAnalysis,
+    findExact: suspend (String, String) -> List<PokemonVisualCard>,
+    findByPrintedTotal: suspend (String) -> List<PokemonVisualCard>,
+): List<PokemonVisualCard> {
+    val number = analysis.collectorNumber ?: return emptyList()
+    val selectedSourceId = analysis.manualSetSourceId
+    val exact = (selectedSourceId ?: analysis.setIdentifier)
+        ?.let { findExact(it, number) }
+        ?.filter { printedDenominatorMatches(number, it.set.printedTotal) }
+        .orEmpty()
+    if (selectedSourceId != null) {
+        if (selectedSourceId.isBlank()) return emptyList()
+        val selectedSet = PokemonSetRegistry.normalize(selectedSourceId)
+        val selectedNumber = collectorIdentityForSourceLookup(number, selectedSourceId)
+        return exact.filter { card ->
+            PokemonSetRegistry.normalize(card.set.id) == selectedSet &&
+                collectorIdentityForSourceLookup(card.number, card.set.id) == selectedNumber
+        }
+    }
+    // Automatic OCR retains its denominator fallback when glare corrupts the printed set code.
+    return exact.ifEmpty { findByPrintedTotal(number) }
+}
+
 /**
  * Module 3 candidate reduction.  The visual catalogue supplies the authoritative German card
  * identity. Cardmarket's compact export has no collector number; pricing therefore reuses the
@@ -87,20 +168,14 @@ internal object CardScanCandidateResolver {
         repository: CollectionRepository,
         visualCatalog: PokemonVisualCatalog,
     ): ScanCandidateResolution {
-        if (!analysis.manualIdentityConfirmed && (!analysis.imageQuality.cardDetected || analysis.imageQuality.reason.isNotBlank())) {
+        val manualWholeImageFallback = analysis.imageQuality.isManualRecognitionFallback
+        if (!analysis.manualIdentityConfirmed && !manualWholeImageFallback && (!analysis.imageQuality.cardDetected || analysis.imageQuality.reason.isNotBlank())) {
             return ScanCandidateResolution(emptyList(), ScannerDecisionResult(ScannerDecision.REJECTED, reason = analysis.imageQuality.reason.ifBlank { "card_frame_missing" }))
         }
-        val number = analysis.collectorNumber ?: return ScanCandidateResolution(emptyList(), ScannerDecisionResult(ScannerDecision.REJECTED, reason = "collector_number_missing"))
-        val exactSetMatches = (analysis.manualSetSourceId ?: analysis.setIdentifier)
-            ?.let { setCode -> visualCatalog.findExact(setCode, number) }
-            ?.filter { visualCard -> printedDenominatorMatches(number, visualCard.set.printedTotal) }
-            .orEmpty()
-        // A foil reflection can turn one letter of an otherwise valid set code
-        // into another source code. An empty exact lookup must not dead-end the
-        // card: the printed denominator still provides a safe all-set fallback.
-        val visualMatches = exactSetMatches.ifEmpty {
-            visualCatalog.findByPrintedTotalAndCollectorNumber(number)
-        }
+        if (analysis.collectorNumber == null) return ScanCandidateResolution(emptyList(), ScannerDecisionResult(ScannerDecision.REJECTED, reason = "collector_number_missing"))
+        val visualMatches = lookupScannerVisualMatches(
+            analysis, visualCatalog::findExact, visualCatalog::findByPrintedTotalAndCollectorNumber,
+        )
         data class PreparedCandidate(
             val visualCard: PokemonVisualCard,
             val printing: PokemonPrintVariant,
@@ -128,6 +203,16 @@ internal object CardScanCandidateResolver {
         val candidatesBySearch = mutableMapOf<String, List<CatalogSearchResult>>()
         val candidates = prepared.map { preparedCandidate ->
             val visualCard = preparedCandidate.visualCard
+            val searchName = visualCard.marketSearchName ?: visualCard.name
+            val marketCandidates = candidatesBySearch.getOrPut(searchName) {
+                repository.searchCatalog(searchName, 500)
+            }
+            // The expansion bridge cannot produce a product when this exact card name has
+            // no compatible candidate. Keep the existing unpriced result without searching
+            // every other set name solely to establish an expansion that cannot be used.
+            if (marketCandidates.none { cardmarketNameMatches(it.name, searchName) }) {
+                return@map ScanCandidate(preparedCandidate.unpriced, preparedCandidate.score)
+            }
             val setCards = cardsBySet.getOrPut(visualCard.set.id) {
                 runCatching { visualCatalog.cards(visualCard.set) }.getOrDefault(listOf(visualCard))
             }
@@ -144,10 +229,6 @@ internal object CardScanCandidateResolver {
                 expansionBySet[visualCard.set.id] = resolved
                 resolved
             }
-            val searchName = visualCard.marketSearchName ?: visualCard.name
-            val marketCandidates = candidatesBySearch.getOrPut(searchName) {
-                repository.searchCatalog(searchName, 500)
-            }
             val verifiedProduct = visualCardmarketProducts(
                 card = visualCard,
                 cardsInSet = setCards,
@@ -159,7 +240,11 @@ internal object CardScanCandidateResolver {
                 score = preparedCandidate.score,
             )
         }
-        return ScanCandidateResolution(candidates, ScannerDecisionPolicy.decide(candidates.map(ScanCandidate::score)))
+        val decision = constrainManualWholeImageDecision(
+            analysis,
+            ScannerDecisionPolicy.decide(candidates.map(ScanCandidate::score)),
+        )
+        return ScanCandidateResolution(candidates, decision)
     }
 
     private fun canonicalMetadata(value: String) = value.lowercase().filter(Char::isLetterOrDigit)

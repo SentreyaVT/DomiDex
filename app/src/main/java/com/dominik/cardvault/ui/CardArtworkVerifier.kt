@@ -4,9 +4,36 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.util.LinkedHashMap
 import kotlin.math.sqrt
+
+internal const val MAX_REFERENCE_ARTWORK_BYTES = 8 * 1024 * 1024
+internal const val MAX_REFERENCE_ARTWORK_EDGE = 1_400
+
+internal fun referenceArtworkDecodeSample(width: Int, height: Int): Int =
+    decodeSampleForLargestEdge(maxOf(width, height).coerceAtLeast(1), MAX_REFERENCE_ARTWORK_EDGE)
+
+internal fun readBoundedReferenceArtwork(
+    input: InputStream,
+    maxBytes: Int = MAX_REFERENCE_ARTWORK_BYTES,
+): ByteArray? {
+    if (maxBytes <= 0) return null
+    val output = ByteArrayOutputStream(minOf(maxBytes, 32 * 1024))
+    val buffer = ByteArray(16 * 1024)
+    var total = 0
+    while (true) {
+        val read = input.read(buffer)
+        if (read < 0) break
+        if (read == 0) continue
+        total += read
+        if (total > maxBytes) return null
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
+}
 
 internal enum class ArtworkMatch { UNAVAILABLE, INCONCLUSIVE, CORROBORATES, CONTRADICTS }
 
@@ -229,7 +256,23 @@ internal object CardArtworkVerifier {
             setRequestProperty("User-Agent", "DomiDex/1.0 scanner artwork verification")
         }
         try {
-            if (connection.responseCode !in 200..299) null else connection.inputStream.use(BitmapFactory::decodeStream)
+            if (connection.responseCode !in 200..299 || connection.contentLengthLong > MAX_REFERENCE_ARTWORK_BYTES) {
+                null
+            } else {
+                val encoded = connection.inputStream.use(::readBoundedReferenceArtwork) ?: return@runCatching null
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(encoded, 0, encoded.size, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+                BitmapFactory.decodeByteArray(
+                    encoded,
+                    0,
+                    encoded.size,
+                    BitmapFactory.Options().apply {
+                        inSampleSize = referenceArtworkDecodeSample(bounds.outWidth, bounds.outHeight)
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                    },
+                )
+            }
         } finally { connection.disconnect() }
     }.getOrNull()
 }

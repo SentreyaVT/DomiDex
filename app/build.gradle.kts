@@ -1,8 +1,28 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.google.services)
+}
+
+val releaseKeystorePropertiesFile = rootProject.file("keystore.properties")
+val releaseKeystoreProperties = Properties()
+val releaseSigningConfigured = releaseKeystorePropertiesFile.isFile
+
+if (releaseSigningConfigured) {
+    releaseKeystorePropertiesFile.inputStream().use(releaseKeystoreProperties::load)
+    val requiredKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+    val missingKeys = requiredKeys.filter { releaseKeystoreProperties.getProperty(it).isNullOrBlank() }
+    require(missingKeys.isEmpty()) {
+        "keystore.properties is missing required release signing values: ${missingKeys.joinToString()}"
+    }
+    val configuredStore = rootProject.file(releaseKeystoreProperties.getProperty("storeFile").trim())
+    require(configuredStore.isFile) { "Release keystore does not exist: $configuredStore" }
+    require(!configuredStore.name.equals("debug.keystore", ignoreCase = true)) {
+        "The Android debug keystore must never sign a DomiDex release."
+    }
 }
 
 android {
@@ -21,6 +41,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = rootProject.file(releaseKeystoreProperties.getProperty("storeFile").trim())
+                storePassword = releaseKeystoreProperties.getProperty("storePassword")
+                keyAlias = releaseKeystoreProperties.getProperty("keyAlias")
+                keyPassword = releaseKeystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             // Optional only for restricted CI/sandbox verification; Android Studio keeps its
@@ -31,7 +62,9 @@ android {
             // Private tester releases target current physical Android phones.
             // Keeping emulator/x86 native libraries out of this artifact cuts
             // the download substantially; debug builds still support the AVD.
-            signingConfig = signingConfigs.getByName("debug")
+            // No local credentials means an intentionally unsigned build artifact. There is
+            // never a fallback to the Android debug key for anything named "release".
+            signingConfig = signingConfigs.findByName("release")
             ndk {
                 abiFilters += "arm64-v8a"
             }
@@ -54,6 +87,9 @@ android {
     ksp {
         arg("room.schemaLocation", "$projectDir/schemas")
         arg("room.incremental", "true")
+    }
+    testOptions {
+        execution = "ANDROIDX_TEST_ORCHESTRATOR"
     }
 }
 
@@ -94,6 +130,7 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.room.testing)
+    androidTestUtil(libs.androidx.test.orchestrator)
     // Room 2.8.4's migration bundle serializers use kotlinx-serialization 1.8.1.
     // Keep core and json on the same runtime to avoid an AbstractMethodError on-device.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.8.1")

@@ -2,20 +2,19 @@ package com.dominik.cardvault.data.catalog
 
 import com.dominik.cardvault.data.WachsendesChaosMasterSet
 import com.squareup.moshi.JsonReader
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import okio.BufferedSource
 import okio.buffer
 import okio.source
 import java.net.HttpURLConnection
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 
 data class PokemonSet(
     val id: String,
@@ -72,7 +71,7 @@ data class PokemonVisualCard(
 internal fun setsMatchingPrintedTotal(sets: List<PokemonSet>, printedTotal: Int): List<PokemonSet> =
     sets.filter { it.printedTotal == printedTotal }
 
-/** German identities win; source-backed English records only fill genuinely missing card ids. */
+/** German identities win; the same source id can supply a missing image, never a guessed card. */
 internal fun mergeLocalizedSetCards(
     germanCards: List<PokemonVisualCard>,
     englishCards: List<PokemonVisualCard>,
@@ -81,7 +80,28 @@ internal fun mergeLocalizedSetCards(
     val englishById = englishCards.associateBy(PokemonVisualCard::id)
     return (germanCards + englishCards.filterNot { it.id in germanIds })
         .distinctBy(PokemonVisualCard::id)
-        .map { card -> card.copy(marketSearchName = englishById[card.id]?.name) }
+        .map { card ->
+            val english = englishById[card.id]
+            card.copy(
+                marketSearchName = english?.name,
+                smallImageUrl = card.smallImageUrl.ifBlank { english?.smallImageUrl.orEmpty() },
+                largeImageUrl = card.largeImageUrl.ifBlank { english?.largeImageUrl.orEmpty() },
+            )
+        }
+}
+
+/** Never add English-only sets or replace the German display name/count/identity. */
+internal fun fillMissingSetLogos(german: List<PokemonSet>, english: List<PokemonSet>): List<PokemonSet> {
+    val byId = english.associateBy(PokemonSet::id)
+    return german.map { set ->
+        if (set.logoUrl.isNullOrBlank()) set.copy(logoUrl = byId[set.id]?.logoUrl) else set
+    }
+}
+
+private fun cardImageUrl(value: String, quality: String): String {
+    val base = value.trim().trimEnd('/')
+    if (base.isEmpty()) return ""
+    return if (base.substringBefore('?').substringAfterLast('/').contains('.')) base else "$base/$quality.webp"
 }
 
 /** Maps only source-declared collectible printings to separate binder slots. */
@@ -100,67 +120,97 @@ internal fun pokemonPrintVariantForSourceKey(key: String): PokemonPrintVariant? 
  * No images or card text are bundled into the APK: the app only requests the
  * German metadata needed by the set the collector is actively browsing/scanning.
  */
-class PokemonVisualCatalog {
+class PokemonVisualCatalog internal constructor(
+    private val metadataCache: PokemonCatalogMetadataCache,
+    private val sourceOverride: ((String) -> BufferedSource)? = null,
+) {
+    constructor() : this(sharedMetadataCache)
+
+    private companion object {
+        val sharedMetadataCache = PokemonCatalogMetadataCache()
+    }
+
     val isLicensedSourceConfigured: Boolean get() = true
     private val germanBaseUrl = "https://api.tcgdex.net/v2/de"
     private val englishBaseUrl = "https://api.tcgdex.net/v2/en"
-    @Volatile private var cachedSets: List<PokemonSet>? = null
-    private val setLoadMutex = Mutex()
-    private val cardsBySet = ConcurrentHashMap<String, List<PokemonVisualCard>>()
-    private val detailedCards = ConcurrentHashMap<String, PokemonVisualCard>()
+
+    /** Only the small set index is warmed; card metadata stays demand-loaded. */
+    suspend fun warmUp() { sets() }
+
+    /** An explicit refresh also clears cached metadata used by other catalogue screens. */
+    fun invalidate() { metadataCache.invalidate() }
 
     suspend fun sets(query: String = ""): List<PokemonSet> {
-        val result = cachedSets ?: setLoadMutex.withLock {
-            cachedSets ?: withContext(Dispatchers.IO) {
-                read("$germanBaseUrl/sets") { reader ->
+        val result = metadataCache.sets.getOrLoad("de") {
+            withContext(Dispatchers.IO) {
+                val german = read("$germanBaseUrl/sets") { reader ->
                     buildList { readArray(reader) { parseGermanSet(it)?.let(::add) } }
-                }.sortedWith(compareByDescending(::catalogSetRecencyKey).thenByDescending { it.releaseDate })
+                }
+                val english = if (german.any { it.logoUrl.isNullOrBlank() }) catalogOrDefault(emptyList()) {
+                    read("$englishBaseUrl/sets") { reader ->
+                        buildList { readArray(reader) { parseGermanSet(it)?.let(::add) } }
+                    }
+                } else emptyList()
+                fillMissingSetLogos(german, english)
+                    .sortedWith(compareByDescending(::catalogSetRecencyKey).thenByDescending { it.releaseDate })
             }.also { loaded ->
                 PokemonSetRegistry.registerSourceSets(loaded)
-                cachedSets = loaded
             }
         }
-        return result
-            .filter { query.isBlank() || it.name.contains(query, true) || it.series.contains(query, true) }
+        return if (query.isBlank()) result
+        else result.filter { it.name.contains(query, true) || it.series.contains(query, true) }
     }
 
-    suspend fun cards(set: PokemonSet, query: String = ""): List<PokemonVisualCard> = withContext(Dispatchers.IO) {
-        val result = cardsBySet[set.id] ?: run {
-            val germanCards = read("$germanBaseUrl/sets/${set.id}") { reader ->
-                parseSetCards(reader, set, hasGermanLocalizedName = true)
-            }
-            // Cardmarket's compact price catalogue commonly uses the English card
-            // name. TCGdex exposes the same card ids in both locales, so enrich the
-            // German UI card with that source-backed lookup name instead of guessing
-            // translations ourselves. A few old promo/subset records have an empty
-            // or incomplete German list; merge only their missing source identities
-            // from English so they can still reach artwork verification/manual review.
-            val englishCards = runCatching {
-                read("$englishBaseUrl/sets/${set.id}") { reader ->
-                    parseSetCards(reader, set, hasGermanLocalizedName = false)
-                }
-            }.getOrDefault(emptyList())
-            PokemonSetRegistry.registerSourceSets((germanCards + englishCards).map(PokemonVisualCard::set))
-            mergeLocalizedSetCards(germanCards, englishCards)
-                .sortedWith(compareBy({ it.number.toIntOrNull() ?: Int.MAX_VALUE }, { it.number }))
-                .also { cardsBySet.putIfAbsent(set.id, it) }
-        }
-        result
-            .filter { query.isBlank() || it.name.contains(query, true) || it.number.contains(query, true) }
+    suspend fun cards(set: PokemonSet, query: String = ""): List<PokemonVisualCard> {
+        val result = setCards(set).cards
+        return if (query.isBlank()) result
+        else result.filter { it.name.contains(query, true) || it.number.contains(query, true) }
     }
+
+    private suspend fun setCards(set: PokemonSet): CatalogSetCards =
+        metadataCache.cards.getOrLoad(set.id) {
+            withContext(Dispatchers.IO) {
+                val germanLoad = async(Dispatchers.IO) {
+                    catalogOrDefault<List<PokemonVisualCard>?>(null) {
+                        read("$germanBaseUrl/sets/${set.id}") { reader ->
+                            parseSetCards(reader, set, hasGermanLocalizedName = true)
+                        }
+                    }
+                }
+                val englishLoad = async(Dispatchers.IO) {
+                    catalogOrDefault<List<PokemonVisualCard>?>(null) {
+                        read("$englishBaseUrl/sets/${set.id}") { reader ->
+                            parseSetCards(reader, set, hasGermanLocalizedName = false)
+                        }
+                    }
+                }
+                val germanCards = germanLoad.await()
+                val englishCards = englishLoad.await()
+                check(germanCards != null || englishCards != null) { "Set-Katalog momentan nicht erreichbar" }
+                // Preserve German-first identities and the source-backed English naming bridge.
+                PokemonSetRegistry.registerSourceSets((germanCards.orEmpty() + englishCards.orEmpty()).map(PokemonVisualCard::set))
+                val cards = mergeLocalizedSetCards(germanCards.orEmpty(), englishCards.orEmpty())
+                    .sortedWith(compareBy({ it.number.toIntOrNull() ?: Int.MAX_VALUE }, { it.number }))
+                CatalogSetCards(cards, cards.groupBy { collectorIdentity(it.number) })
+            }
+        }
 
     /**
      * The set index deliberately stays small.  A card detail supplies the
      * source-declared Normal/Holo/Reverse printings for master-set slots.
      */
-    suspend fun withDeclaredPrintVariants(card: PokemonVisualCard): PokemonVisualCard = withContext(Dispatchers.IO) {
-        detailedCards[card.id] ?: run {
-            val detail = read("$germanBaseUrl/cards/${card.id}") { reader -> parseCardDetail(reader) }
-            card.copy(
-                rarity = detail.rarity ?: card.rarity,
-                printVariants = detail.printVariants.ifEmpty { card.printVariants },
-            ).also { detailedCards.putIfAbsent(card.id, it) }
+    suspend fun withDeclaredPrintVariants(card: PokemonVisualCard): PokemonVisualCard {
+        val detail = metadataCache.details.getOrLoad(card.id) {
+            withContext(Dispatchers.IO) {
+                read("$germanBaseUrl/cards/${card.id}") { reader -> parseCardDetail(reader) }
+            }
         }
+        return card.copy(
+            rarity = detail.rarity ?: card.rarity,
+            printVariants = detail.printVariants.ifEmpty { card.printVariants },
+            smallImageUrl = card.smallImageUrl.ifBlank { cardImageUrl(detail.image.orEmpty(), "low") },
+            largeImageUrl = card.largeImageUrl.ifBlank { cardImageUrl(detail.image.orEmpty(), "high") },
+        )
     }
 
     suspend fun findExact(setIdentifier: String, collectorNumber: String): List<PokemonVisualCard> = withContext(Dispatchers.IO) {
@@ -195,9 +245,8 @@ class PokemonVisualCatalog {
         // The set payload intentionally stays lightweight and can omit rarity.
         // Only the one or few exact number candidates are expanded, off the UI
         // thread, to obtain source-declared rarity/finish metadata.
-        runCatching { cards(matchingSet) }.getOrDefault(emptyList())
-            .filter { collectorIdentity(it.number) == sourceCollectorKey }
-            .map { candidate -> runCatching { withDeclaredPrintVariants(candidate) }.getOrDefault(candidate) }
+        catalogOrDefault(emptyList()) { setCards(matchingSet).byCollectorNumber[sourceCollectorKey].orEmpty() }
+            .map { candidate -> catalogOrDefault(candidate) { withDeclaredPrintVariants(candidate) } }
     }
 
     /**
@@ -215,15 +264,16 @@ class PokemonVisualCatalog {
         setsMatchingPrintedTotal(sets(), printedTotal).map { set ->
             async(Dispatchers.IO) {
                 lookupSlots.withPermit {
-                    runCatching { cards(set) }.getOrDefault(emptyList())
+                    catalogOrDefault(emptyList()) { cards(set) }
                         .filter { it.number.toIntOrNull() == number }
-                        .map { candidate -> runCatching { withDeclaredPrintVariants(candidate) }.getOrDefault(candidate) }
+                        .map { candidate -> catalogOrDefault(candidate) { withDeclaredPrintVariants(candidate) } }
                 }
             }
         }.awaitAll().flatten()
     }
 
     private fun <T> read(url: String, block: (JsonReader) -> T): T {
+        sourceOverride?.let { return JsonReader.of(it(url)).use(block) }
         val connection = (java.net.URL(url).openConnection() as HttpURLConnection).apply {
             useCaches = false
             connectTimeout = 12_000; readTimeout = 20_000
@@ -306,8 +356,8 @@ class PokemonVisualCatalog {
             else -> reader.skipValue()
         }
         reader.endObject()
-        val lowImage = image.takeIf { it.isNotBlank() }?.plus("/low.webp").orEmpty()
-        val highImage = image.takeIf { it.isNotBlank() }?.plus("/high.webp").orEmpty()
+        val lowImage = cardImageUrl(image, "low")
+        val highImage = cardImageUrl(image, "high")
         return if (id.isBlank() || name.isBlank()) null else PokemonVisualCard(
             id, name, number, rarity, lowImage, highImage, set,
             listOf(PokemonPrintVariant("normal", "Normal", "Standard")),
@@ -315,12 +365,12 @@ class PokemonVisualCatalog {
         )
     }
 
-    private data class CardDetail(val rarity: String?, val printVariants: List<PokemonPrintVariant>)
-
-    private fun parseCardDetail(reader: JsonReader): CardDetail {
+    private fun parseCardDetail(reader: JsonReader): CatalogCardDetail {
         val result = mutableListOf<PokemonPrintVariant>()
         var rarity: String? = null
+        var image: String? = null
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
+            "image" -> image = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
             "rarity" -> rarity = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
             "variants_detailed" -> readArray(reader) { variantReader ->
                 var id = ""; var type = ""; var size = ""
@@ -340,12 +390,13 @@ class PokemonVisualCatalog {
             }
             else -> reader.skipValue()
         }; reader.endObject()
-        return CardDetail(rarity, result.distinctBy { it.id })
+        return CatalogCardDetail(rarity, result.distinctBy { it.id }, image)
     }
 
     /** TCGdex returns a logo asset base path; Coil needs the actual image file. */
-    private fun assetImageUrl(value: String): String =
-        if (value.substringAfterLast('/').contains('.')) value else "$value.png"
+    private fun assetImageUrl(value: String): String? = value.trim().trimEnd('/').takeIf(String::isNotEmpty)?.let {
+        if (it.substringBefore('?').substringAfterLast('/').contains('.')) it else "$it.png"
+    }
 
     private fun collectorIdentity(value: String): String {
         val primary = value.substringBefore('/').uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
@@ -353,6 +404,15 @@ class PokemonVisualCatalog {
         val digits = primary.dropWhile(Char::isLetter).trimStart('0').ifBlank { "0" }
         return prefix + digits
     }
+}
+
+/** Optional metadata failures keep the existing fallback, but cancellation stops the lookup. */
+private suspend fun <T> catalogOrDefault(default: T, load: suspend () -> T): T = try {
+    load()
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Throwable) {
+    default
 }
 
 /**

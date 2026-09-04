@@ -40,7 +40,7 @@ internal data class CardTextAnalysis(
     val raritySymbolEvidence: RaritySymbolEvidence = RaritySymbolEvidence(SymbolColor.UNKNOWN, null, 0f),
     /** Module-1 result; failed frames intentionally never reach a candidate lookup. */
     val imageQuality: CardImageQuality = CardImageQuality(),
-    /** Current-session OCR evidence by normalized ROI. It is not persisted or uploaded. */
+    /** Current-session OCR evidence; selected fields may accompany a consented tester report. */
     val roiEvidence: List<CardOcrEvidence> = emptyList(),
     /** Perspective-corrected image kept only for the current local artwork cross-check. */
     val normalizedCard: Bitmap? = null,
@@ -133,8 +133,11 @@ internal object CardNumberParser {
     // This repair is deliberately confined to two numeric groups inside an identity ROI.
     private val pair = Regex("(?i)(?<![A-Z0-9])([0-9OIlSBZg]{1,4})\\s*[/|VY]\\s*([0-9OIlSBZg]{1,4})(?![A-Z0-9])")
     private val prefixedPair = Regex("(?i)(?<![A-Z0-9])([A-Z]{1,3})[-_ ]*([0-9OIlSBZg]{1,3})\\s*[/|]\\s*\\1[-_ ]*([0-9OIlSBZg]{1,3})(?![A-Z0-9])")
-    private val setBoundSingle = Regex("(?i)(?:^|\\s)[A-Z]{3}(?:[-_ ]+DE)?[-_ ]+([0-9OIlSBZg]{1,4})(?:\\s|$)")
-    private val promoCollector = Regex("(?i)(?<![A-Z0-9])([A-Z]{2,4})[-_ ]*([0-9OIlSBZg]{1,3})(?![A-Z0-9])")
+    private val setBoundSingle = Regex("(?i)(?:^|\\s)([A-Z]{3})(?:[-_ ]+DE)?[-_ ]+([0-9OIlSBZg]{1,4})(?:\\s|$)")
+    // German promo borders have no /total: ML Kit can split MEP / DE / 071 into
+    // separate lines or join the boxed regulation mark to MEP. Keep the registered
+    // promo prefix bound to its number; never infer it from a name or bare digits.
+    private val promoCollector = Regex("(?i)(?<![A-Z0-9])([A-Z]{2,4})[-_\\s]*(?:DE[-_\\s]*|D[-_\\s]+)?(?=[0-9OIlSBZg]*[0-9])([0-9OIlSBZg]{1,3})(?![A-Z0-9/])")
 
     fun find(text: String): Evidence? {
         val lines = text.lineSequence()
@@ -155,15 +158,19 @@ internal object CardNumberParser {
                 confidence = (evidence.maxOf(Evidence::confidence) + (evidence.size - 1) * .01f).coerceAtMost(.99f),
                 supportingReads = evidence.size,
             )
-        } ?: lines.asSequence().mapNotNull { line ->
-            promoCollector.find(line)?.let { match ->
+        } ?: promoCollector.findAll(lines.joinToString("\n")).mapNotNull { match ->
                 val prefix = match.groupValues[1].uppercase()
-                val number = normalize(match.groupValues[2]).takeIf(String::isNotBlank) ?: return@let null
-                PokemonSetRegistry.canonicalPromoCollectorNumber(prefix + number)
-                    ?.let { canonical -> Evidence(canonical, .90f) }
-            }
+                val number = normalize(match.groupValues[2]).takeIf(String::isNotBlank) ?: return@mapNotNull null
+                val canonical = PokemonSetRegistry.canonicalPromoCollectorNumber(prefix + number)
+                    ?: prefix.takeIf { it.endsWith("DE") }?.dropLast(2)
+                        ?.let { PokemonSetRegistry.canonicalPromoCollectorNumber(it + number) }
+                    ?: prefix.takeIf { it.length == 4 && it.first() in "DEFGHIJO" }
+                        ?.drop(1)?.let { PokemonSetRegistry.canonicalPromoCollectorNumber(it + number) }
+                canonical?.let { Evidence(it, .90f) }
         }.firstOrNull()
-            ?: lines.asSequence().mapNotNull { line -> setBoundSingle.find(line)?.groupValues?.get(1)?.let(::normalize)?.takeIf(String::isNotBlank) }
+            ?: lines.asSequence().flatMap { setBoundSingle.findAll(it) }
+                .filter { PokemonSetRegistry.isVerifiedPrintedCode(it.groupValues[1]) }
+                .mapNotNull { normalize(it.groupValues[2]).takeIf(String::isNotBlank) }
                 .map { number -> Evidence(number.padStart(3, '0'), .64f) }
                 .firstOrNull()
     }
@@ -389,12 +396,16 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
     // predictable even when a collector captures a series quickly.
     private val preprocessingExecutor = Executors.newFixedThreadPool(ScanQueuePolicy.MAX_PARALLEL_WORKERS)
 
-    fun analyze(file: File, onComplete: (Result<CardTextAnalysis>) -> Unit) {
-        preprocessingExecutor.execute { analyzeNormalized(file, onComplete) }
+    fun analyze(
+        file: File,
+        allowManualWholeImageFallback: Boolean = false,
+        onComplete: (Result<CardTextAnalysis>) -> Unit,
+    ) {
+        preprocessingExecutor.execute { analyzeNormalized(file, allowManualWholeImageFallback, onComplete) }
     }
 
-    suspend fun analyzeAwait(file: File): Result<CardTextAnalysis> = suspendCancellableCoroutine { continuation ->
-        analyze(file) { result ->
+    suspend fun analyzeAwait(file: File, allowManualWholeImageFallback: Boolean = false): Result<CardTextAnalysis> = suspendCancellableCoroutine { continuation ->
+        analyze(file, allowManualWholeImageFallback) { result ->
             if (continuation.isActive) continuation.resume(result)
             else result.getOrNull()?.normalizedCard?.let { bitmap ->
                 if (!bitmap.isRecycled) bitmap.recycle()
@@ -402,8 +413,12 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
         }
     }
 
-    private fun analyzeNormalized(file: File, onComplete: (Result<CardTextAnalysis>) -> Unit) {
-        val normalized = CardImageNormalizer.normalize(file)
+    private fun analyzeNormalized(
+        file: File,
+        allowManualWholeImageFallback: Boolean,
+        onComplete: (Result<CardTextAnalysis>) -> Unit,
+    ) {
+        val normalized = CardImageNormalizer.normalize(file, allowManualWholeImageFallback)
         val initialDisplay = normalized.bitmap
         if (initialDisplay == null) {
             // Module 1 is a hard safety gate. A sleeve, binder pocket or arbitrary background
@@ -504,9 +519,18 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
                             )))
                             return@recognizeBatch
                         }
+                        // Orientation already read real identity ROIs on this exact plane.
+                        // Do not discard those readings when the later OCR batch is partial.
+                        // Reuse only the selected orientation, with the same parser/consensus.
+                        val selectedProbeInputs = probeInputs.withIndex().filter { it.value.orientation == selected.orientation }
+                        val combinedReadings = (fullBatch.readings.keys + probeBatch.readings.keys).associateWith { script ->
+                            fullBatch.readings[script].orEmpty() + selectedProbeInputs.mapIndexedNotNull { index, probe ->
+                                probeBatch.readings[script]?.get(probe.index)?.let { inputs.size + index to it }
+                            }.toMap()
+                        }
                         val parsed = parseOcrSnapshot(
-                            inputs,
-                            fullBatch.readings,
+                            inputs + selectedProbeInputs.map { it.value },
+                            combinedReadings,
                             file.nameWithoutExtension,
                             emitDiagnostics = true,
                         )
@@ -691,6 +715,10 @@ internal val historicalIdentityFallbackRoi = CardRoi(0f, .58f, 1f, 1f)
 
 private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant): List<OcrInput> {
     val modern = CardOcrRois.profiles.first { it.id == "modern" }
+    val identityStrip = CardOcrRois.profiles.first { it.id == "full_art_left" }.number
+    val extendedBorder = CardOcrRois.profiles.first { it.id == "extended_lower_border" }.set.union(
+        CardOcrRois.profiles.first { it.id == "extended_lower_border" }.number,
+    )
     fun original(regions: Set<CardOcrRegion>, roi: CardRoi, profile: String, tight: Boolean = false): OcrInput {
         val crop = cropAtReadableScale(variant.bitmap, roi)
         return OcrInput(
@@ -750,9 +778,15 @@ private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant): 
         addAll(rc3Variants(CardOcrRegion.NAME, modern.name, "rc3_name"))
         addAll(rc3Variants(CardOcrRegion.SET, modern.set, "rc3_set", inverted = true))
         addAll(rc3Variants(CardOcrRegion.NUMBER, modern.number, "rc3_number", inverted = true))
+        // The narrow, enlarged border already used by full OCR must also be available
+        // before orientation selection. Otherwise small promo digits never reach full OCR.
+        add(original(setOf(CardOcrRegion.SET, CardOcrRegion.NUMBER), identityStrip, "identity_strip", tight = true))
+        add(enhanced(setOf(CardOcrRegion.SET, CardOcrRegion.NUMBER), identityStrip, "identity_strip", tight = true))
+        add(original(setOf(CardOcrRegion.SET, CardOcrRegion.NUMBER), extendedBorder, "extended_border"))
+        add(enhanced(setOf(CardOcrRegion.SET, CardOcrRegion.NUMBER), extendedBorder, "extended_border"))
         addAll(listOf(
             original(setOf(CardOcrRegion.NAME), historicalNameFallbackRoi, "historical_name"),
-            enhanced(setOf(CardOcrRegion.SET, CardOcrRegion.NUMBER), historicalIdentityFallbackRoi, "historical_identity"),
+            original(setOf(CardOcrRegion.SET, CardOcrRegion.NUMBER), historicalIdentityFallbackRoi, "historical_identity"),
         ))
     }
 }

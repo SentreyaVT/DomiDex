@@ -43,7 +43,11 @@ internal object CardScanConfiguration {
     const val QUALITY_EVALUATION_WIDTH = 630
     const val QUALITY_EVALUATION_HEIGHT = 880
     const val MAX_DECODE_EDGE = 2600
+    const val MANUAL_FALLBACK_MAX_EDGE = RECOGNITION_HEIGHT
 }
+
+internal const val MANUAL_WHOLE_IMAGE_FALLBACK_REASON = "manual_whole_image_fallback"
+internal const val MANUAL_SOFT_CARD_FALLBACK_REASON = "manual_soft_card_fallback"
 
 internal data class CardImageQuality(
     val cardDetected: Boolean = false,
@@ -65,6 +69,10 @@ internal data class CardImageQuality(
     val perspectiveDurationMillis: Long = 0L,
     val reason: String = "",
 )
+
+internal val CardImageQuality.isManualRecognitionFallback: Boolean
+    get() = (!cardDetected && reason == MANUAL_WHOLE_IMAGE_FALLBACK_REASON) ||
+        (cardDetected && reason == MANUAL_SOFT_CARD_FALLBACK_REASON)
 
 /** ROIs are proportions of a perspective-corrected card, never camera pixels. */
 internal data class CardRoi(val left: Float, val top: Float, val right: Float, val bottom: Float) {
@@ -121,7 +129,7 @@ internal object CardOcrRois {
 
 internal enum class CardOcrRegion { NAME, SET, NUMBER }
 
-/** Diagnostic-only raw OCR retained for the current scan session, never uploaded or persisted. */
+/** Session-local OCR evidence; only the consented tester report may send selected identity ROIs. */
 internal data class CardOcrEvidence(
     val region: CardOcrRegion,
     val rawValues: List<String>,
@@ -180,12 +188,16 @@ internal fun aspectCorrectAnalysisOrientations(portraitQuad: Boolean): List<Anal
 internal object CardImageNormalizer {
     private val openCvAvailable by lazy { runCatching { OpenCVLoader.initLocal() }.getOrDefault(false) }
 
-    fun normalize(file: File): NormalizedCardCapture {
+    fun normalize(file: File, allowManualWholeImageFallback: Boolean = false): NormalizedCardCapture {
         val source = decodeUpright(file) ?: return NormalizedCardCapture(null, CardImageQuality(reason = "image_decode_failed"))
-        return try { normalize(source) } finally { source.recycle() }
+        return try {
+            val normalized = normalize(source, allowSoftCardReview = allowManualWholeImageFallback)
+            if (normalized.bitmap != null || !allowManualWholeImageFallback) normalized
+            else manualWholeImageFallback(source, normalized.quality)
+        } finally { source.recycle() }
     }
 
-    fun normalize(source: Bitmap): NormalizedCardCapture {
+    fun normalize(source: Bitmap, allowSoftCardReview: Boolean = false): NormalizedCardCapture {
         if (!openCvAvailable) return NormalizedCardCapture(null, CardImageQuality(reason = "opencv_unavailable"))
         val geometryStarted = SystemClock.elapsedRealtime()
         val sourceMat = Mat()
@@ -304,7 +316,13 @@ internal object CardImageNormalizer {
                 perspectiveDurationMillis = perspectiveDuration,
             )
             val normalizedCorners = candidate.corners.map { it.x.toFloat() / source.width to it.y.toFloat() / source.height }
-            if (quality.reason.isNotBlank()) {
+            // A global blur score must not throw away valid geometry and move the same
+            // relative OCR regions onto the surrounding photo. Retain the card plane
+            // for explicit manual review only; automatic quality limits stay unchanged.
+            val softCardReview = allowSoftCardReview && quality.reason == "image_too_soft" &&
+                quality.exposure >= CardScanConfiguration.MIN_EXPOSURE &&
+                quality.glare <= CardScanConfiguration.MAX_RECOGNITION_GLARE
+            if (quality.reason.isNotBlank() && !softCardReview) {
                 output.recycle()
                 preferredRecognition.recycle()
                 return NormalizedCardCapture(null, quality, normalizedCorners)
@@ -316,20 +334,32 @@ internal object CardImageNormalizer {
             val aspectCorrectOrientations = aspectCorrectAnalysisOrientations(
                 preferredOrientation == AnalysisOrientation.DEG_0,
             )
+            // A soft foil/sleeve contour can terminate just above the tiny collector line.
+            // Keep a bounded source guard band for manual OCR instead of clipping that line.
+            // It remains review-only, and never changes the original file or automatic crop.
+            val recognitionCorners = if (softCardReview) {
+                val centerX = candidate.corners.map { it.x }.average()
+                val centerY = candidate.corners.map { it.y }.average()
+                candidate.corners.map { point -> Point(
+                    (centerX + (point.x - centerX) * 1.16).coerceIn(0.0, source.width - 1.0),
+                    (centerY + (point.y - centerY) * 1.16).coerceIn(0.0, source.height - 1.0),
+                ) }
+            } else candidate.corners
             val variants = aspectCorrectOrientations.map { orientation ->
                 CanonicalCardAnalysisVariant(
                     orientation = orientation,
-                    bitmap = if (orientation == preferredOrientation) preferredRecognition else warp(
+                    bitmap = if (orientation == preferredOrientation && !softCardReview) preferredRecognition else warp(
                         sourceMat,
-                        cornersForAnalysisOrientation(candidate.corners, orientation),
+                        cornersForAnalysisOrientation(recognitionCorners, orientation),
                         CardScanConfiguration.RECOGNITION_WIDTH,
                         CardScanConfiguration.RECOGNITION_HEIGHT,
                     ),
                 )
             }
+            if (softCardReview) preferredRecognition.recycle()
             return NormalizedCardCapture(
                 bitmap = output,
-                quality = quality,
+                quality = if (softCardReview) quality.copy(reason = MANUAL_SOFT_CARD_FALLBACK_REASON) else quality,
                 corners = normalizedCorners,
                 originalCrop = boundingCrop(source, candidate.corners),
                 analysisVariants = variants,
@@ -603,6 +633,63 @@ internal object CardImageNormalizer {
         val bottom = corners.maxOf { it.y }.toInt().coerceIn(top + 1, source.height)
         Bitmap.createBitmap(source, left, top, right - left, bottom - top)
     }.getOrNull()
+
+    /**
+     * Manual shutter fallback only: preserve the complete upright photo at a bounded size so OCR
+     * can still offer editable text. The non-blank reason and cardDetected=false keep this path
+     * outside automatic candidate acceptance; explicit set+number confirmation remains required.
+     */
+    private fun manualWholeImageFallback(source: Bitmap, rejectedQuality: CardImageQuality): NormalizedCardCapture {
+        val recognition = scaledCopyWithinEdge(source, CardScanConfiguration.MANUAL_FALLBACK_MAX_EDGE)
+        val variants = mutableListOf(CanonicalCardAnalysisVariant(AnalysisOrientation.DEG_0, recognition))
+        val display = try {
+            listOf(
+                AnalysisOrientation.DEG_90,
+                AnalysisOrientation.DEG_180,
+                AnalysisOrientation.DEG_270,
+            ).forEach { orientation ->
+                variants += CanonicalCardAnalysisVariant(
+                    orientation,
+                    Bitmap.createBitmap(
+                        recognition,
+                        0,
+                        0,
+                        recognition.width,
+                        recognition.height,
+                        Matrix().apply { setRotate(orientation.degrees.toFloat()) },
+                        true,
+                    ),
+                )
+            }
+            scaledCopyWithinEdge(source, CardScanConfiguration.NORMALIZED_HEIGHT)
+        } catch (error: Throwable) {
+            variants.map(CanonicalCardAnalysisVariant::bitmap).distinct().forEach { bitmap ->
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
+            throw error
+        }
+        return NormalizedCardCapture(
+            bitmap = display,
+            quality = rejectedQuality.copy(
+                cardDetected = false,
+                reason = MANUAL_WHOLE_IMAGE_FALLBACK_REASON,
+            ),
+            analysisVariants = variants,
+        )
+    }
+
+    private fun scaledCopyWithinEdge(source: Bitmap, maxEdge: Int): Bitmap {
+        val largest = max(source.width, source.height).coerceAtLeast(1)
+        val scale = min(1f, maxEdge.toFloat() / largest)
+        return if (scale < 1f) {
+            Bitmap.createScaledBitmap(
+                source,
+                (source.width * scale).toInt().coerceAtLeast(1),
+                (source.height * scale).toInt().coerceAtLeast(1),
+                true,
+            )
+        } else source.copy(Bitmap.Config.ARGB_8888, false)
+    }
 
     private fun decodeUpright(file: File): Bitmap? = runCatching {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }

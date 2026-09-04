@@ -1,5 +1,6 @@
 package com.dominik.cardvault.data.sync
 
+import com.dominik.cardvault.auth.FirebaseEntitlements
 import com.dominik.cardvault.data.local.GUEST_OWNER_UID
 import com.dominik.cardvault.data.local.SYNC_CLEAN
 import com.dominik.cardvault.data.local.SYNC_CONFLICT
@@ -52,6 +53,13 @@ class CollectionSyncPolicyTest {
         assertTrue(shouldRunCollectionSync("user-A", "user-A"))
         assertFalse(shouldRunCollectionSync("user-A", "user-B"))
         assertFalse(shouldRunCollectionSync(null, "user-A"))
+    }
+
+    @Test fun collectionCloudWorkRequiresAppAccessOrAdminForTheSameOwner() {
+        assertTrue(shouldRunEntitledCollectionSync("user-A", "user-A", FirebaseEntitlements(appAccess = true)))
+        assertTrue(shouldRunEntitledCollectionSync("user-A", "user-A", FirebaseEntitlements(admin = true)))
+        assertFalse(shouldRunEntitledCollectionSync("user-A", "user-A", FirebaseEntitlements(pretester = true)))
+        assertFalse(shouldRunEntitledCollectionSync("user-A", "user-B", FirebaseEntitlements(appAccess = true)))
     }
 
     @Test fun successfulFullBatchSchedulesContinuationWithoutFailureBackoff() {

@@ -9,6 +9,9 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.dominik.cardvault.auth.canUseFirebaseAppBackend
+import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
+import com.dominik.cardvault.auth.currentFirebaseEntitlementAccount
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
@@ -46,7 +49,11 @@ internal class FirebaseScanKnowledge(
         return AutoCloseable(listener::remove)
     }
 
-    fun enqueue(evidence: ScanKnowledgeEvidence) {
+    suspend fun enqueue(evidence: ScanKnowledgeEvidence) {
+        val account = runCatching { auth.currentFirebaseEntitlementAccount(forceRefresh = false) }
+            .getOrNull() ?: return
+        val canonicalUid = canonicalCollectionOwnerUid(auth.currentUser)
+        if (!canUseFirebaseAppBackend(account.uid, canonicalUid, account.entitlements)) return
         if (store.enqueue(evidence)) ScanKnowledgeScheduler.schedule(applicationContext)
     }
 
@@ -55,22 +62,43 @@ internal class FirebaseScanKnowledge(
 
 internal object ScanKnowledgeScheduler {
     private const val WORK_NAME = "domidex-scan-knowledge-sync"
+    internal val existingWorkPolicy = ExistingWorkPolicy.APPEND_OR_REPLACE
 
     fun schedule(context: Context) {
         val request = OneTimeWorkRequestBuilder<ScanKnowledgeSyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.KEEP, request)
+        // Never lose a wake-up that arrives while the current outbox worker is finishing.
+        WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, existingWorkPolicy, request)
     }
 }
 
 internal class ScanKnowledgeSyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
-        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return Result.success()
+        val auth = FirebaseAuth.getInstance()
+        suspend fun entitledUid(): String? {
+            val account = auth.currentFirebaseEntitlementAccount(forceRefresh = false) ?: return null
+            val canonicalUid = canonicalCollectionOwnerUid(auth.currentUser)
+            return account.uid.takeIf {
+                canUseFirebaseAppBackend(account.uid, canonicalUid, account.entitlements)
+            }
+        }
+        val uid = try {
+            entitledUid()
+        } catch (error: Throwable) {
+            Log.w("DomiDexKnowledge", "Entitlement konnte nicht geprüft werden (${error.javaClass.simpleName}).")
+            return Result.retry()
+        } ?: return Result.success()
         val store = ScanKnowledgeStore(applicationContext)
         val firestore = FirebaseFirestore.getInstance()
         return try {
             while (true) {
+                val currentUid = try {
+                    entitledUid()
+                } catch (error: Throwable) {
+                    return Result.retry()
+                }
+                if (currentUid != uid) return Result.success()
                 val pending = store.pending()
                 if (pending.isEmpty()) break
                 pending.forEach { evidence ->

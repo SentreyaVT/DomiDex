@@ -122,18 +122,24 @@ interface CardVaultDao {
                p.trendValueMinor AS marketValueMinor,
                NULLIF(p.holoTrendValueMinor, 0) AS holoMarketValueMinor,
                p.currency, c.rarity
-        FROM catalog_cards c
+        FROM (
+            SELECT c.externalProductId, c.name FROM catalog_cards c
+            WHERE c.externalSource = :source AND c.externalProductId IS NOT NULL
+              AND c.name LIKE '%' || :query || '%' COLLATE NOCASE
+            ORDER BY CASE WHEN c.name = :query COLLATE NOCASE THEN 0
+                          WHEN c.name LIKE :query || '%' COLLATE NOCASE THEN 1 ELSE 2 END,
+                     c.name COLLATE NOCASE
+            LIMIT :limit
+        ) matched
+        JOIN catalog_cards c ON c.externalSource = :source AND c.externalProductId = matched.externalProductId
         LEFT JOIN raw_price_snapshots p ON p.id = (
             SELECT p2.id FROM raw_price_snapshots p2
             WHERE p2.cardId = c.id AND p2.source = 'CARDMARKET_PUBLIC_DOWNLOAD'
             ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1
         )
-        WHERE c.externalSource = :source AND c.externalProductId IS NOT NULL
-          AND c.name LIKE '%' || :query || '%' COLLATE NOCASE
         ORDER BY CASE WHEN c.name = :query COLLATE NOCASE THEN 0
                       WHEN c.name LIKE :query || '%' COLLATE NOCASE THEN 1 ELSE 2 END,
                  c.name COLLATE NOCASE
-        LIMIT :limit
     """)
     suspend fun searchCatalog(source: String, query: String, limit: Int): List<CatalogSearchProjection>
 
@@ -167,6 +173,9 @@ interface CardVaultDao {
                  c.collectorNumber, c.name COLLATE NOCASE
     """)
     suspend fun germanMasterSetReferences(setName: String): List<CatalogReferenceProjection>
+
+    @Query("SELECT COUNT(*) FROM catalog_cards WHERE externalSource = 'TCGDEX_DE' AND setName = :setName")
+    suspend fun germanMasterSetReferenceCount(setName: String): Int
 
     @Query("SELECT COUNT(*) FROM catalog_cards WHERE externalSource = :source AND setName = :setName")
     suspend fun catalogReferenceCountForSet(source: String, setName: String): Int

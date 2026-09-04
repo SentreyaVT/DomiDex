@@ -1,13 +1,16 @@
 package com.dominik.cardvault.ui
 
+import com.dominik.cardvault.data.catalog.collectorIdentityForSourceLookup
 import com.dominik.cardvault.model.CatalogSearchResult
 import java.text.Normalizer
 
 /** Explainable ranking for candidates that already passed the set + printed-number gate. */
 internal object CardRecognitionRanker {
     fun score(analysis: CardTextAnalysis, candidate: CatalogSearchResult): Int {
-        val readNumber = analysis.collectorNumber?.let(::canonicalNumber)
-        val catalogNumber = candidate.collectorNumber?.let(::canonicalNumber)
+        // Only the candidate's source namespace may equate a promo prefix with its numeric local id.
+        val numberSourceSetId = candidate.sourceSetId?.takeIf(String::isNotBlank) ?: candidate.expansionId
+        val readNumber = analysis.collectorNumber?.let { collectorIdentityForSourceLookup(it, numberSourceSetId) }
+        val catalogNumber = candidate.collectorNumber?.let { collectorIdentityForSourceLookup(it, numberSourceSetId) }
         val numberMatch = readNumber != null && readNumber == catalogNumber
         val readPrintedTotal = analysis.collectorNumber?.substringAfter('/', "")?.filter(Char::isDigit)?.toIntOrNull()
         val printedTotalMatch = readPrintedTotal != null && candidate.mainSetSize == readPrintedTotal
@@ -45,12 +48,6 @@ internal object CardRecognitionRanker {
         .lowercase()
         .replace("ß", "ss")
         .filter(Char::isLetterOrDigit)
-    private fun canonicalNumber(value: String): String {
-        val primary = value.substringBefore('/').uppercase().filter(Char::isLetterOrDigit)
-        val prefix = primary.takeWhile(Char::isLetter)
-        val digits = primary.dropWhile(Char::isLetter).trimStart('0').ifBlank { if (primary.any(Char::isDigit)) "0" else "" }
-        return prefix + digits
-    }
     private fun similarity(left: String, right: String): Float {
         if (left.isBlank() || right.isBlank()) return 0f
         if (left == right || left.contains(right) || right.contains(left)) return 1f

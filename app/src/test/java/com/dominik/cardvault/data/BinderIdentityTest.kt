@@ -42,6 +42,29 @@ class BinderIdentityTest {
         assert(successor != "base")
     }
 
+    @Test
+    fun `modern cached printing ids decode only from their source backed set and number`() {
+        listOf("holo", "reverse", "special-print-42").forEach { printing ->
+            assertEquals("sv08-5-001", sourceCardIdFromCatalogReference(
+                "tcgdex-sv08-5-sv08-5-001-$printing", "sv08-5", "1/131",
+            ))
+        }
+        assertEquals("svp-173", sourceCardIdFromCatalogReference("tcgdex-svp-svp-173-holo", "svp", "173"))
+    }
+
+    @Test
+    fun `unrelated or unverified stems are not stripped as printing suffixes`() {
+        assertEquals("sv08-5-001-special", sourceCardIdFromCatalogReference(
+            "tcgdex-sv08-5-sv08-5-001-special", "sv08-5", "002",
+        ))
+        assertEquals("other-001-special", sourceCardIdFromCatalogReference(
+            "tcgdex-sv08-5-other-001-special", "sv08-5", "001",
+        ))
+        assertEquals("sv08-5-001-holo", sourceCardIdFromCatalogReference(
+            "tcgdex-sv08-5-sv08-5-001-holo", "sv08-5",
+        ))
+    }
+
     private fun occupied(updatedAt: Long, deletedAt: Long?) = CollectionEntryEntity(
         cardId = "card",
         quantity = 1,

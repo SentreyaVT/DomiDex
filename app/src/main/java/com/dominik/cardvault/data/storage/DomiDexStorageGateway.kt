@@ -4,6 +4,9 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
+import com.dominik.cardvault.auth.canUseFirebaseAppBackend
+import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
+import com.dominik.cardvault.auth.currentFirebaseEntitlementAccount
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.storage.FirebaseStorage
@@ -131,7 +134,17 @@ internal class FirebaseDomiDexStorageGateway(
     private val uploadMutex = Mutex()
 
     suspend fun uploadCatalogContribution(source: File, appVersion: String): StorageUploadResult = uploadMutex.withLock {
-        val uid = auth.currentUser?.uid ?: return@withLock StorageUploadResult.Failed(StorageFailureReason.NOT_SIGNED_IN)
+        val canonicalUid = canonicalCollectionOwnerUid(auth.currentUser)
+            ?: return@withLock StorageUploadResult.Failed(StorageFailureReason.NOT_SIGNED_IN)
+        val account = try {
+            auth.currentFirebaseEntitlementAccount(forceRefresh = false)
+        } catch (error: Throwable) {
+            return@withLock StorageUploadResult.Failed(error.toStorageFailureReason())
+        } ?: return@withLock StorageUploadResult.Failed(StorageFailureReason.NOT_SIGNED_IN)
+        if (!canUseFirebaseAppBackend(account.uid, canonicalUid, account.entitlements)) {
+            return@withLock StorageUploadResult.Failed(StorageFailureReason.PERMISSION_DENIED)
+        }
+        val uid = account.uid
         val validation = StorageImagePolicy.validate(source)
         val image = validation.getOrElse { error ->
             return@withLock StorageUploadResult.Failed(error.toStorageFailureReason())
@@ -174,7 +187,11 @@ internal class FirebaseDomiDexStorageGateway(
     }
 
     suspend fun deleteCatalogContribution(receipt: CatalogContributionReceipt): Boolean {
-        val uid = auth.currentUser?.uid ?: return false
+        val canonicalUid = canonicalCollectionOwnerUid(auth.currentUser) ?: return false
+        val account = runCatching { auth.currentFirebaseEntitlementAccount(forceRefresh = false) }
+            .getOrNull() ?: return false
+        if (!canUseFirebaseAppBackend(account.uid, canonicalUid, account.entitlements)) return false
+        val uid = account.uid
         val image = ValidatedStorageImage("image/${receipt.extension}", receipt.extension, receipt.contentHash)
         val remotePath = DomiDexStoragePaths.catalogContribution(uid, image) ?: return false
         return runCatching { storage.reference.child(remotePath).delete().awaitStorageTask(); true }

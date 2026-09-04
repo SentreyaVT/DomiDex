@@ -1,14 +1,21 @@
 package com.dominik.cardvault.data
 
+import androidx.room.InvalidationTracker
 import androidx.room.withTransaction
 import com.dominik.cardvault.data.local.*
 import com.dominik.cardvault.model.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.lang.ref.WeakReference
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.UUID
@@ -22,7 +29,20 @@ class RoomCollectionRepository(
     private val onKeepCloudConflicts: suspend () -> Int = { 0 },
 ) : CollectionRepository {
     private val dao = database.cardVaultDao()
+    private val catalogQueries = CatalogQueryCache<CatalogSearchResult>()
+    private val catalogObserverMutex = Mutex()
+    private var catalogObserverRegistered = false
+
+    private suspend fun ensureCatalogObserver() = catalogObserverMutex.withLock {
+        if (!catalogObserverRegistered) {
+            // Registration synchronizes Room's triggers, so the first search calls this on IO.
+            database.invalidationTracker.addObserver(CatalogQueryObserver(database.invalidationTracker, catalogQueries))
+            catalogObserverRegistered = true
+        }
+    }
+
     override val catalogSyncStatus: Flow<CatalogSyncStatus> = dao.observeSyncState(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE).map { state ->
+        catalogQueries.observeRevision(state?.lastSuccessAtEpochMillis)
         state?.let { CatalogSyncStatus(it.status, it.lastSuccessAtEpochMillis, it.dataCreatedAt, it.catalogProductCount, it.priceRecordCount, it.errorMessage) }
             ?: CatalogSyncStatus("IDLE", null, null, 0, 0, null)
     }
@@ -73,7 +93,7 @@ class RoomCollectionRepository(
         }
             PortfolioSummary(cards, buildHistory(rows, prices, cardmarketPrices))
         }
-    }
+    }.flowOn(Dispatchers.Default)
 
     override suspend fun seedIfNeeded() = database.withTransaction {
         // Historical builds identified demo rows only by real card ids. Deleting those ids can
@@ -368,11 +388,11 @@ class RoomCollectionRepository(
                 acquisitionDateEpochDay = null, accent = accentFor(row.name),
                 externalProductId = row.externalProductId, imageUrl = row.imageUrl,
                 sourceSetId = row.setId.takeIf { sourceBacked },
-                sourceCardId = sourceCardIdFromCatalogReference(row.cardId, row.setId),
+                sourceCardId = sourceCardIdFromCatalogReference(row.cardId, row.setId, row.collectorNumber),
             )
         }
     override suspend fun binderReferenceCount(setName: String): Int =
-        dao.germanMasterSetReferences(setName).size.takeIf { it > 0 }
+        dao.germanMasterSetReferenceCount(setName).takeIf { it > 0 }
             ?: dao.catalogReferenceCountForSet(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, setName)
 
     override suspend fun ensureGermanMasterSetBinders(sets: List<GermanMasterSetDefinition>) = database.withTransaction {
@@ -406,22 +426,27 @@ class RoomCollectionRepository(
         // The DAO performs a LIKE query, so preserve the meaningful name parts
         // but let punctuation bridge formatting differences.
         val lookup = input.replace(Regex("[^\\p{L}\\p{N}]+"), "%").trim('%')
-        return dao.searchCatalog(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, lookup, limit).map {
-            CatalogSearchResult(
-                productId = it.externalProductId,
-                name = it.name,
-                expansionId = it.setId,
-                trendPriceEur = it.marketValueMinor?.div(100.0),
-                currency = it.currency,
-                visualSetName = it.setName,
-                collectorNumber = it.collectorNumber,
-                imageUrl = it.imageUrl,
-                language = it.language,
-                finish = it.finish,
-                variant = it.variant,
-                rarity = it.rarity,
-                holoTrendPriceEur = it.holoMarketValueMinor?.div(100.0),
-            )
+        return withContext(Dispatchers.IO) {
+            ensureCatalogObserver()
+            catalogQueries.getOrLoad(lookup, limit) {
+                dao.searchCatalog(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, lookup, limit).map {
+                    CatalogSearchResult(
+                        productId = it.externalProductId,
+                        name = it.name,
+                        expansionId = it.setId,
+                        trendPriceEur = it.marketValueMinor?.div(100.0),
+                        currency = it.currency,
+                        visualSetName = it.setName,
+                        collectorNumber = it.collectorNumber,
+                        imageUrl = it.imageUrl,
+                        language = it.language,
+                        finish = it.finish,
+                        variant = it.variant,
+                        rarity = it.rarity,
+                        holoTrendPriceEur = it.holoMarketValueMinor?.div(100.0),
+                    )
+                }
+            }
         }
     }
     override suspend fun linkCatalogProduct(entryId: Long, productId: Long?) {
@@ -559,6 +584,19 @@ class RoomCollectionRepository(
     }
 }
 
+/** Room retains this small wrapper, but never the repository or its cached result lists. */
+private class CatalogQueryObserver(
+    private val tracker: InvalidationTracker,
+    cache: CatalogQueryCache<CatalogSearchResult>,
+) : InvalidationTracker.Observer("catalog_cards", "raw_price_snapshots") {
+    private val cacheReference = WeakReference(cache)
+
+    override fun onInvalidated(tables: Set<String>) {
+        val cache = cacheReference.get()
+        if (cache == null) tracker.removeObserver(this) else cache.invalidate()
+    }
+}
+
 /** Keeps Binder identity independent from translated or differently formatted set names. */
 internal fun binderSetKey(cardmarketExpansionId: String?, displaySetName: String, sourceSetId: String? = null): String {
     // Cardmarket expansion ids are numeric. Rejecting arbitrary labels here
@@ -596,10 +634,19 @@ internal fun sourceCatalogCardId(source: SourceCardIdentity): String =
     "tcgdex-${source.setId}-${source.cardId}"
 
 /** Recovers the canonical card id from source-backed cached master-set print slots. */
-internal fun sourceCardIdFromCatalogReference(catalogCardId: String, sourceSetId: String): String? {
+internal fun sourceCardIdFromCatalogReference(catalogCardId: String, sourceSetId: String, collectorNumber: String? = null): String? {
     val prefix = "tcgdex-${sourceSetId.lowercase()}-"
     if (!catalogCardId.lowercase().startsWith(prefix)) return null
     val encoded = catalogCardId.substring(prefix.length)
+    // Modern source printing IDs are not limited to the legacy foil suffixes.
+    // Decode only a stem confirmed by this cached row's own set and number;
+    // this changes no stored collection entry or source identity.
+    val stem = Regex("^(${Regex.escape(sourceSetId)}-([a-z0-9]+))-.+$", RegexOption.IGNORE_CASE).matchEntire(encoded)
+    fun numberKey(value: String) = value.substringBefore('/').filter(Char::isLetterOrDigit).trimStart('0').lowercase()
+    if (stem != null && !collectorNumber.isNullOrBlank() &&
+        stem.groupValues[2].any(Char::isDigit) && numberKey(stem.groupValues[2]) == numberKey(collectorNumber)) {
+        return stem.groupValues[1]
+    }
     val printingSuffixes = listOf(
         "-1steditionholofoil", "-unlimitedholofoil", "-reverseholofoil",
         "-1stedition", "-unlimited", "-holofoil",

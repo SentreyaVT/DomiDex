@@ -14,7 +14,7 @@ const val SYNC_CLEAN = "CLEAN"
 const val SYNC_CONFLICT = "CONFLICT"
 const val SYNC_ERROR = "ERROR"
 
-@Entity(tableName = "catalog_cards", indices = [Index(value = ["tcg", "setId", "collectorNumber", "language", "finish", "variant"]), Index(value = ["externalSource", "externalProductId"], unique = true)])
+@Entity(tableName = "catalog_cards", indices = [Index(value = ["tcg", "setId", "collectorNumber", "language", "finish", "variant"]), Index(value = ["externalSource", "externalProductId"], unique = true), Index(value = ["externalSource", "externalProductId", "name"])])
 data class CatalogCardEntity(
     @PrimaryKey val id: String,
     val tcg: String,

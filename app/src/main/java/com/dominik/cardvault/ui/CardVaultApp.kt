@@ -1,7 +1,6 @@
 package com.dominik.cardvault.ui
 
 import android.Manifest
-import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -74,6 +73,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
@@ -90,11 +90,10 @@ import androidx.core.content.pm.PackageInfoCompat
 import com.dominik.cardvault.BuildConfig
 import com.dominik.cardvault.R
 import com.dominik.cardvault.auth.FirebaseGoogleAuthGateway
-import com.dominik.cardvault.auth.FirebaseGitHubAuthGateway
 import com.dominik.cardvault.auth.GoogleAccountState
 import com.dominik.cardvault.auth.GoogleLoginResult
-import com.dominik.cardvault.auth.GitHubLoginResult
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
+import com.dominik.cardvault.auth.currentFirebaseEntitlementAccount
 import com.dominik.cardvault.model.*
 import com.dominik.cardvault.data.catalog.PokemonSet
 import com.dominik.cardvault.data.catalog.PokemonPrintVariant
@@ -115,8 +114,6 @@ import com.dominik.cardvault.data.storage.StorageUploadResult
 import com.dominik.cardvault.discord.DiscordDevUpdatePayload
 import com.dominik.cardvault.discord.DiscordDevUpdatePublishResult
 import com.dominik.cardvault.discord.UnconfiguredDiscordDevUpdatePublisher
-import com.dominik.cardvault.updates.AndroidUpdateCheckResult
-import com.dominik.cardvault.updates.UnconfiguredAndroidUpdateGateway
 import com.dominik.cardvault.ui.theme.*
 import coil3.compose.AsyncImage
 import java.text.NumberFormat
@@ -136,6 +133,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -161,17 +159,16 @@ private data class VisualCardMarketPrice(val trendPriceEur: Double?, val exact: 
 private val relaxedTutorialSteps = listOf(
     TutorialStep("Dein Binder", "Hier siehst du deine Sets wie in einem echten Album. Dunkle Karten sind noch nicht in deiner Sammlung – antippen zeigt trotzdem ihre Details.", Destination.BINDER),
     TutorialStep("Karte scannen", "Karte ruhig in den Rahmen legen und Aufnahme drücken. DomiDex liest unten Set-Kürzel und Nummer; bei Unsicherheit wählst du sie einfach aus.", Destination.SCANNER),
-    TutorialStep("Centering prüfen", "Für eine ruhige Vorab-Prüfung nimmst du Vorder- und Rückseite getrennt auf. Außen- und Innenrahmen lassen sich danach präzise verschieben.", Destination.GRADING),
+    TutorialStep("Zustand ermitteln – bald im Web", "Die Zustandsermittlung kommt mit einem sehr baldigen Update in die DomiDex-Web-App. In der Android-App ist diese Funktion nicht verfügbar.", Destination.DASHBOARD),
     TutorialStep("Alles bei dir", "Preise, Binder und Konto findest du in Settings. Deine Sammlung bleibt lokal nutzbar, auch ohne Anmeldung.", Destination.SETTINGS),
 )
 
-@Composable fun CardVaultApp(repository: CollectionRepository, refreshCatalog: () -> Unit = {}, contentUpdateState: StateFlow<ContentUpdateState>? = null) {
+@Composable fun CardVaultApp(repository: CollectionRepository, refreshCatalog: () -> Unit = {}, contentUpdateState: StateFlow<ContentUpdateState>? = null, localDataReady: Boolean = true) {
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences("cardvault_ui", Context.MODE_PRIVATE) }
     var focusChoice by rememberSaveable { mutableStateOf(preferences.getString("dashboard_focus", "auto") ?: "auto") }
     var destination by rememberSaveable { mutableStateOf(Destination.DASHBOARD) }
-    // A short launch moment is intentionally shown on every cold app start while
-    // local data, scheduled sync and authentication state warm up in parallel.
+    // Only actual local initialization gates entry. Catalogue networking stays in the background.
     var showArrival by rememberSaveable { mutableStateOf(true) }
     var showTutorialPrompt by rememberSaveable { mutableStateOf(false) }
     var tutorialStep by rememberSaveable { mutableIntStateOf(-1) }
@@ -196,11 +193,12 @@ private val relaxedTutorialSteps = listOf(
             label = "domidex-destination",
         ) { shownDestination ->
             when (shownDestination) {
-                Destination.DASHBOARD -> DashboardScreen(portfolio, binders, contentUpdates, focusChoice, { choice -> focusChoice = choice; preferences.edit().putString("dashboard_focus", choice).apply() }, openBinder = { destination = Destination.BINDER }, openScanner = { destination = Destination.SCANNER }, openGrading = { destination = Destination.GRADING })
+                Destination.DASHBOARD -> DashboardScreen(portfolio, binders, contentUpdates, focusChoice, { choice -> focusChoice = choice; preferences.edit().putString("dashboard_focus", choice).apply() }, openBinder = { destination = Destination.BINDER }, openScanner = { destination = Destination.SCANNER })
                 Destination.SCANNER -> ScannerScreen(repository) { destination = Destination.DASHBOARD }
                 Destination.BINDER -> BinderScreen(portfolio.cards, repository)
                 Destination.COLLECTION -> CollectionScreen(portfolio.cards, repository)
-                Destination.GRADING -> GradingScreen()
+                // Retain the destination for old saved navigation, but never reopen the Android tool.
+                Destination.GRADING -> GradingWebNotice(Modifier.padding(CardVaultSpacing.screen))
                 Destination.SETTINGS -> SettingsScreen(repository, portfolio, refreshCatalog)
             }
         }
@@ -209,7 +207,7 @@ private val relaxedTutorialSteps = listOf(
             enter = fadeIn(animationSpec = tween(durationMillis = 180)),
             exit = fadeOut(animationSpec = tween(durationMillis = 320)),
         ) {
-            ArrivalMoment(onContinue = {
+            ArrivalMoment(ready = localDataReady, onContinue = {
                 preferences.edit().putBoolean("arrival_seen", true).apply()
                 showArrival = false
                 if (!preferences.getBoolean("relaxed_tutorial_answered_v1", false)) showTutorialPrompt = true
@@ -317,35 +315,49 @@ private val relaxedTutorialSteps = listOf(
     var showAdminTools by rememberSaveable { mutableStateOf(false) }
     val firebaseAuth = remember { FirebaseAuth.getInstance() }
     var accountActive by remember { mutableStateOf(canonicalCollectionOwnerUid(firebaseAuth.currentUser) != null) }
+    var adminAllowed by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     DisposableEffect(firebaseAuth) {
-        val listener = FirebaseAuth.AuthStateListener { accountActive = canonicalCollectionOwnerUid(it.currentUser) != null }
-        firebaseAuth.addAuthStateListener(listener)
-        onDispose { firebaseAuth.removeAuthStateListener(listener) }
+        var roleCheck: Job? = null
+        val listener = FirebaseAuth.IdTokenListener { auth ->
+            accountActive = canonicalCollectionOwnerUid(auth.currentUser) != null
+            adminAllowed = false
+            showAdminTools = false
+            roleCheck?.cancel()
+            if (BuildConfig.DEBUG && accountActive) roleCheck = scope.launch {
+                try {
+                    adminAllowed = auth.currentFirebaseEntitlementAccount()?.entitlements?.admin == true
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { adminAllowed = false }
+            }
+        }
+        firebaseAuth.addIdTokenListener(listener)
+        onDispose { roleCheck?.cancel(); firebaseAuth.removeIdTokenListener(listener) }
     }
     data class SettingEntry(val title: String, val subtitle: String, val icon: DomiIconKind, val value: String? = null)
     val groups = listOf(
-        "Konto" to listOf(
+        "Konto & Datenschutz" to listOf(
             SettingEntry("Konto", if (accountActive) "Google-Anmeldung auf diesem Gerät aktiv" else "Optional · Sammlung bleibt lokal nutzbar", DomiIconKind.PROFILE, if (accountActive) "Aktiv" else null),
+            SettingEntry("Datenschutz", "Datenschutzerklärung und deine Daten", DomiIconKind.SHIELD),
+            SettingEntry("Scanner-Verbesserung", "Einwilligung ansehen und ändern", DomiIconKind.SCAN),
         ),
         "DomiDex" to listOf(
             SettingEntry("App", "Sprache und lokale Inhalte", DomiIconKind.HOME, "Deutsch"),
-            SettingEntry("Update", "Aktuellste DomiDex-Version sicher prüfen", DomiIconKind.SYNC),
+            SettingEntry("Update", "App-Updates über Google Play", DomiIconKind.SYNC),
             SettingEntry("Scanner", "Kamera, Fotos und Erkennung", DomiIconKind.SCAN),
         ),
         "Sammlung" to listOf(
-            SettingEntry("Binder & Sync", if (accountActive) "Offline nutzbar · kontogebunden synchronisiert" else "Lokale Sammlung und Katalogstatus", DomiIconKind.BINDER, when (sync.state) {
-                "SUCCESS" -> "Aktuell"
-                "RUNNING" -> "Läuft"
-                "ERROR" -> "Prüfen"
-                else -> "Lokal"
-            }),
+            SettingEntry("Binder & Sync", if (accountActive) "Kontogebundener Abgleich · Status unter Konto" else "Lokale Sammlung und Katalogstatus", DomiIconKind.BINDER, if (accountActive) "Konto" else "Lokal"),
             SettingEntry("Preise", "Cardmarket-Quelle und Aktualität", DomiIconKind.MARKET, "Cardmarket"),
             SettingEntry("Sammlung & Backup", "Lokale Sicherung als DomiDex-Datei", DomiIconKind.COLLECTION),
         ),
-        "Sicherheit & Hilfe" to listOf(
-            SettingEntry("Datenschutz", "Deine Daten und Einwilligungen", DomiIconKind.SHIELD),
+        "Support & App-Informationen" to listOf(
+            SettingEntry("Support kontaktieren", "Fragen und Datenschutzkontakt", DomiIconKind.INFO),
             SettingEntry("Hilfe", "Schnellstart, Korrekturen und Support", DomiIconKind.INFO),
-            SettingEntry("Über DomiDex", "Wofür DomiDex steht", DomiIconKind.CARD),
+            SettingEntry("Über DomiDex", "Pre-Beta · privat · Non-Profit · Version & Build", DomiIconKind.CARD),
+        ),
+        "Konto- & Datenverwaltung" to listOf(
+            SettingEntry("Konto löschen", "Löschanfrage · nichts wird sofort gelöscht", DomiIconKind.SHIELD),
         ),
     )
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
@@ -363,20 +375,21 @@ private val relaxedTutorialSteps = listOf(
                 }
             }
         }
-        if (BuildConfig.DEBUG) {
+        if (BuildConfig.DEBUG && adminAllowed) {
             item {
                 DomiGlassCard(Modifier.fillMaxWidth()) {
-                    DomiSettingRow(DomiIconKind.SHIELD, "Admin / Entwickler", "Nur in internen Debug-Builds") { showAdminTools = true }
+                    DomiSettingRow(DomiIconKind.SHIELD, "Admin / Entwickler", "Intern · bestätigte Admin-Berechtigung") { showAdminTools = true }
                 }
             }
         }
     }
     detail?.let { section ->
         if (section == "Konto") AccountSettingsDialog(repository, onDismiss = { detail = null })
+        else if (section == "Konto löschen") AccountDeletionRequestDialog(onDismiss = { detail = null })
         else if (section == "Sammlung & Backup") CollectionBackupDialog(repository, portfolio.cards, onDismiss = { detail = null })
         else SettingsDetailDialog(section, sync, context, onRefresh = refreshCatalog, onDismiss = { detail = null })
     }
-    if (BuildConfig.DEBUG && showAdminTools) {
+    if (BuildConfig.DEBUG && adminAllowed && showAdminTools) {
         AdminSupportDialog(context, portfolio, sync, showDiscordDevUpdate = true, onDismiss = { showAdminTools = false })
     }
 }
@@ -394,9 +407,26 @@ private val relaxedTutorialSteps = listOf(
     var syncWorking by remember { mutableStateOf(false) }
     var claimMessage by remember { mutableStateOf<String?>(null) }
     var syncMessage by remember { mutableStateOf<String?>(null) }
+    var accountSessionGeneration by remember { mutableStateOf(0L) }
     val scope = rememberCoroutineScope()
+    fun isCurrentAccountAction(uid: String, generation: Long): Boolean =
+        generation == accountSessionGeneration && canonicalCollectionOwnerUid(auth.currentUser) == uid
     DisposableEffect(auth) {
-        val listener = FirebaseAuth.AuthStateListener { signedIn = canonicalCollectionOwnerUid(it.currentUser) != null }
+        var previousUid = canonicalCollectionOwnerUid(auth.currentUser)
+        val listener = FirebaseAuth.AuthStateListener {
+            val uid = canonicalCollectionOwnerUid(it.currentUser)
+            // Also invalidate callbacks if the same account starts a new authentication session.
+            accountSessionGeneration++
+            signedIn = uid != null
+            if (uid != previousUid) {
+                confirmClaim = false
+                confirmKeepLocal = false
+                confirmKeepCloud = false
+                claimMessage = null
+                syncMessage = null
+            }
+            previousUid = uid
+        }
         auth.addAuthStateListener(listener)
         onDispose { auth.removeAuthStateListener(listener) }
     }
@@ -406,8 +436,14 @@ private val relaxedTutorialSteps = listOf(
         text = { LazyColumn(modifier = Modifier.heightIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item { Text("Mit deinem Google-Konto erhält deine Sammlung einen eigenen, geschützten Synchronisationsbereich.", color = VaultTextMuted, fontSize = 12.sp) }
             item { GoogleAccountCard() }
+            item { SettingsInfoBlock("Firebase / Sync-Status", when {
+                !signedIn -> "Nicht angemeldet · Gastbestand bleibt lokal. Keine Kontosynchronisierung."
+                syncErrors > 0 -> "$syncErrors lokale Syncfehler gemeldet. Änderungen bleiben auf diesem Gerät."
+                syncConflicts > 0 -> "$syncConflicts Konflikte warten auf deine Entscheidung."
+                else -> "Firebase-Anmeldung aktiv · keine lokalen Syncfehler gemeldet. Das bestätigt noch keine vollständig abgeschlossene Cloud-Übertragung."
+            }) }
             item { SettingsInfoBlock("Sammlung & Offline-Modus", "Angemeldete Kartenänderungen werden zuerst sicher lokal gespeichert und bei verfügbarer Verbindung kontogebunden mit Firebase abgeglichen.") }
-            if (syncConflicts > 0) {
+            if (signedIn && syncConflicts > 0) {
                 item { SettingsInfoBlock("Synchronisationskonflikt", "$syncConflicts lokale Änderungen treffen auf eine neuere Cloud-Fassung. DomiDex überschreibt keine Seite automatisch.") }
                 item { OutlinedButton(
                     onClick = { confirmKeepLocal = true },
@@ -420,15 +456,23 @@ private val relaxedTutorialSteps = listOf(
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Aktuelle Cloud-Fassung behalten") } }
             }
-            if (syncErrors > 0) {
+            if (signedIn && syncErrors > 0) {
                 item { SettingsInfoBlock("Synchronisierung angehalten", "$syncErrors Änderungen konnten wegen einer Konto-, Sicherheitsregel- oder Datenkonfiguration nicht übertragen werden. Sie bleiben lokal gespeichert.") }
                 item { OutlinedButton(
                     onClick = {
+                        val actionUid = canonicalCollectionOwnerUid(auth.currentUser) ?: return@OutlinedButton
+                        val actionGeneration = accountSessionGeneration
                         syncWorking = true
                         scope.launch {
                             runCatching { repository.retrySyncErrors() }
-                                .onSuccess { count -> syncMessage = if (count > 0) "$count Änderungen werden erneut gesendet." else "Keine übertragbare Änderung konnte erneut gestartet werden." }
-                                .onFailure { syncMessage = "Die Synchronisierung konnte nicht erneut gestartet werden." }
+                                .onSuccess { count ->
+                                    if (isCurrentAccountAction(actionUid, actionGeneration)) {
+                                        syncMessage = if (count > 0) "$count Änderungen werden erneut gesendet." else "Keine übertragbare Änderung konnte erneut gestartet werden."
+                                    }
+                                }
+                                .onFailure {
+                                    if (isCurrentAccountAction(actionUid, actionGeneration)) syncMessage = "Die Synchronisierung konnte nicht erneut gestartet werden."
+                                }
                             syncWorking = false
                         }
                     },
@@ -461,11 +505,17 @@ private val relaxedTutorialSteps = listOf(
             TextButton(
                 enabled = !claiming && signedIn,
                 onClick = {
+                    val actionUid = canonicalCollectionOwnerUid(auth.currentUser) ?: return@TextButton
+                    val actionGeneration = accountSessionGeneration
                     claiming = true
                     scope.launch {
                         runCatching { repository.claimGuestCollectionForCurrentUser() }
-                            .onSuccess { count -> claimMessage = "$count Einträge wurden übernommen." }
-                            .onFailure { claimMessage = "Die Übernahme konnte nicht abgeschlossen werden. Bitte erneut versuchen." }
+                            .onSuccess { count ->
+                                if (isCurrentAccountAction(actionUid, actionGeneration)) claimMessage = "$count Einträge wurden übernommen."
+                            }
+                            .onFailure {
+                                if (isCurrentAccountAction(actionUid, actionGeneration)) claimMessage = "Die Übernahme konnte nicht abgeschlossen werden. Bitte erneut versuchen."
+                            }
                         claiming = false
                         confirmClaim = false
                     }
@@ -482,11 +532,19 @@ private val relaxedTutorialSteps = listOf(
             TextButton(
                 enabled = !syncWorking && signedIn,
                 onClick = {
+                    val actionUid = canonicalCollectionOwnerUid(auth.currentUser) ?: return@TextButton
+                    val actionGeneration = accountSessionGeneration
                     syncWorking = true
                     scope.launch {
                         runCatching { repository.retryConflictsKeepingLocal() }
-                            .onSuccess { count -> syncMessage = if (count > 0) "$count lokale Änderungen werden bewusst erneut gesendet." else "Kein bearbeitbarer Konflikt wurde verändert." }
-                            .onFailure { syncMessage = "Der Konflikt konnte nicht erneut gesendet werden." }
+                            .onSuccess { count ->
+                                if (isCurrentAccountAction(actionUid, actionGeneration)) {
+                                    syncMessage = if (count > 0) "$count lokale Änderungen werden bewusst erneut gesendet." else "Kein bearbeitbarer Konflikt wurde verändert."
+                                }
+                            }
+                            .onFailure {
+                                if (isCurrentAccountAction(actionUid, actionGeneration)) syncMessage = "Der Konflikt konnte nicht erneut gesendet werden."
+                            }
                         syncWorking = false
                         confirmKeepLocal = false
                     }
@@ -503,11 +561,19 @@ private val relaxedTutorialSteps = listOf(
             TextButton(
                 enabled = !syncWorking && signedIn,
                 onClick = {
+                    val actionUid = canonicalCollectionOwnerUid(auth.currentUser) ?: return@TextButton
+                    val actionGeneration = accountSessionGeneration
                     syncWorking = true
                     scope.launch {
                         runCatching { repository.keepCloudVersionsForConflicts() }
-                            .onSuccess { count -> syncMessage = if (count > 0) "$count aktuelle Cloud-Fassungen wurden übernommen." else "Kein Konflikt konnte aus der Cloud übernommen werden." }
-                            .onFailure { syncMessage = "Die Cloud-Fassung konnte nicht sicher geladen werden." }
+                            .onSuccess { count ->
+                                if (isCurrentAccountAction(actionUid, actionGeneration)) {
+                                    syncMessage = if (count > 0) "$count aktuelle Cloud-Fassungen wurden übernommen." else "Kein Konflikt konnte aus der Cloud übernommen werden."
+                                }
+                            }
+                            .onFailure {
+                                if (isCurrentAccountAction(actionUid, actionGeneration)) syncMessage = "Die Cloud-Fassung konnte nicht sicher geladen werden."
+                            }
                         syncWorking = false
                         confirmKeepCloud = false
                     }
@@ -534,9 +600,12 @@ private val relaxedTutorialSteps = listOf(
             }
             "Binder & Sync" -> SettingsInfoBlock("Dein Stand", "${if (online) "Online" else "Offline"}. Binder bleiben lokal nutzbar; angemeldete Änderungen werden kontogebunden abgeglichen, sobald eine Verbindung besteht. Katalogstatus: ${sync.state}.")
             "Preise" -> SettingsInfoBlock("Eine Quelle, klar benannt", "Der Marktwert nutzt ausschließlich den zuletzt bekannten Cardmarket-Trendpreis eines ausdrücklich zugeordneten Produkts. Ohne exakte Zuordnung zeigt DomiDex keinen Preis; tatsächliche Verkaufspreise können abweichen.")
+            "Scanner-Verbesserung" -> ScannerAutomaticReportControl(rememberScannerReportFlow(), showAllAccess = true)
+            "Support kontaktieren" -> SupportSettingsContent()
             "Datenschutz" -> {
+                PrivacySettingsContent()
                 SettingsInfoBlock("Sammlung und Firebase", "Ohne Google-Anmeldung bleibt dein Bestand lokal. Mit Google-Anmeldung werden Kartenidentität, Anzahl, Variante, Zustand, Notiz, Binder- und Kaufangaben kontogebunden mit Firebase abgeglichen. Ein älterer lokaler Bestand wird erst nach deiner ausdrücklichen Bestätigung übernommen.")
-                SettingsInfoBlock("Kamera und Galerie", "Diese Berechtigungen nutzt DomiDex erst nach deiner Aktion zum Scannen oder Prüfen. Scanner-Aufnahmen und Diagnosebilder gehören nicht zur Sammlungssynchronisierung. Eine ausdrücklich angebotene Community-Fotoübermittlung startet nur nach deiner separaten Einwilligung.")
+                SettingsInfoBlock("Kamera und Galerie", "Scanner-Aufnahmen gehören nicht zur Sammlungssynchronisierung. Berechtigte Tester können Fehlscans über „An ScanLab schicken“ separat senden. Erst nach ausdrücklicher Bestätigung wird das gewählte Foto hochgeladen. Es findet kein automatischer Fehlscan-Upload statt.")
                 SettingsInfoBlock("Google-Anmeldung", "Firebase Authentication verarbeitet die für deine Anmeldung notwendigen Kontodaten. DomiDex erhält keine Zahlungsdaten und keine geheimen Google-Zugangsdaten. Andere Konten dürfen deinen synchronisierten Bestand nicht lesen.")
                 SettingsInfoBlock("Deine DSGVO-Rechte", "Du kannst Auskunft, Berichtigung, Löschung, Einschränkung und Datenübertragbarkeit verlangen sowie Einwilligungen widerrufen. Lokale Karten und Fotos kannst du direkt in der App beziehungsweise auf deinem Gerät löschen.")
                 SettingsInfoBlock("Vor öffentlichem Release", "Eine finale Datenschutzerklärung braucht noch die verantwortliche Stelle, Kontaktmöglichkeit, Aufbewahrungsfristen und eine Prüfung der tatsächlich aktivierten Online-Dienste. Dieser Abschnitt ist technische Transparenz, keine Rechtsberatung.")
@@ -548,6 +617,9 @@ private val relaxedTutorialSteps = listOf(
                 DiscordSupportCard(context)
             }
             else -> {
+                val version = remember(context) { installedDomiDexVersion(context) }
+                Text("Pre-Beta · privat · Non-Profit", fontWeight = FontWeight.SemiBold)
+                Text("Version ${version.name}\nBuild ${version.code}")
                 SettingsInfoBlock("DomiDex", "Dein visueller Begleiter für Pokémon-Karten: Binder zuerst, Kartenplätze nachvollziehbar, Preise klar gekennzeichnet und Scanner-Hinweise ohne falsche Gewissheit.")
                 SettingsInfoBlock("Unser Fokus", "DomiDex zeigt auch nicht besessene Karten als gedimmte Referenz, damit du deinen Fortschritt siehst – nicht nur eine Liste leerer Plätze.")
                 SettingsInfoBlock("Grenzen, die zählen", "Keine professionelle Grading-Note, keine garantierten Marktpreise und keine Behauptung einer vollständigen Welt-Kartenabdeckung ohne nachweisbare Quelle.")
@@ -559,81 +631,13 @@ private val relaxedTutorialSteps = listOf(
 }
 
 @Composable private fun AndroidUpdateSettings(context: Context) {
-    val scope = rememberCoroutineScope()
-    val gateway = remember { UnconfiguredAndroidUpdateGateway }
-    val githubGateway = remember { FirebaseGitHubAuthGateway() }
     val installedVersion = remember(context) { installedDomiDexVersion(context) }
-    var checking by rememberSaveable { mutableStateOf(false) }
-    var statusText by rememberSaveable { mutableStateOf<String?>(null) }
-    var githubAccount by remember { mutableStateOf(githubGateway.currentAccount()) }
-    var githubWorking by rememberSaveable { mutableStateOf(false) }
-    val activity = context as? Activity
-
-    SettingsInfoBlock(
-        "Installierte Version",
-        "DomiDex ${installedVersion.name} · Build ${installedVersion.code}"
-    )
-    SettingsInfoBlock(
-        "Sicher aktualisieren",
-        "DomiDex lädt Updates erst nach einer erfolgreichen, serverseitigen Berechtigungsprüfung. GitHub-Zugangsdaten werden niemals in der App gespeichert. Android zeigt vor einer Installation immer seine eigene Bestätigung an."
-    )
-    OutlinedCard(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised),
-        border = BorderStroke(1.dp, VaultOutline),
-    ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Text("GitHub-Zugang", color = MewRoseSoft, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-            Text(
-                if (githubAccount.isSignedIn) "GitHub-Sitzung auf diesem Gerät aktiv${githubAccount.displayName?.let { ": $it" } ?: "."}"
-                else "Melde dich einmal mit deinem freigegebenen GitHub-Konto an.",
-                color = VaultTextMuted,
-                fontSize = 12.sp,
-            )
-            if (!githubAccount.isSignedIn) {
-                OutlinedButton(
-                    onClick = {
-                        val host = activity ?: return@OutlinedButton
-                        githubWorking = true
-                        scope.launch {
-                            statusText = when (val result = githubGateway.signIn(host)) {
-                                is GitHubLoginResult.Success -> { githubAccount = result.account; "GitHub-Sitzung ist auf diesem Gerät aktiv." }
-                                GitHubLoginResult.Cancelled -> "GitHub-Anmeldung wurde abgebrochen."
-                                is GitHubLoginResult.Failed -> result.safeMessage
-                            }
-                            githubWorking = false
-                        }
-                    },
-                    enabled = !githubWorking && activity != null,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(if (githubWorking) "GitHub wird verbunden …" else "Mit GitHub anmelden") }
-            }
-        }
-    }
-    Button(
-        onClick = {
-            checking = true
-            statusText = null
-            scope.launch {
-                statusText = when (val result = gateway.checkForUpdate(installedVersion.code)) {
-                    AndroidUpdateCheckResult.UpToDate -> "DomiDex ist bereits auf dem neuesten Stand."
-                    is AndroidUpdateCheckResult.Available -> "Version ${result.release.versionName} ist verfügbar."
-                    is AndroidUpdateCheckResult.Unavailable -> result.reason
-                    is AndroidUpdateCheckResult.Failed -> result.safeMessage
-                }
-                checking = false
-            }
-        },
-        enabled = !checking,
-        modifier = Modifier.fillMaxWidth(),
-    ) { Text(if (checking) "Prüfung läuft …" else "Nach Update suchen") }
-    statusText?.let { message ->
-        OutlinedCard(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised),
-            border = BorderStroke(1.dp, VaultOutline),
-        ) { Text(message, modifier = Modifier.padding(14.dp), color = VaultTextMuted, fontSize = 12.sp) }
-    }
+    Text("Installierte Version", fontWeight = FontWeight.SemiBold)
+    Text("DomiDex ${installedVersion.name} · Build ${installedVersion.code}")
+    Text("App-Updates über Google Play", fontWeight = FontWeight.SemiBold)
+    Text("Neue DomiDex-Versionen erhältst du über Google Play, sobald sie für deinen Testzugang freigegeben sind. Prüfe verfügbare Updates im Play Store.", color = VaultTextMuted)
+    Text("Firebase-Synchronisierung", fontWeight = FontWeight.SemiBold)
+    Text("Firebase ist für den Datenabgleich zuständig – nicht für die Installation von App-Updates. Den Status deiner Kontosynchronisierung findest du unter Konto.", color = VaultTextMuted)
 }
 
 private data class InstalledDomiDexVersion(val name: String, val code: Long)
@@ -944,21 +948,14 @@ private fun isOnline(context: Context): Boolean {
         }
     }
     fun coverFor(name: String): String? {
+        resolveBinderSourceSet(name, grouped[name].orEmpty(), catalogSets)?.logoUrl?.takeIf(String::isNotBlank)?.let { return it }
         if (isWachsendesChaosSet(name)) return "https://www.pokemon.com/static-assets/content-assets/cms2-de-de/img/trading-card-game/series/me_series/me04/me04_logo_169_de.png"
-        val normalized = name.lowercase().filter(Char::isLetterOrDigit)
-        return catalogSets.firstOrNull { set ->
-            val candidate = set.name.lowercase().filter(Char::isLetterOrDigit)
-            candidate == normalized || candidate.contains(normalized) || normalized.contains(candidate)
-        }?.logoUrl
+        return null
     }
     fun cardCapacityFor(name: String, setCards: List<CollectionCard>): Int {
         if (isWachsendesChaosSet(name)) return 194
         localReferenceCounts[name]?.takeIf { it > 0 }?.let { return it }
-        val normalized = name.lowercase().filter(Char::isLetterOrDigit)
-        val catalogTotal = catalogSets.firstOrNull { set ->
-            val candidate = set.name.lowercase().filter(Char::isLetterOrDigit)
-            candidate == normalized || candidate.contains(normalized) || normalized.contains(candidate)
-        }?.total ?: 0
+        val catalogTotal = resolveBinderSourceSet(name, setCards, catalogSets)?.total ?: 0
         // A verified visual set defines its own binder size.  A mistyped or
         // promotional collector number must be an overflow card, never inflate
         // the official set or displace the numbered slots.
@@ -1061,7 +1058,7 @@ private fun isOnline(context: Context): Boolean {
     }
 }
 
-@Composable private fun BinderReaderScreen(
+@Composable internal fun BinderReaderScreen(
     setName: String,
     cards: List<CollectionCard>,
     cardCapacity: Int,
@@ -1069,10 +1066,12 @@ private fun isOnline(context: Context): Boolean {
     repository: CollectionRepository,
     onBack: () -> Unit,
     onHideReferenceBinder: (() -> Unit)? = null,
+    visualCatalog: PokemonVisualCatalog = remember { PokemonVisualCatalog() },
 ) {
-    val visualCatalog = remember { PokemonVisualCatalog() }
     var setReferences by remember(setName) { mutableStateOf<List<CollectionCard>>(emptyList()) }
     var sourceSetCards by remember(setName) { mutableStateOf<List<PokemonVisualCard>>(emptyList()) }
+    var refreshedCoverUrl by remember(setName) { mutableStateOf<String?>(null) }
+    val displayedCoverUrl = fallbackCardImageUrl(refreshedCoverUrl, coverUrl)
     var referencesLoading by remember(setName) { mutableStateOf(true) }
     var refreshVersion by rememberSaveable(setName) { mutableIntStateOf(0) }
     LaunchedEffect(setName, refreshVersion) {
@@ -1090,15 +1089,12 @@ private fun isOnline(context: Context): Boolean {
             // Keep an explicit local fallback visible while the verified refresh is
             // running or when the device is offline.
             setReferences = localReferences
-            val normalized = setName.lowercase().filter(Char::isLetterOrDigit)
-            val set = visualCatalog.sets().firstOrNull { candidate ->
-                val candidateName = candidate.name.lowercase().filter(Char::isLetterOrDigit)
-                candidateName == normalized || candidateName.contains(normalized) || normalized.contains(candidateName)
-            }
+            val set = resolveBinderSourceSet(setName, cards, visualCatalog.sets())
             if (set == null) {
                 setReferences = localReferences
                 return@LaunchedEffect
             }
+            refreshedCoverUrl = set.logoUrl
             val downloadedCards = visualCatalog.cards(set)
             sourceSetCards = downloadedCards
             // Cache source metadata and licensed image URLs locally for this
@@ -1162,11 +1158,14 @@ private fun isOnline(context: Context): Boolean {
     val faces = remember(arrangedCards, binderPageCount) {
         buildList {
             add(BinderFace.White)
-            repeat(binderPageCount) { pageIndex -> add(BinderFace.Pockets(arrangedCards.drop(pageIndex * 9).take(9))) }
+            arrangedCards.chunked(9).ifEmpty { listOf(emptyList()) }.forEach { add(BinderFace.Pockets(it)) }
             add(BinderFace.White)
         }
     }
     var page by rememberSaveable(setName) { mutableIntStateOf(0) }
+    // Refresh can temporarily replace the full set with a smaller local reference list.
+    // Reconcile presentation state before rendering or handling page navigation.
+    if (page !in faces.indices) page = page.coerceIn(0, faces.lastIndex)
     var selectedCard by remember { mutableStateOf<CollectionCard?>(null) }
     var addingReferenceId by remember { mutableStateOf<String?>(null) }
     var editingCard by remember { mutableStateOf<CollectionCard?>(null) }
@@ -1212,10 +1211,10 @@ private fun isOnline(context: Context): Boolean {
                     fontSize = 10.sp,
                 )
             }
-            Surface(onClick = { refreshVersion++ }, enabled = !referencesLoading, color = VaultNightRaised, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, VaultOutlineSoft)) {
+            Surface(onClick = { visualCatalog.invalidate(); refreshVersion++ }, enabled = !referencesLoading, modifier = Modifier.semantics { contentDescription = "Binder aktualisieren" }, color = VaultNightRaised, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, VaultOutlineSoft)) {
                 Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.SYNC, if (referencesLoading) VaultTextMuted else MewIce, Modifier.size(18.dp)) }
             }
-            if (coverUrl != null) AsyncImage(coverUrl, "Set-Umschlag", Modifier.size(52.dp, 30.dp)) else DomiDexBrandMark(size = 34.dp)
+            if (displayedCoverUrl != null) AsyncImage(displayedCoverUrl, "Set-Umschlag", Modifier.size(52.dp, 30.dp)) else DomiDexBrandMark(size = 34.dp)
         }
         DomiGlassCard(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1229,16 +1228,18 @@ private fun isOnline(context: Context): Boolean {
                 }
             }
         }
-        AnimatedContent(targetState = page, modifier = Modifier.weight(1f), transitionSpec = {
-            if (targetState > initialState) (slideInHorizontally(tween(DomiMotion.Normal)) { it } + fadeIn(tween(DomiMotion.Fast))) togetherWith (slideOutHorizontally(tween(DomiMotion.Normal)) { -it } + fadeOut(tween(DomiMotion.Fast)))
+        // Each animated page owns its face snapshot; an outgoing index must never
+        // be dereferenced against a newer (possibly shorter) reference list.
+        AnimatedContent(targetState = page to faces[page], contentKey = { it.first }, modifier = Modifier.weight(1f), transitionSpec = {
+            if (targetState.first > initialState.first) (slideInHorizontally(tween(DomiMotion.Normal)) { it } + fadeIn(tween(DomiMotion.Fast))) togetherWith (slideOutHorizontally(tween(DomiMotion.Normal)) { -it } + fadeOut(tween(DomiMotion.Fast)))
             else (slideInHorizontally(tween(DomiMotion.Normal)) { -it } + fadeIn(tween(DomiMotion.Fast))) togetherWith (slideOutHorizontally(tween(DomiMotion.Normal)) { it } + fadeOut(tween(DomiMotion.Fast)))
-        }, label = "Vollbild-Sammelalbumseite") { index ->
+        }, label = "Vollbild-Sammelalbumseite") { (_, face) ->
             val pageModifier = Modifier.fillMaxSize().graphicsLayer {
                 rotationY = -pageDragFraction * 16f
                 transformOrigin = TransformOrigin(if (pageDragFraction < 0f) 1f else 0f, .5f)
                 cameraDistance = 18f * density
                 shadowElevation = kotlin.math.abs(pageDragFraction) * 14.dp.toPx()
-            }.pointerInput(page) {
+            }.pointerInput(page, faces.lastIndex) {
                 var horizontalTravel = 0f
                 detectDragGestures(
                     onDragStart = { horizontalTravel = 0f; readerStage = BinderPresentationStage.PAGE_TURNING },
@@ -1259,8 +1260,8 @@ private fun isOnline(context: Context): Boolean {
                 )
             }.clickable { if (page < faces.lastIndex) page++ }
             FullBinderFace(
-                face = faces[index],
-                coverUrl = coverUrl,
+                face = face,
+                coverUrl = displayedCoverUrl,
                 setName = setName,
                 modifier = pageModifier,
                 onCardSelected = { selectedCard = it },
@@ -1484,6 +1485,20 @@ private fun collectorNumberOf(value: String): Int? = Regex("\\d{1,4}").find(valu
 private fun isWachsendesChaosSet(setName: String): Boolean = setName.equals("Wachsendes Chaos", ignoreCase = true) ||
     setName.equals("Chaos Rising", ignoreCase = true)
 
+/** Source identity survives translated or edited display names in the Binder. */
+internal fun resolveBinderSourceSet(setName: String, cards: List<CollectionCard>, sets: List<PokemonSet>): PokemonSet? {
+    val sourceSetId = cards.mapNotNull { it.sourceSetId?.trim()?.lowercase(Locale.ROOT)?.takeIf(String::isNotBlank) }
+        .distinct().singleOrNull()
+    sourceSetId?.let { source -> sets.firstOrNull { it.id.equals(source, ignoreCase = true) }?.let { return it } }
+    val normalized = normalizeBinderMetadata(setName)
+    if (normalized.isBlank()) return null
+    return sets.firstOrNull { normalizeBinderMetadata(it.name) == normalized }
+        ?: sets.firstOrNull { candidate ->
+            val candidateName = normalizeBinderMetadata(candidate.name)
+            candidateName.isNotBlank() && (candidateName.contains(normalized) || normalized.contains(candidateName))
+        }
+}
+
 /**
  * Binder invariant: a numbered main-set card may occupy at most two physical print slots.
  * EX/evolution-rule cards, special rarities and cards above the printed main set stay singular.
@@ -1552,7 +1567,7 @@ internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, ca
                             !owned.finish.contains("reverse", true) && !owned.variant.contains("reverse", true) &&
                                 !owned.variant.contains("parallel", true) && !owned.finish.contains("holo", true)
                     }
-            } ?: CollectionCard(
+            }?.withReferenceImage(reference.imageUrl) ?: CollectionCard(
                 entryId = 0,
                 id = reference.id,
                 name = reference.name,
@@ -1585,16 +1600,37 @@ internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, ca
         ))
         val claimedEntryIds = mutableSetOf<Long>()
         val slots = orderedReferences.map { reference ->
-            cards.firstOrNull { owned -> owned.entryId !in claimedEntryIds && isSameMasterPrinting(reference, owned) }
+            cards.filter { owned -> owned.entryId !in claimedEntryIds && isSameMasterPrinting(reference, owned) }
+                .maxByOrNull { owned -> if (hasSameMasterSourceIdentity(reference, owned)) 1 else 0 }
                 ?.also { claimedEntryIds += it.entryId }
+                ?.withReferenceImage(reference.imageUrl)
                 ?: reference
-        }.toMutableList<CollectionCard?>()
-        // The provider may lack a reference variant for a card the user owns.
-        // Keep it visible after the verified slots, never in a wrong slot.
-        slots += cards.filter { it.entryId !in claimedEntryIds }.sortedWith(compareBy(
+        }
+        val extraOrder = compareBy<CollectionCard>(
             { collectorNumberOf(it.number) ?: Int.MAX_VALUE }, { masterFinishOrder(it) }, { it.variant },
-        ))
-        return slots
+        )
+        val insertBefore = mutableMapOf<Int, MutableList<CollectionCard>>()
+        val overflow = mutableListOf<CollectionCard>()
+        cards.filter { it.entryId !in claimedEntryIds }.sortedWith(extraOrder).forEach { owned ->
+            // Additional conditions/copies or an omitted source printing belong beside the
+            // verified card. Conflicting source identities never borrow a numbered slot.
+            val matchingIndices = orderedReferences.indices.filter { isSameMasterCard(orderedReferences[it], owned) }
+            if (matchingIndices.isEmpty()) {
+                overflow += owned
+            } else {
+                val insertionIndex = matchingIndices.firstOrNull { masterFinishOrder(orderedReferences[it]) > masterFinishOrder(owned) }
+                    ?: (matchingIndices.last() + 1)
+                insertBefore.getOrPut(insertionIndex) { mutableListOf() } += owned
+            }
+        }
+        return buildList {
+            slots.forEachIndexed { index, card ->
+                addAll(insertBefore[index].orEmpty())
+                add(card)
+            }
+            addAll(insertBefore[slots.size].orEmpty())
+            addAll(overflow)
+        }
     }
     val slots = MutableList<CollectionCard?>(capacity) { null }
     val overflow = mutableListOf<CollectionCard>()
@@ -1608,17 +1644,37 @@ internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, ca
     return slots + overflow
 }
 
+/** Enrich only the displayed, already matched slot; the saved collection entry is unchanged. */
+private fun CollectionCard.withReferenceImage(referenceImageUrl: String?): CollectionCard =
+    if (imageUrl.isNullOrBlank() && !referenceImageUrl.isNullOrBlank()) copy(imageUrl = referenceImageUrl) else this
+
 private fun isSameMasterPrinting(reference: CollectionCard, owned: CollectionCard): Boolean {
-    // Synced Cardmarket slots do not always carry a printable number. Their stable
-    // source product ID is then the only honest way to replace the exact slot.
-    if (reference.externalProductId != null && reference.externalProductId == owned.externalProductId) return true
-    if (normalizedCollectorNumber(reference.number) != normalizedCollectorNumber(owned.number)) return false
-    val referenceFinish = masterFinishOrder(reference)
-    val ownedFinish = masterFinishOrder(owned)
-    if (referenceFinish != ownedFinish) return false
-    // For special edition variants, the printed variant label must agree. The
-    // ordinary Normal/Holo/Reverse slots are matched by their finish class.
-    return referenceFinish in 0..2 || normalizeBinderMetadata(reference.variant) == normalizeBinderMetadata(owned.variant)
+    if (!isSameMasterCard(reference, owned) || masterFinishOrder(reference) != masterFinishOrder(owned)) return false
+    // Ordinary finish labels are aliases; a named special edition is a separate slot.
+    fun edition(card: CollectionCard): String = normalizeBinderMetadata(card.variant).let { variant ->
+        if (variant in setOf("", "unknown", "unbekannt", "standard", "normal", "holo", "holofoil", "reverse", "reverseholo", "reverseholofoil", "parallel")) "" else variant
+    }
+    return edition(reference) == edition(owned)
+}
+
+private fun hasSameMasterSourceIdentity(reference: CollectionCard, owned: CollectionCard): Boolean =
+    !reference.sourceSetId.isNullOrBlank() && !reference.sourceCardId.isNullOrBlank() &&
+        reference.sourceSetId.equals(owned.sourceSetId, ignoreCase = true) &&
+        reference.sourceCardId.equals(owned.sourceCardId, ignoreCase = true)
+
+private fun isSameMasterCard(reference: CollectionCard, owned: CollectionCard): Boolean {
+    if (hasSameMasterSourceIdentity(reference, owned)) return true
+    if (!reference.sourceSetId.isNullOrBlank() && !owned.sourceSetId.isNullOrBlank() &&
+        !reference.sourceSetId.equals(owned.sourceSetId, ignoreCase = true)) return false
+    if (!reference.sourceCardId.isNullOrBlank() && !owned.sourceCardId.isNullOrBlank() &&
+        !reference.sourceCardId.equals(owned.sourceCardId, ignoreCase = true)) return false
+    if (normalizeBinderMetadata(reference.set) != normalizeBinderMetadata(owned.set)) return false
+    if (reference.number.any(Char::isDigit) && owned.number.any(Char::isDigit)) {
+        return normalizedCollectorNumber(reference.number).equals(normalizedCollectorNumber(owned.number), ignoreCase = true)
+    }
+    // Legacy Cardmarket references can lack numbers. A product identifies the card,
+    // while isSameMasterPrinting still verifies finish and edition independently.
+    return reference.externalProductId != null && reference.externalProductId == owned.externalProductId
 }
 
 private fun masterFinishOrder(card: CollectionCard): Int = masterFinishOrder(card.finish, card.variant)
@@ -1675,13 +1731,9 @@ private fun physicalBinderSpreads(cards: List<CollectionCard>): List<BinderSprea
 }
 
 @Composable
-private fun ArrivalMoment(onContinue: () -> Unit) {
-    var loading by remember { mutableFloatStateOf(.04f) }
-    val progress by animateFloatAsState(loading, animationSpec = tween(850, easing = LinearEasing), label = "launch-load")
-    LaunchedEffect(Unit) {
-        loading = 1f
-        delay(1_050)
-        onContinue()
+private fun ArrivalMoment(ready: Boolean, onContinue: () -> Unit) {
+    LaunchedEffect(ready) {
+        if (ready) onContinue()
     }
     DomiDexBackdrop(
         Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { },
@@ -1692,10 +1744,10 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("DomiDex", color = VaultText, fontSize = 36.sp, fontWeight = FontWeight.Black, letterSpacing = (-.6).sp)
                     Text("DEINE KARTEN. DEIN BINDER.", color = MewRose, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
+                    Text("DomiDex wird vorbereitet…", color = VaultTextMuted, fontSize = 13.sp)
                 }
             }
             LinearProgressIndicator(
-                progress = { progress },
                 modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 58.dp, vertical = 50.dp).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(99.dp)),
                 color = MewPlum,
                 trackColor = VaultOutlineSoft,
@@ -1716,7 +1768,7 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
     Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-@Composable private fun DashboardScreen(portfolio: PortfolioSummary, binders: List<BinderSummary>, contentUpdates: ContentUpdateState, focusChoice: String, onFocusChoice: (String) -> Unit, openBinder: () -> Unit, openScanner: () -> Unit, openGrading: () -> Unit) {
+@Composable internal fun DashboardScreen(portfolio: PortfolioSummary, binders: List<BinderSummary>, contentUpdates: ContentUpdateState, focusChoice: String, onFocusChoice: (String) -> Unit, openBinder: () -> Unit, openScanner: () -> Unit) {
     val context = LocalContext.current
     LazyColumn(contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
     item { DomiScreenTitle(stringResource(R.string.dashboard_title), eyebrow = stringResource(R.string.dashboard_eyebrow), subtitle = stringResource(R.string.dashboard_subtitle), trailing = { DomiDexBrandMark(size = 42.dp) }) }
@@ -1725,9 +1777,9 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             DashboardQuickAction("Scannen", DomiIconKind.SCAN, Modifier.weight(1f), openScanner)
             DashboardQuickAction("Binder", DomiIconKind.BINDER, Modifier.weight(1f), openBinder, highlighted = true)
-            DashboardQuickAction("Zustand", DomiIconKind.CARD, Modifier.weight(1f), openGrading)
         }
     }
+    item { GradingWebNotice() }
     item { CurrentBinderValueCard(binders, openBinder) }
     item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { StatCard(stringResource(R.string.stat_cards), portfolio.totalCards.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_unique), portfolio.cards.size.toString(), Modifier.weight(1f)); StatCard(stringResource(R.string.stat_languages), portfolio.cards.map { it.language }.distinct().size.toString(), Modifier.weight(1f)) } }
     if (portfolio.cards.isNotEmpty()) {
@@ -1737,6 +1789,10 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
     item { DiscordSupportCard(context) }
     item { Text(stringResource(R.string.catalog_growth_note, contentUpdates.revision), color = VaultTextMuted, fontSize = 10.sp, lineHeight = 14.sp) }
     }
+}
+
+@Composable internal fun GradingWebNotice(modifier: Modifier = Modifier) {
+    Text(stringResource(R.string.grading_web_notice), modifier = modifier, color = VaultTextMuted, fontSize = 12.sp)
 }
 
 @Composable private fun DashboardQuickAction(label: String, icon: DomiIconKind, modifier: Modifier, onClick: () -> Unit, highlighted: Boolean = false) {
@@ -1813,33 +1869,60 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
 
 @Composable private fun GoogleAccountCard() {
     val context = LocalContext.current
-    val gateway = remember(context) { FirebaseGoogleAuthGateway(context) }
+    val auth = remember { FirebaseAuth.getInstance() }
+    val gateway = remember(context, auth) { FirebaseGoogleAuthGateway(context, auth) }
     val scope = rememberCoroutineScope()
     var account by remember { mutableStateOf(gateway.currentAccount()) }
     var working by remember { mutableStateOf(false) }
     var feedback by remember { mutableStateOf<Int?>(null) }
+    DisposableEffect(auth, gateway) {
+        val listener = FirebaseAuth.AuthStateListener {
+            account = gateway.currentAccount()
+            feedback = null
+        }
+        auth.addAuthStateListener(listener)
+        onDispose { auth.removeAuthStateListener(listener) }
+    }
+    GoogleAccountCardContent(
+        account, working, feedback,
+        onSignOut = { gateway.signOut(); account = gateway.currentAccount(); feedback = null },
+        onSignIn = {
+            working = true
+            feedback = null
+            scope.launch {
+                try {
+                    when (gateway.signIn()) {
+                        is GoogleLoginResult.Success -> account = gateway.currentAccount()
+                        GoogleLoginResult.Cancelled -> feedback = R.string.account_login_cancelled
+                        is GoogleLoginResult.Failed -> feedback = R.string.account_login_failed
+                    }
+                } finally { working = false }
+            }
+        },
+    )
+}
+
+@Composable internal fun GoogleAccountCardContent(
+    account: GoogleAccountState,
+    working: Boolean,
+    feedback: Int?,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+) {
     OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised), shape = CardVaultShapes.card) {
         Column(Modifier.padding(CardVaultSpacing.card), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text(stringResource(R.string.account_title), fontWeight = FontWeight.Bold)
             Text(
-                if (account.isSignedIn) stringResource(R.string.account_signed_in, account.displayName ?: stringResource(R.string.account_name_hidden))
+                if (account.isSignedIn) "Mit Google angemeldet"
                 else stringResource(R.string.account_signed_out),
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp,
             )
             if (account.isSignedIn) {
-                OutlinedButton(onClick = { gateway.signOut(); account = GoogleAccountState(false, null); feedback = null }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.account_sign_out)) }
+                account.displayName?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                account.email?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                OutlinedButton(onClick = onSignOut, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.account_sign_out)) }
             } else {
-                Button(onClick = {
-                    working = true; feedback = null
-                    scope.launch {
-                        when (val result = gateway.signIn()) {
-                            is GoogleLoginResult.Success -> account = result.account
-                            GoogleLoginResult.Cancelled -> feedback = R.string.account_login_cancelled
-                            is GoogleLoginResult.Failed -> feedback = R.string.account_login_failed
-                        }
-                        working = false
-                    }
-                }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text(stringResource(if (working) R.string.account_login_running else R.string.account_login_google)) }
+                Button(onClick = onSignIn, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text(stringResource(if (working) R.string.account_login_running else R.string.account_login_google)) }
             }
             feedback?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
             Text(stringResource(R.string.account_no_role), color = VaultTextMuted, fontSize = 10.sp)
@@ -1848,16 +1931,9 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
 }
 
 @Composable private fun SupportInfoCard() {
-    val context = LocalContext.current
     OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised), shape = CardVaultShapes.card) {
         Column(Modifier.padding(CardVaultSpacing.card), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Text(stringResource(R.string.support_title), fontWeight = FontWeight.Bold)
-            Text(stringResource(R.string.support_operator), color = MewRoseSoft, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Text(stringResource(if (AppSupportConfig.isConfigured) R.string.support_ready else R.string.support_not_configured), color = VaultTextMuted, fontSize = 11.sp)
-            OutlinedButton(onClick = { openSupportEmail(context) }, enabled = AppSupportConfig.isConfigured, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.support_contact)) }
-            OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.support_inbox)) }
-            Text(stringResource(R.string.support_inbox_not_configured), color = VaultTextMuted, fontSize = 10.sp)
-            Text(stringResource(R.string.support_privacy), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+            SupportSettingsContent()
         }
     }
 }
@@ -1874,15 +1950,6 @@ private fun ArrivalMoment(onContinue: () -> Unit) {
         }
         Text("Discord wird nur nach deinem Antippen geöffnet. DomiDex überträgt dabei keine Sammlung oder Scanner-Aufnahmen.", color = VaultTextMuted, fontSize = 10.sp)
     }
-}
-
-private fun openSupportEmail(context: Context) {
-    if (!AppSupportConfig.isConfigured) return
-    val uri = Uri.Builder().scheme("mailto").opaquePart(AppSupportConfig.email).build()
-    val intent = Intent(Intent.ACTION_SENDTO, uri)
-        .putExtra(Intent.EXTRA_SUBJECT, "DomiDex – Supportanfrage")
-        .putExtra(Intent.EXTRA_TEXT, "Problembeschreibung:\n\n\nApp-Version: ${context.packageManager.getPackageInfo(context.packageName, 0).versionName}\n\nKeine Diagnose- oder Sammlungsdaten wurden automatisch angehängt.")
-    context.startActivity(intent)
 }
 
 private fun openDiscordCommunity(context: Context) {
@@ -2235,7 +2302,8 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val effect = remember(card.id, card.finish, card.variant) { CardEffectResolver.resolve(card) }
-    val priceHistory by repository.priceHistory(card).collectAsState(initial = emptyList())
+    val historyFlow = remember(repository, card.entryId, card.id, card.finish) { repository.priceHistory(card) }
+    val priceHistory by historyFlow.collectAsState(initial = emptyList())
     var referenceProducts by remember(card.id, card.marketExpansionId) { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
     var selectedMarketProductId by rememberSaveable(card.entryId, card.sourceSetId, card.sourceCardId, card.finish, card.variant) { mutableStateOf(card.externalProductId) }
     var priceChoicesExpanded by rememberSaveable(card.entryId) { mutableStateOf(false) }
@@ -2477,21 +2545,29 @@ private fun openOfficialPage(context: Context, url: String) {
     // receives its real trend prices without requiring the user to type again.
     val catalogRevision = catalogSync.lastSuccessAtEpochMillis
     LaunchedEffect(selectedSet) {
+        cards = emptyList()
         loading = true; error = false; query = ""; resolvedCardmarketExpansionId = selectedSet?.cardmarketExpansionId
         runCatching { if (selectedSet == null) sets = visualCatalog.sets() else cards = visualCatalog.cards(selectedSet!!) }
             .onFailure { error = true }
         loading = false
     }
-    LaunchedEffect(selectedCard, catalogRevision, resolvedCardmarketExpansionId) {
+    LaunchedEffect(selectedCard?.id, catalogRevision, resolvedCardmarketExpansionId) {
         val card = selectedCard ?: return@LaunchedEffect
-        loading = true; error = false
+        loading = true; error = false; products = emptyList()
+        // The set index has no declared foil data. Load the selected card's existing
+        // detail record before handing its physical printing to the add dialog.
+        val detailed = try { visualCatalog.withDeclaredPrintVariants(card) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { card }
+        if (selectedCard?.id != card.id) return@LaunchedEffect
+        selectedCard = detailed
         // Cardmarket stores the English card title plus attacks, but does not
         // publish collector numbers in its compact catalogue. A source-verified
         // expansion bridge plus the print order is therefore required here.
         runCatching {
-            val priceSearchName = card.marketSearchName ?: card.name
+            val priceSearchName = detailed.marketSearchName ?: detailed.name
             val candidates = repository.searchCatalog(priceSearchName, 500)
-            visualCardmarketProducts(card, cards, candidates, resolvedCardmarketExpansionId)
+            visualCardmarketProducts(detailed, cards, candidates, resolvedCardmarketExpansionId)
         }.onSuccess { products = it }
             .onFailure { products = emptyList(); error = true }
         loading = false
@@ -2525,7 +2601,13 @@ private fun openOfficialPage(context: Context, url: String) {
         setCardPrices = resolved.second
     }
     LaunchedEffect(query, searchByPokemon, selectedSet, catalogRevision) {
-        if (selectedSet == null && searchByPokemon && query.trim().length >= 2) pokemonResults = repository.searchCatalog(query, 20) else if (selectedSet == null) pokemonResults = emptyList()
+        if (selectedSet == null) {
+            pokemonResults = emptyList()
+            if (searchByPokemon && query.trim().length >= 2) {
+                delay(250)
+                pokemonResults = repository.searchCatalog(query, 20)
+            }
+        }
     }
     val matchingSets = remember(sets, query) {
         sets.filter { query.isBlank() || it.name.contains(query, true) || it.series.contains(query, true) }
@@ -2553,15 +2635,10 @@ private fun openOfficialPage(context: Context, url: String) {
                     item {
                         Button(
                             onClick = {
-                                val selection = trendProduct?.copy(
-                                    name = selected.name,
-                                    visualSetName = selected.set.name,
-                                    collectorNumber = selected.number,
-                                    imageUrl = selected.largeImageUrl,
-                                    marketSearchName = selected.marketSearchName,
-                                ) ?: catalogResultForVisualCard(selected)
+                                val selection = catalogResultForVisualCard(selected, trendProduct)
                                 onSelected(selection)
                             },
+                            enabled = !loading,
                             modifier = Modifier.fillMaxWidth(),
                             shape = CardVaultShapes.card,
                         ) {
@@ -2598,7 +2675,7 @@ private fun openOfficialPage(context: Context, url: String) {
                         Text("Kein passender Cardmarket-Druck gefunden. Du kannst die Karte trotzdem direkt hinzufügen.", color = VaultTextMuted, fontSize = 12.sp)
                     }
                     items(products, key = { it.productId }) { product ->
-                        OutlinedCard(onClick = { onSelected(product.copy(name = selected.name, visualSetName = selected.set.name, collectorNumber = selected.number, imageUrl = selected.largeImageUrl)) }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface)) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedCard(onClick = { onSelected(catalogResultForVisualCard(selected, product)) }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface)) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("Cardmarket-Trendpreis", fontWeight = FontWeight.Bold)
                             Text(product.trendPriceEur?.let(::euro) ?: "Noch kein Trendpreis", color = MewIce, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                             Text(if (isExactVisualCatalogPriceMatch(selected, product)) "Exaktes Produkt auswählen" else "Gleichnamigen Druck prüfen und auswählen", color = if (isExactVisualCatalogPriceMatch(selected, product)) MewRoseSoft else VaultGold, fontSize = 12.sp)
@@ -2632,29 +2709,48 @@ private fun openOfficialPage(context: Context, url: String) {
  * A visual-catalog card is safe to add on its own.  Product id 0 is a local
  * sentinel and is deliberately never persisted as a Cardmarket linkage.
  */
-private fun catalogResultForVisualCard(card: PokemonVisualCard) = CatalogSearchResult(
-    productId = 0L,
-    name = card.name,
-    expansionId = card.set.id,
-    trendPriceEur = null,
-    currency = null,
-    visualSetName = card.set.name,
-    collectorNumber = card.number,
-    imageUrl = card.largeImageUrl,
-    language = "Deutsch",
-    rarity = card.rarity,
-    hasMarketProduct = false,
-    mainSetSize = card.set.total.takeIf { it > 0 },
-    setCode = card.set.ptcgoCode,
-    marketSearchName = card.marketSearchName,
-    sourceSetId = card.set.id.lowercase(),
-    sourceCardId = card.id.lowercase(),
-)
+internal fun catalogResultForVisualCard(card: PokemonVisualCard, marketProduct: CatalogSearchResult? = null): CatalogSearchResult {
+    // A price product may omit foil metadata. Keep the exact source printing instead
+    // of turning a source-declared Holo into a new, unmatched Normal binder entry.
+    val printing = card.printVariants.firstOrNull { it.finish.equals(marketProduct?.finish, ignoreCase = true) }
+        ?: card.binderPrintVariants().first()
+    fun known(value: String?) = value?.takeIf { it.isNotBlank() && !it.equals("UNKNOWN", ignoreCase = true) }
+    return CatalogSearchResult(
+        productId = marketProduct?.productId ?: 0L,
+        name = card.name,
+        expansionId = marketProduct?.expansionId ?: card.set.id,
+        trendPriceEur = marketProduct?.trendPriceEur,
+        currency = marketProduct?.currency,
+        visualSetName = card.set.name,
+        collectorNumber = card.number,
+        imageUrl = fallbackCardImageUrl(card.largeImageUrl, marketProduct?.imageUrl),
+        language = "Deutsch",
+        finish = known(marketProduct?.finish) ?: printing.finish,
+        variant = known(marketProduct?.variant) ?: printing.variant,
+        rarity = card.rarity,
+        hasMarketProduct = marketProduct?.hasMarketProduct ?: false,
+        mainSetSize = card.set.total.takeIf { it > 0 },
+        setCode = card.set.ptcgoCode,
+        marketSearchName = card.marketSearchName,
+        holoTrendPriceEur = marketProduct?.holoTrendPriceEur,
+        sourceSetId = card.set.id.lowercase(),
+        sourceCardId = card.id.lowercase(),
+    )
+}
 
 private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: CatalogSearchResult): Boolean =
     normalizeCardName(card.name) == normalizeCardName(product.name) &&
         normalizedCollectorNumber(card.number) == normalizedCollectorNumber(product.collectorNumber.orEmpty()) &&
         normalizeBinderMetadata(card.set.name) == normalizeBinderMetadata(product.visualSetName ?: product.expansionId)
+
+/** Editing the selected set/number must not carry an old source identity into another slot. */
+internal fun CatalogSearchResult.matchesManualSourceSelection(set: String, number: String): Boolean =
+    !collectorNumber.isNullOrBlank() && number.isNotBlank() &&
+        normalizeBinderMetadata(visualSetName ?: expansionId) == normalizeBinderMetadata(set) &&
+        normalizedCollectorNumber(collectorNumber).equals(normalizedCollectorNumber(number), ignoreCase = true)
+
+internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String? =
+    imageUrl?.takeIf(String::isNotBlank) ?: fallback?.takeIf(String::isNotBlank)
 
 @Composable private fun CatalogSetIcon(set: PokemonSet, modifier: Modifier = Modifier) = Box(
     modifier.background(VaultNightRaised, CardVaultShapes.thumbnail),
@@ -2771,7 +2867,8 @@ private fun isExactVisualCatalogPriceMatch(card: PokemonVisualCard, product: Cat
         }
     }, confirmButton = {
         TextButton(enabled = valid && !saving, onClick = {
-            val input = ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, selectedMarketProduct?.productId ?: initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }, initialCatalog?.imageUrl ?: selectedMarketProduct?.imageUrl, effectOverride = effectOverride, cardmarketExpansionId = selectedMarketProduct?.expansionId?.takeIf { selectedMarketProduct.hasMarketProduct } ?: initialCatalog?.expansionId?.takeIf { initialCatalog.hasMarketProduct }, sourceSetId = initialCatalog?.sourceSetId, sourceCardId = initialCatalog?.sourceCardId)
+            val sourceSelection = initialCatalog?.takeIf { it.matchesManualSourceSelection(set, number) }
+            val input = ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, selectedMarketProduct?.productId ?: initialCatalog?.productId?.takeIf { initialCatalog.hasMarketProduct }, fallbackCardImageUrl(initialCatalog?.imageUrl, selectedMarketProduct?.imageUrl), effectOverride = effectOverride, cardmarketExpansionId = selectedMarketProduct?.expansionId?.takeIf { selectedMarketProduct.hasMarketProduct } ?: initialCatalog?.expansionId?.takeIf { initialCatalog.hasMarketProduct }, sourceSetId = sourceSelection?.sourceSetId, sourceCardId = sourceSelection?.sourceCardId)
             saveError = null
             saving = true
             scope.launch {
@@ -2808,7 +2905,7 @@ private fun isExactManualPriceMatch(name: String, set: String, number: String, p
     AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(R.string.edit_entry_title)) }, text = { LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("${card.name} · ${card.set}", color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold) }
         item { OutlinedButton(onClick = onLink, modifier = Modifier.fillMaxWidth()) { Text(if (card.externalProductId == null) stringResource(R.string.catalog_link_action) else stringResource(R.string.catalog_change_action)) }; Text(if (card.externalProductId == null) stringResource(R.string.catalog_unlinked_hint) else stringResource(R.string.catalog_linked_hint, card.externalProductId), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
-        item { OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.grading_action)) }; Text(stringResource(R.string.grading_card_future), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
+        item { GradingWebNotice() }
         item { CardFinishAndEffectEditor(finish, { finish = it }, variant, { variant = it }, effectOverride, { effectOverride = it }) }
         item { FormField(quantity, { quantity = it.filter(Char::isDigit) }, R.string.field_quantity, KeyboardType.Number) }; item { FormField(condition, { condition = it }, R.string.field_condition) }; item { FormField(price, { price = it }, R.string.field_acquisition_price, KeyboardType.Decimal) }; item { FormField(date, { date = it }, R.string.field_acquisition_date) }; item { FormField(notes, { notes = it }, R.string.field_notes, singleLine = false) }
     } }, confirmButton = { TextButton(enabled = valid, onClick = { onSave(CollectionEntryUpdate(quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, finish, variant, effectOverride)) }) { Text(stringResource(R.string.action_save)) } }, dismissButton = { Row { TextButton(onClick = onDelete) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) }; TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } } })
@@ -2875,6 +2972,14 @@ private data class ScanRailResult(
     val knowledgeContext: SelectedScanKnowledgeContext? = null,
 )
 
+internal enum class ScannerCameraEntryStep { EXPLAIN, REQUEST_SYSTEM_PERMISSION, READY }
+
+internal fun scannerCameraEntryStep(introAccepted: Boolean, cameraGranted: Boolean): ScannerCameraEntryStep = when {
+    !introAccepted -> ScannerCameraEntryStep.EXPLAIN
+    !cameraGranted -> ScannerCameraEntryStep.REQUEST_SYSTEM_PERMISSION
+    else -> ScannerCameraEntryStep.READY
+}
+
 private fun artworkLabel(result: ArtworkVerification): String = when (result.match) {
     ArtworkMatch.CORROBORATES -> "passt zur Referenz"
     ArtworkMatch.CONTRADICTS -> "abweichend – bitte prüfen"
@@ -2886,8 +2991,18 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
 @Composable private fun ScannerScreen(repository: CollectionRepository, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val reportFlow = rememberScannerReportFlow()
+    var reportSettingsOpen by remember { mutableStateOf(false) }
     var granted by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     var denied by remember { mutableStateOf(false) }
+    val uiPreferences = remember(context) { context.getSharedPreferences("cardvault_ui", Context.MODE_PRIVATE) }
+    var scannerIntroAccepted by rememberSaveable {
+        mutableStateOf(uiPreferences.getBoolean("scanner_camera_intro_accepted_v1", false))
+    }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        granted = it
+        denied = !it
+    }
     var analysisRunning by remember { mutableStateOf(false) }
     var pendingCameraCaptures by remember { mutableIntStateOf(0) }
     var galleryImportPending by remember { mutableStateOf(false) }
@@ -2900,6 +3015,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     var candidatesLoading by remember { mutableStateOf(false) }
     var recentResults by remember { mutableStateOf<List<ScanRailResult>>(emptyList()) }
     var queuedScans by remember { mutableStateOf<List<QueuedCardScan>>(emptyList()) }
+    val scanJobs = remember { mutableMapOf<String, Job>() }
     var selectedScanId by remember { mutableStateOf<String?>(null) }
     var queueReviewMode by remember { mutableStateOf(false) }
     var queueExpanded by remember { mutableStateOf(false) }
@@ -2935,6 +3051,8 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     val processingSlots = remember { Semaphore(permits = ScanQueuePolicy.MAX_PARALLEL_WORKERS) }
     val latestQueuedScans = rememberUpdatedState(queuedScans)
     DisposableEffect(textAnalyzer) { onDispose {
+        scanJobs.values.forEach(Job::cancel)
+        scanJobs.clear()
         textAnalyzer.close()
         latestQueuedScans.value.forEach { scan ->
             scan.file.delete()
@@ -2943,6 +3061,33 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     } }
     fun updateQueuedScan(id: String, change: (QueuedCardScan) -> QueuedCardScan) {
         queuedScans = queuedScans.map { scan -> if (scan.id == id) change(scan) else scan }
+    }
+    fun releaseQueuedScan(scan: QueuedCardScan, cancelPendingWork: Boolean = false) {
+        if (cancelPendingWork) scanJobs.remove(scan.id)?.cancel()
+        else scanJobs.remove(scan.id)
+        scan.file.delete()
+        scan.evidenceFiles.forEach(File::delete)
+    }
+    LaunchedEffect(queuedScans.map { it.id to it.stage }, selectedScanId, reportFlow.activeScanId, reportFlow.uploadingScanId, reportFlow.outcomeRevision, reportFlow.automaticEnabled) {
+        val protectedReports = reportFlow.protectedScanIds(queuedScans)
+        val obsolete = queuedScans
+            .filter { it.id != selectedScanId && it.id !in protectedReports && it.stage.isTerminal }
+            .sortedByDescending(QueuedCardScan::capturedAtMillis)
+            .drop(ScanQueuePolicy.MAX_RETAINED_TERMINAL_RESULTS)
+        if (obsolete.isNotEmpty()) {
+            obsolete.forEach(::releaseQueuedScan)
+            val obsoleteIds = obsolete.mapTo(mutableSetOf(), QueuedCardScan::id)
+            queuedScans = queuedScans.filterNot { it.id in obsoleteIds }
+        }
+    }
+    // Only the annotation editor moves to the Web. Explicit Set + Number remains available.
+    LaunchedEffect(reportFlow.access, feedbackConsentPending, feedbackEditorPath) {
+        if (reportFlow.access == ScannerFeedbackAccess.WEB_REPORT &&
+            (feedbackConsentPending || feedbackEditorPath != null)) {
+            queuedScans.firstOrNull { it.id == selectedScanId || it.file == latestScanFile }?.let(reportFlow::open)
+            feedbackConsentPending = false
+            feedbackEditorPath = null
+        }
     }
     LaunchedEffect(analysis) {
         val current = analysis ?: return@LaunchedEffect
@@ -3002,7 +3147,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 }
             }
         }
-        val decision = ScannerDecisionPolicy.decide(ranked.map { it.second })
+        val decision = constrainManualWholeImageDecision(
+            current,
+            resolution?.decision ?: ScannerDecisionResult(ScannerDecision.REJECTED, reason = "catalog_lookup_unavailable"),
+        )
         ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
             state = when (decision.decision) { ScannerDecision.ACCEPTED -> AutoScanState.CONFIRMED; ScannerDecision.AMBIGUOUS -> AutoScanState.AMBIGUOUS; ScannerDecision.REJECTED -> AutoScanState.NOT_FOUND },
             candidateCount = ranked.size,
@@ -3030,14 +3178,40 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
         // rather than pretending that a card identity can be guessed.
         if (decision.decision == ScannerDecision.REJECTED) {
             manualEvidence = false
-            feedbackConsentPending = latestScanFile != null
+            feedbackConsentPending = latestScanFile != null && !current.manualIdentityConfirmed
         }
     }
-    fun enqueueScan(file: File, qualityEligible: Boolean, evidenceFiles: List<File> = emptyList()) {
+    fun enqueueScan(
+        file: File,
+        qualityEligible: Boolean,
+        evidenceFiles: List<File> = emptyList(),
+        origin: ScanCaptureOrigin,
+    ) {
+        if (origin == ScanCaptureOrigin.AUTOMATIC && !ScanQueuePolicy.allowsAutomaticCapture(queuedScans, pendingCameraCaptures > 0)) {
+            file.delete()
+            evidenceFiles.forEach(File::delete)
+            ScannerDiagnosticLog.event("QUEUE_REJECTED", file.name, "reason" to "automatic_backlog_full", "queueSize" to queuedScans.size)
+            return
+        }
+        while (queuedScans.size >= ScanQueuePolicy.MAX_TOTAL_BACKLOG) {
+            val protectedReports = reportFlow.protectedScanIds(queuedScans)
+            val eviction = ScanQueuePolicy.evictionCandidateForManualCapture(queuedScans.filterNot { it.id in protectedReports }, selectedScanId)
+            if (origin == ScanCaptureOrigin.AUTOMATIC || eviction == null) {
+                file.delete()
+                evidenceFiles.forEach(File::delete)
+                analysisFailed = true
+                ScannerDiagnosticLog.event("QUEUE_REJECTED", file.name, "reason" to "total_backlog_full", "queueSize" to queuedScans.size)
+                return
+            }
+            releaseQueuedScan(eviction, cancelPendingWork = eviction.stage == ScanPipelineStage.CAPTURED)
+            queuedScans = queuedScans.filterNot { it.id == eviction.id }
+            ScannerDiagnosticLog.event("QUEUE_EVICTED", eviction.id, "reason" to "manual_capture_reserved_slot", "state" to eviction.stage.name)
+        }
         // Rapid scan never covers the camera with old results. The person explicitly pulls the
         // compact rail up only when they want to review it.
         queueExpanded = false
-        val scan = QueuedCardScan(file = file, evidenceFiles = evidenceFiles, qualityEligible = qualityEligible)
+        val scan = QueuedCardScan(file = file, evidenceFiles = evidenceFiles, qualityEligible = qualityEligible, origin = origin)
+        reportFlow.registerCapture(scan.id)
         queuedScans = listOf(scan) + queuedScans
         ScannerDiagnosticLog.event(
             event = "QUEUED",
@@ -3047,9 +3221,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             "frameCount" to (evidenceFiles.size + 1),
             "queueSize" to (latestQueuedScans.value.size + 1),
             "qualityEligible" to qualityEligible,
+            "origin" to origin.name,
         )
         ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(state = AutoScanState.READING, reason = "queued:${scan.id.take(8)}", scanId = scan.id)
-        scope.launch {
+        val scanJob = scope.launch {
             processingSlots.withPermit {
                 val pipelineStarted = SystemClock.elapsedRealtime()
                 val durations = linkedMapOf<ScanPipelineStage, Long>()
@@ -3104,7 +3279,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 // One worker owns all heavyweight OCR/OpenCV work. Even legacy multi-frame
                 // entries are evaluated serially so native recognizers cannot spike together.
                 val textResults = (listOf(file) + evidenceFiles).map { evidenceFile ->
-                    textAnalyzer.analyzeAwait(evidenceFile)
+                    textAnalyzer.analyzeAwait(
+                        evidenceFile,
+                        allowManualWholeImageFallback = scan.origin != ScanCaptureOrigin.AUTOMATIC,
+                    )
                 }
                 evidenceFiles.forEach(File::delete)
                 val successfulAnalyses = textResults.mapNotNull(Result<CardTextAnalysis>::getOrNull)
@@ -3170,8 +3348,12 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                         message = ScanPipelineStage.OCR.label,
                     )
                 }
-                if (!currentAnalysis.imageQuality.cardDetected || currentAnalysis.imageQuality.reason.isNotBlank()) {
-                    terminal(ScanPipelineStage.MANUAL_REVIEW, "Kartenfläche nicht sicher erkannt")
+                val manualWholeImageFallback = currentAnalysis.imageQuality.isManualRecognitionFallback
+                if (!manualWholeImageFallback && (!currentAnalysis.imageQuality.cardDetected || currentAnalysis.imageQuality.reason.isNotBlank())) {
+                    val message = if (currentAnalysis.imageQuality.reason == MANUAL_WHOLE_IMAGE_FALLBACK_REASON) {
+                        "Ganzes Foto gelesen – Set und Nummer bitte bestätigen"
+                    } else "Kartenfläche nicht sicher erkannt"
+                    terminal(ScanPipelineStage.MANUAL_REVIEW, message)
                     return@withPermit
                 }
                 stage(ScanPipelineStage.SET_ANALYSIS)
@@ -3210,7 +3392,10 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     HybridCandidateFusion.rank(currentAnalysis, resolution.candidates, artwork),
                     latestKnowledge.get(),
                 )
-                val finalDecision = HybridCandidateFusion.decide(fused)
+                val finalDecision = constrainManualWholeImageDecision(
+                    currentAnalysis,
+                    HybridCandidateFusion.decide(fused),
+                )
                 val fusionDuration = SystemClock.elapsedRealtime() - fusionStarted
                 updateQueuedScan(scan.id) { it.copy(candidates = fused, artwork = artwork, decision = finalDecision) }
                 stage(ScanPipelineStage.VARIANT_ANALYSIS)
@@ -3282,9 +3467,9 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 }
             }
         }
+        scanJobs[scan.id] = scanJob
     }
 
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it; denied = !it }
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         galleryImportPending = true
@@ -3297,7 +3482,11 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                         context.contentResolver.openInputStream(uri)?.use { input -> target.outputStream().use(input::copyTo) }
                     }
                 }
-                if (file.exists() && file.length() > 0L) enqueueScan(file, qualityEligible = false)
+                if (file.exists() && file.length() > 0L) enqueueScan(
+                    file,
+                    qualityEligible = false,
+                    origin = ScanCaptureOrigin.GALLERY,
+                )
                 else { file.delete(); analysisFailed = true }
             } catch (_: Exception) {
                 importedFile?.delete()
@@ -3307,23 +3496,31 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             }
         }
     }
+    val cameraEntryStep = scannerCameraEntryStep(scannerIntroAccepted, granted)
+    val automaticCaptureAllowed = ScanQueuePolicy.allowsAutomaticCapture(queuedScans, pendingCameraCaptures > 0)
     Box(Modifier.fillMaxSize()) {
-        if (granted) {
+        if (cameraEntryStep == ScannerCameraEntryStep.READY) {
             LiveCameraScanner(
                 modifier = Modifier.fillMaxSize(),
-                onCaptureStarted = {
+                autoCaptureAllowed = automaticCaptureAllowed,
+                onCaptureStarted = { _ ->
                     // Capture is intentionally independent from prior work items. Do not clear an
                     // ongoing queue entry here: the camera is free as soon as its JPEG is saved.
                     pendingCameraCaptures = 1
                     ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(state = AutoScanState.CAPTURING, reason = "capture_started")
                 },
-                onCaptureSaved = { file, eligible, temporalFiles ->
+                onCaptureSaved = { file, eligible, temporalFiles, automatic ->
                     pendingCameraCaptures = 0
-                    enqueueScan(file, eligible, temporalFiles)
+                    enqueueScan(
+                        file,
+                        eligible,
+                        temporalFiles,
+                        origin = if (automatic) ScanCaptureOrigin.AUTOMATIC else ScanCaptureOrigin.MANUAL,
+                    )
                 },
                 onCaptureFailed = { pendingCameraCaptures = 0; analysisFailed = true },
             )
-        } else {
+        } else if (cameraEntryStep == ScannerCameraEntryStep.REQUEST_SYSTEM_PERMISSION) {
             Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Text(stringResource(R.string.camera_permission_title), color = Color.White, fontWeight = FontWeight.Bold)
                 Text(stringResource(R.string.camera_permission_body), color = Color(0xFFB9C9C5))
@@ -3338,6 +3535,9 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 Column(Modifier.weight(1f)) {
                     Text("SCANNER", color = VaultText, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
                     Text("Karte ruhig und vollständig ins Bild halten", color = VaultTextMuted, fontSize = 9.sp)
+                }
+                if (reportFlow.access == ScannerFeedbackAccess.WEB_REPORT) TextButton(onClick = { reportSettingsOpen = true }) {
+                    Text("Feedback", fontSize = 10.sp)
                 }
                 Surface(
                     onClick = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -3361,13 +3561,13 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             Text("Abgleich nur über Set-Kennung und gedruckte Nummer. Bitte Karte vor dem Auswählen prüfen.", color = VaultTextMuted, fontSize = 12.sp)
                     if (analysisRunning) AnalysisStatusCard(R.string.scanner_analysis_running)
                     if (analysisFailed) {
-                        Text("Keine verwertbaren Textmerkmale erkannt. Du kannst die Karte erneut aufnehmen oder manuell fortfahren.", color = VaultTextMuted, fontSize = 13.sp)
+                        Text(if (reportFlow.allowsLocalEditor) "Keine verwertbaren Textmerkmale erkannt. Du kannst die Karte erneut aufnehmen oder manuell fortfahren." else "Keine verwertbaren Textmerkmale erkannt. Fehlscans kannst du in der Warteschlange an das Scanner-Lab senden.", color = VaultTextMuted, fontSize = 13.sp)
                         OutlinedButton(onClick = { analysisFailed = false }) { Text("Zurück zum Scanner") }
                     }
                     analysis?.let { result ->
                         if (candidatesLoading) AnalysisStatusCard(R.string.scanner_candidates_searching)
                         else if (candidates.isEmpty()) {
-                            Text("Für die exakte Zuordnung fehlen noch Set-Kennung oder Kartennummer. Sie können direkt vom unteren Kartenrand ergänzt werden.", color = VaultTextMuted, fontSize = 13.sp)
+                            Text(if (result.manualIdentityConfirmed) "Für dieses Set und diese Nummer konnte gerade keine Karte aus dem Katalog geladen werden. Bitte Verbindung prüfen oder die Auswahl erneut versuchen." else "Set auswählen und Kartennummer eingeben, um die Karte aus dem Katalog hinzuzufügen.", color = VaultTextMuted, fontSize = 13.sp)
                             OutlinedButton(onClick = { manualEvidence = true }, modifier = Modifier.fillMaxWidth()) { Text("Set-Kennung und Nummer manuell eingeben") }
                             OutlinedButton(onClick = { analysis = null }) { Text("Weitere Aufnahme machen") }
                         } else {
@@ -3498,19 +3698,38 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text("${queuedScans.size + pendingInputCount} Aufnahmen", color = VaultTextMuted, fontSize = 10.sp, modifier = Modifier.weight(1f))
                                 TextButton(onClick = {
-                                    val removable = queuedScans.filter { it.stage in setOf(ScanPipelineStage.MATCHED, ScanPipelineStage.AMBIGUOUS, ScanPipelineStage.MANUAL_REVIEW, ScanPipelineStage.FAILED, ScanPipelineStage.SAVED) }
+                                    val protectedReports = reportFlow.protectedScanIds(queuedScans)
+                                    val removable = queuedScans.filter { it.stage.isTerminal && it.id !in protectedReports }
                                     removable.forEach { scan -> scan.file.delete(); scan.evidenceFiles.forEach(File::delete) }
                                     queuedScans = queuedScans.filterNot { scan -> removable.any { it.id == scan.id } }
                                     recentResults = emptyList()
                                 }) { Text("Fertige leeren", fontSize = 11.sp) }
                             }
+                            when (reportFlow.access) {
+                                ScannerFeedbackAccess.CHECKING -> Text("Scanner-Berechtigung wird geprüft …", color = VaultTextMuted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp))
+                                ScannerFeedbackAccess.UNAVAILABLE -> TextButton(onClick = reportFlow.retryAccess) { Text("Berechtigung erneut prüfen", fontSize = 11.sp) }
+                                ScannerFeedbackAccess.WEB_REPORT -> Column(Modifier.padding(horizontal = 12.dp)) {
+                                    Text("Kein automatischer Upload · Du entscheidest pro Aufnahme", color = VaultTextMuted, fontSize = 10.sp)
+                                    Text("Antippen → manuell mit Set + Nummer hinzufügen", color = MewIce, fontSize = 11.sp)
+                                }
+                                ScannerFeedbackAccess.LOCAL -> Unit
+                            }
                             LazyRow(contentPadding = PaddingValues(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(queuedScans, key = { it.id }) { scan ->
                             val best = scan.candidates.firstOrNull()
-                            val actionable = scan.stage in setOf(ScanPipelineStage.MATCHED, ScanPipelineStage.AMBIGUOUS, ScanPipelineStage.MANUAL_REVIEW)
+                            val actionable = scan.stage == ScanPipelineStage.MATCHED || scan.stage.needsScannerReview
                             OutlinedCard(
                                 onClick = {
                                     if (!actionable) return@OutlinedCard
+                                    if (scan.stage.needsScannerReview && reportFlow.access == ScannerFeedbackAccess.WEB_REPORT) {
+                                        selectedScanId = scan.id
+                                        latestScanFile = scan.file
+                                        queueReviewMode = true
+                                        analysis = scan.analysis ?: CardTextAnalysis(emptyList(), null, null, null, emptyList())
+                                        candidates = emptyList()
+                                        manualEvidence = true
+                                        return@OutlinedCard
+                                    }
                                     selectedScanId = scan.id
                                     latestScanFile = scan.file
                                     contributionEligible = scan.qualityEligible
@@ -3531,7 +3750,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                                             candidateScores = scan.candidates.associate { it.card.scanIdentityKey() to it.score }
                                             artworkScores = scan.artwork
                                         }
-                                        ScanPipelineStage.MANUAL_REVIEW -> {
+                                        ScanPipelineStage.MANUAL_REVIEW, ScanPipelineStage.FAILED -> {
                                             queueReviewMode = true
                                             analysis = scan.analysis ?: CardTextAnalysis(emptyList(), null, null, null, emptyList())
                                             manualEvidence = true
@@ -3557,8 +3776,19 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                                         Text(candidate.evidence?.confidence?.userLabel ?: "Abgleich: ${CardRecognitionRanker.label(candidate.score)}", color = MewIce, fontSize = 10.sp)
                                         candidate.card.trendPriceEur?.let { price -> Text("Cardmarket: ${euro(price)}", color = MewIce, fontSize = 10.sp) }
                                     }
-                                    if (scan.stage == ScanPipelineStage.AMBIGUOUS) Text("Antippen zum Prüfen", color = MewRoseSoft, fontSize = 10.sp)
-                                    if (scan.stage == ScanPipelineStage.MANUAL_REVIEW) Text("Antippen für Set + Nummer", color = MewRoseSoft, fontSize = 10.sp)
+                                    if (reportFlow.access == ScannerFeedbackAccess.WEB_REPORT) {
+                                        val reportOutcome = reportFlow.outcome(scan.id)
+                                        when {
+                                            reportOutcome?.reportId != null -> Text("An Scanner-Lab gesendet", color = MewIce, fontSize = 10.sp)
+                                            reportFlow.uploadingScanId == scan.id -> Text("Fehlscan wird hochgeladen …", color = MewIce, fontSize = 10.sp)
+                                            reportOutcome?.error != null -> Text("Upload nicht bestätigt", color = VaultGold, fontSize = 10.sp)
+                                        }
+                                        if (scan.stage.needsScannerReview) Text("Antippen für Set + Nummer", color = MewRoseSoft, fontSize = 10.sp)
+                                        ScannerReportButton(reportFlow, scan)
+                                    } else if (reportFlow.allowsLocalEditor) {
+                                        if (scan.stage == ScanPipelineStage.AMBIGUOUS) Text("Antippen zum Prüfen", color = MewRoseSoft, fontSize = 10.sp)
+                                        if (scan.stage == ScanPipelineStage.MANUAL_REVIEW) Text("Antippen für Set + Nummer", color = MewRoseSoft, fontSize = 10.sp)
+                                    }
                                 }
                             }
                         }
@@ -3585,6 +3815,21 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             }
         }
     }
+    if (cameraEntryStep == ScannerCameraEntryStep.EXPLAIN) {
+        AlertDialog(
+            onDismissRequest = onBack,
+            title = { Text(stringResource(R.string.scanner_camera_intro_title)) },
+            text = { Text(stringResource(R.string.scanner_camera_intro_body)) },
+            confirmButton = {
+                Button(onClick = {
+                    uiPreferences.edit().putBoolean("scanner_camera_intro_accepted_v1", true).apply()
+                    scannerIntroAccepted = true
+                    if (!granted) launcher.launch(Manifest.permission.CAMERA)
+                }) { Text(stringResource(R.string.scanner_camera_intro_continue)) }
+            },
+            dismissButton = { TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) } },
+        )
+    }
     LaunchedEffect(selectedCandidate?.scanIdentityKey()) {
         scanAddRunning = false
         scanAddError = null
@@ -3603,13 +3848,17 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 runCatching { repository.addManualCard(input) }
                     .onSuccess {
                         selectedKnowledgeContext?.let { knowledgeContext ->
-                            buildScanKnowledgeEvidence(knowledgeContext.analysis, knowledgeContext.candidates, candidate)
-                                ?.let(scanKnowledge::enqueue)
+                            val evidence = buildScanKnowledgeEvidence(
+                                knowledgeContext.analysis,
+                                knowledgeContext.candidates,
+                                candidate,
+                            )
+                            if (evidence != null) scanKnowledge.enqueue(evidence)
                         }
                         selectedScanId?.let { scanId ->
                             updateQueuedScan(scanId) { scan ->
                                 if (scan.stage == ScanPipelineStage.MATCHED) {
-                                    scan.file.delete()
+                                    if (scan.id !in reportFlow.protectedScanIds(queuedScans)) scan.file.delete()
                                     scan.copy(stage = ScanPipelineStage.SAVED, message = ScanPipelineStage.SAVED.label)
                                 } else scan
                             }
@@ -3625,6 +3874,23 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             }
         }
     }
+    if (reportSettingsOpen && reportFlow.access == ScannerFeedbackAccess.WEB_REPORT) AlertDialog(
+        onDismissRequest = { reportSettingsOpen = false },
+        title = { Text("Scanner-Feedback") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) { ScannerAutomaticReportControl(reportFlow) } },
+        confirmButton = { TextButton(onClick = { reportSettingsOpen = false }) { Text("Schließen") } },
+    )
+    ScannerReportDialog(reportFlow, onManualAdd = {
+        reportFlow.selected?.let { scan ->
+            selectedScanId = scan.id
+            latestScanFile = scan.file
+            queueReviewMode = true
+            analysis = scan.analysis ?: CardTextAnalysis(emptyList(), null, null, null, emptyList())
+            candidates = emptyList()
+            manualEvidence = true
+        }
+        reportFlow.dismiss()
+    })
     if (manualEvidence) {
         ManualScanEvidenceDialog(
             initialSetCode = analysis?.setIdentifier.orEmpty(),
@@ -3640,7 +3906,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             },
         )
     }
-    if (feedbackConsentPending) ScanFeedbackConsentDialog(
+    if (feedbackConsentPending && reportFlow.allowsLocalEditor) ScanFeedbackConsentDialog(
         onHelp = {
             feedbackConsentPending = false
             feedbackEditorPath = latestScanFile?.absolutePath
@@ -3658,7 +3924,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             manualEvidence = true
         },
     )
-    feedbackEditorPath?.let { path -> ScanFeedbackEditorDialog(
+    feedbackEditorPath?.takeIf { reportFlow.allowsLocalEditor }?.let { path -> ScanFeedbackEditorDialog(
         imageFile = File(path),
         analysis = analysis,
         onDismiss = { File(path).delete(); feedbackEditorPath = null; manualEvidence = true },
@@ -3966,7 +4232,7 @@ private fun persistScanFeedback(context: Context, imageFile: File, marks: List<S
 @Composable private fun ManualScanEvidenceDialog(initialSetCode: String, initialNumber: String, onDismiss: () -> Unit, onConfirm: (String, String, String) -> Unit) {
     var selectedSetIdentity by rememberSaveable { mutableStateOf(initialSetCode) }
     // Only the printed card position is entered.  The set itself determines its total.
-    var number by rememberSaveable { mutableStateOf(initialNumber.substringBefore('/').filter(Char::isDigit).take(3)) }
+    var number by rememberSaveable { mutableStateOf(initialNumber.substringBefore('/').filter(Char::isDigit).take(4)) }
     var setMenuOpen by remember { mutableStateOf(false) }
     var setSearch by rememberSaveable { mutableStateOf("") }
     var catalogSets by remember { mutableStateOf<List<PokemonSet>>(emptyList()) }
@@ -4005,7 +4271,7 @@ private fun persistScanFeedback(context: Context, imageFile: File, marks: List<S
         }
     }
     val totalLabel = selectedSet?.printedTotal?.takeIf { it > 0 }?.toString()?.padStart(3, '0')
-    val canonicalNumber = selectedSet?.let { manualCollectorNumber(number, it.printedTotal) }
+    val canonicalNumber = selectedSet?.let { manualCollectorNumber(number, it.printedTotal, it.id, it.code) }
     val valid = selectedSet != null && canonicalNumber != null
     AlertDialog(
         onDismissRequest = onDismiss,

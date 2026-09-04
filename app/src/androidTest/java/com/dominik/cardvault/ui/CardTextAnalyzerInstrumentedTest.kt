@@ -12,6 +12,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -72,5 +74,55 @@ class CardTextAnalyzerInstrumentedTest {
 
         val analysis = result.get().getOrThrow()
         assertTrue("OCR number: ${analysis.collectorNumber}; lines: ${analysis.lines}", analysis.collectorNumber?.replace(" ", "") == "122/088")
+    }
+
+    @Test fun manualCaptureRunsBoundedWholeImageOcrWithoutBecomingFrameAccepted() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val imageFile = File(context.cacheDir, "ocr-manual-whole-image-fixture.png")
+        val bitmap = Bitmap.createBitmap(900, 1_200, Bitmap.Config.ARGB_8888)
+        Canvas(bitmap).apply {
+            drawColor(Color.rgb(220, 235, 205))
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 64f }
+            drawText("Pikachu ex", 185f, 245f, paint)
+            drawText("PBL 122/088", 185f, 1_015f, paint)
+        }
+        FileOutputStream(imageFile).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
+
+        val normalizedFallback = CardImageNormalizer.normalize(imageFile, allowManualWholeImageFallback = true)
+        try {
+            assertEquals(MANUAL_WHOLE_IMAGE_FALLBACK_REASON, normalizedFallback.quality.reason)
+            assertEquals(
+                AnalysisOrientation.entries.toSet(),
+                normalizedFallback.analysisVariants.map(CanonicalCardAnalysisVariant::orientation).toSet(),
+            )
+            assertTrue(normalizedFallback.analysisVariants.all {
+                maxOf(it.bitmap.width, it.bitmap.height) <= CardScanConfiguration.MANUAL_FALLBACK_MAX_EDGE
+            })
+        } finally {
+            (normalizedFallback.analysisVariants.map(CanonicalCardAnalysisVariant::bitmap) + listOfNotNull(normalizedFallback.bitmap))
+                .distinct()
+                .forEach { if (!it.isRecycled) it.recycle() }
+        }
+
+        val latch = CountDownLatch(1)
+        val result = AtomicReference<Result<CardTextAnalysis>>()
+        CardTextAnalyzer(context).use { analyzer ->
+            analyzer.analyze(imageFile, allowManualWholeImageFallback = true) { outcome ->
+                result.set(outcome)
+                latch.countDown()
+            }
+            assertTrue("Manual whole-image OCR did not finish", latch.await(30, TimeUnit.SECONDS))
+        }
+        imageFile.delete()
+
+        val analysis = result.get().getOrThrow()
+        try {
+            assertEquals(MANUAL_WHOLE_IMAGE_FALLBACK_REASON, analysis.imageQuality.reason)
+            assertFalse(analysis.imageQuality.cardDetected)
+            assertTrue("Manual OCR lines: ${analysis.lines}", analysis.lines.any { it.contains("Pikachu", ignoreCase = true) })
+        } finally {
+            analysis.normalizedCard?.let { if (!it.isRecycled) it.recycle() }
+        }
     }
 }

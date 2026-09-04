@@ -1,5 +1,6 @@
 package com.dominik.cardvault.ui
 
+import com.dominik.cardvault.data.catalog.collectorIdentityForSourceLookup
 import com.dominik.cardvault.model.CatalogSearchResult
 import java.text.Normalizer
 import java.util.Locale
@@ -50,8 +51,10 @@ internal object HybridCandidateFusion {
         candidate: CatalogSearchResult,
         artwork: ArtworkVerification?,
     ): CandidateSignalScores {
-        val readNumber = canonicalNumber(analysis.collectorNumber.orEmpty())
-        val candidateNumber = canonicalNumber(candidate.collectorNumber.orEmpty())
+        // A market expansion id or printed set code cannot authorize stripping an arbitrary prefix.
+        val numberSourceSetId = candidate.sourceSetId?.takeIf(String::isNotBlank) ?: candidate.expansionId
+        val readNumber = collectorIdentityForSourceLookup(analysis.collectorNumber.orEmpty(), numberSourceSetId)
+        val candidateNumber = collectorIdentityForSourceLookup(candidate.collectorNumber.orEmpty(), numberSourceSetId)
         val number = if (readNumber.isNotBlank() && readNumber == candidateNumber) {
             (60f + analysis.numberConfidence.coerceIn(0f, 1f) * 40f).roundToInt()
         } else 0
@@ -172,12 +175,6 @@ internal object HybridCandidateFusion {
         }
     }
 
-    private fun canonicalNumber(value: String): String {
-        val primary = value.substringBefore('/').uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
-        val prefix = primary.takeWhile(Char::isLetter)
-        val digits = primary.dropWhile(Char::isLetter).trimStart('0').ifBlank { if (primary.any(Char::isDigit)) "0" else "" }
-        return prefix + digits
-    }
     private fun canonicalMetadata(value: String) = value.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
     private fun canonicalName(value: String) = Normalizer.normalize(value, Normalizer.Form.NFD)
         .lowercase(Locale.ROOT).replace("ß", "ss").filter(Char::isLetterOrDigit)

@@ -17,16 +17,11 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.CameraSelector
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
-import androidx.camera.view.CameraController
-import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.border
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -34,9 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -58,6 +51,7 @@ import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
+import kotlinx.coroutines.delay
 import org.opencv.android.OpenCVLoader
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
@@ -160,6 +154,10 @@ private data class FrameQuality(
     val frameQualityScore: Float = 0f,
     val captureEligible: Boolean = false,
     val fingerprint: IntArray? = null,
+    /** Aspect ratio of CameraX's current crop after applying ImageInfo rotation. */
+    val previewAspectRatio: Float = 4f / 3f,
+    /** Monotonic key: identical consecutive frames must still advance the auto-capture gate. */
+    val frameSequence: Long = 0L,
 )
 internal enum class QualityLevel { RED, YELLOW, GREEN }
 internal enum class QualityGuidance { MORE_LIGHT, LESS_GLARE, HOLD_STILL, FOCUS, FIND_CARD, MOVE_CLOSER, MOVE_AWAY, ALIGN_PARALLEL, READY }
@@ -206,8 +204,9 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
 
 @Composable fun LiveCameraScanner(
     modifier: Modifier = Modifier,
-    onCaptureStarted: () -> Unit = {},
-    onCaptureSaved: (File, Boolean, List<File>) -> Unit = { _, _, _ -> },
+    autoCaptureAllowed: Boolean = true,
+    onCaptureStarted: (automatic: Boolean) -> Unit = {},
+    onCaptureSaved: (File, Boolean, List<File>, automatic: Boolean) -> Unit = { _, _, _, _ -> },
     onCaptureFailed: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -219,9 +218,9 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     var quality by remember { mutableStateOf(FrameQuality(QualityLevel.RED, QualityGuidance.HOLD_STILL, 0f, 0f, 0f, 0f, 0f)) }
     var captureMessage by remember { mutableStateOf<Int?>(null) }
-    var confirmedOutlineCorners by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
-    var autoCaptureEnabled by rememberSaveable { mutableStateOf(true) }
+    // Opt-in for this camera session only; reopening/restoring the scanner starts manually.
+    var autoCaptureEnabled by remember { mutableStateOf(false) }
     var captureInProgress by remember { mutableStateOf(false) }
     var activeCaptureId by remember { mutableLongStateOf(0L) }
     var latestCapture by remember { mutableStateOf<File?>(null) }
@@ -230,24 +229,20 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     val maxTorchStrength = remember(cameraManager, torchCameraId) { if (Build.VERSION.SDK_INT >= 33 && torchCameraId != null) cameraManager.getCameraCharacteristics(torchCameraId).get(CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL) ?: 1 else 1 }
     var torchEnabled by rememberSaveable { mutableStateOf(false) }
     var torchStrength by rememberSaveable { mutableIntStateOf(1) }
-    val autoCaptureGate = remember { AutoCaptureGate(missingFramesToRearm = 3, readyFramesToCapture = 1) }
-    val controller = remember {
-        LifecycleCameraController(context).apply {
-            setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
-            // CameraX still writes the full JPEG, but does not hold the shutter for an
-            // additional quality-selection cycle. OCR/cropping run afterwards in the queue.
-            setImageCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-            setImageAnalysisBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            cameraSelector = selectBestScannerCamera(cameraManager)
-        }
+    val autoCaptureGate = remember { AutoCaptureGate(missingFramesToRearm = 3, readyFramesToCapture = 2) }
+    val previewView = remember(context) {
+        PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
     }
-    DisposableEffect(controller, lifecycleOwner) {
+    val camera = remember(context, previewView, cameraManager) {
+        PortraitScannerCamera(context, previewView, selectBestScannerCamera(cameraManager))
+    }
+    DisposableEffect(camera, lifecycleOwner) {
         val analyzer = FrameQualityAnalyzer { quality = it }
-        controller.setImageAnalysisAnalyzer(analysisExecutor, analyzer)
-        controller.bindToLifecycle(lifecycleOwner)
+        camera.bindToLifecycle(lifecycleOwner, analysisExecutor, analyzer) {
+            captureMessage = R.string.capture_failed
+        }
         onDispose {
-            controller.clearImageAnalysisAnalyzer()
-            controller.unbind()
+            camera.unbind()
             // Release the reusable native OpenCV buffers only after any in-flight
             // analyzer call has completed on the same single-thread executor.
             runCatching { analysisExecutor.execute(analyzer::close) }
@@ -258,16 +253,15 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     fun setTorch(enabled: Boolean, strength: Int = torchStrength) {
         // CameraX controls the lens actually bound to the preview; CameraManager can target a
         // different physical lens on multi-camera devices.
-        val future = controller.cameraControl?.enableTorch(enabled) ?: return
+        val future = camera.cameraControl?.enableTorch(enabled) ?: return
         future.addListener({ runCatching { future.get() }.onSuccess {
             torchEnabled = enabled; torchStrength = strength.coerceIn(1, maxTorchStrength)
         } }, mainExecutor)
     }
     fun capture(automatic: Boolean = false) {
         if (captureInProgress) return
-        val captureOutlineCorners = quality.corners
-        captureInProgress = true; captureMessage = null; confirmedOutlineCorners = emptyList()
-        onCaptureStarted()
+        captureInProgress = true; captureMessage = null
+        onCaptureStarted(automatic)
         val captureId = System.nanoTime()
         val captureStartedAt = SystemClock.elapsedRealtime()
         val contributionEligible = quality.level == QualityLevel.GREEN && quality.corners.size == 4
@@ -283,13 +277,11 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
             latestCapture = primary; captureInProgress = false
             LatestCardCapture.path = primary.absolutePath
             captureMessage = R.string.capture_saved
-            confirmedOutlineCorners = captureOutlineCorners.takeIf { it.size == 4 } ?: quality.corners
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             confirmationSound.play()
             captureTimeoutHandler.postDelayed({
                 if (activeCaptureId == 0L && latestCapture == primary && captureMessage == R.string.capture_saved) {
                     captureMessage = null
-                    confirmedOutlineCorners = emptyList()
                 }
             }, 1_050L)
             ScannerDiagnosticLog.event(
@@ -309,11 +301,11 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                 "cornerConfidence" to quality.contourStability,
                 "frameQualityScore" to quality.frameQualityScore,
             )
-            onCaptureSaved(primary, contributionEligible, files.drop(1))
+            onCaptureSaved(primary, contributionEligible, files.drop(1), automatic)
         }
         fun failCapture() {
             if (activeCaptureId != captureId) return
-            activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed; confirmedOutlineCorners = emptyList()
+            activeCaptureId = 0L; captureInProgress = false; captureMessage = R.string.capture_failed
             ScannerDiagnosticLog.event(
                 event = "CAPTURE_FAILED",
                 scanId = "capture-$captureId",
@@ -331,7 +323,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
             if (activeCaptureId != captureId) return
             val file = File(context.cacheDir, "cardvault-capture-${captureId}-${index}.jpg")
             try {
-                controller.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), mainExecutor, object : ImageCapture.OnImageSavedCallback {
+                camera.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), mainExecutor, object : ImageCapture.OnImageSavedCallback {
                     override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                         if (activeCaptureId != captureId) { file.delete(); return }
                         files += file
@@ -356,123 +348,37 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         if (autoCaptureEnabled) autoCaptureGate.arm()
         else autoCaptureGate.disarm(quality.fingerprint)
     }
+    LaunchedEffect(autoCaptureAllowed) {
+        if (!autoCaptureAllowed) autoCaptureGate.disarm(quality.fingerprint)
+    }
     LaunchedEffect(
         autoCaptureEnabled,
+        autoCaptureAllowed,
         captureInProgress,
-        quality.captureEligible,
+        quality.level,
+        quality.frameSequence,
         quality.fingerprint?.contentHashCode(),
     ) {
         if (
             autoCaptureEnabled &&
+            autoCaptureAllowed &&
             !captureInProgress &&
-            autoCaptureGate.onFrame(quality.captureEligible, quality.fingerprint)
+            autoCaptureGate.onFrame(quality.level == QualityLevel.GREEN, quality.fingerprint)
         ) capture(automatic = true)
-    }
-    val captureConfirmed = captureMessage == R.string.capture_saved
-    val outlineTarget = if (captureConfirmed && confirmedOutlineCorners.size == 4) confirmedOutlineCorners else quality.corners
-    var animatedOutline by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
-    // Analysis deliberately drops stale frames and therefore publishes fewer positions than the
-    // preview renders. Interpolate the complete quadrilateral with one animation so the visible
-    // guide glides between detector samples without changing the geometry used for recognition.
-    LaunchedEffect(outlineTarget) {
-        if (outlineTarget.size != 4) {
-            animatedOutline = outlineTarget
-            return@LaunchedEffect
-        }
-        val start = animatedOutline.takeIf { it.size == 4 } ?: outlineTarget
-        if (start == outlineTarget) {
-            animatedOutline = outlineTarget
-            return@LaunchedEffect
-        }
-        Animatable(0f).animateTo(
-            targetValue = 1f,
-            animationSpec = tween(durationMillis = 135, easing = FastOutSlowInEasing),
-        ) {
-            animatedOutline = start.zip(outlineTarget) { old, target ->
-                (old.first + (target.first - old.first) * value) to
-                    (old.second + (target.second - old.second) * value)
-            }
-        }
     }
     Box(modifier.fillMaxSize().background(Color.Black)) {
         Box(Modifier.matchParentSize()) {
-            // Preserve the webcam's complete 4:3 scene. FIT_CENTER intentionally letterboxes
-            // the portrait scanner rather than applying PreviewView's crop-to-fill zoom.
-            AndroidView(factory = { PreviewView(it).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; this.controller = controller } }, modifier = Modifier.fillMaxSize())
-            DomiStatusBanner(
-                message = when {
-                    captureMessage != null -> captureMessage?.let { stringResource(it) }
-                    captureInProgress -> "Aufnahme läuft …"
-                    quality.level == QualityLevel.GREEN && autoCaptureEnabled -> "Bereit – automatische Aufnahme"
-                    quality.level == QualityLevel.GREEN -> "Bereit – Auslöser drücken"
-                    else -> "Karte ruhig halten"
-                },
-                tone = when {
-                    captureMessage == R.string.capture_failed -> DomiStatusTone.ERROR
-                    captureMessage == R.string.capture_saved || quality.level == QualityLevel.GREEN -> DomiStatusTone.SUCCESS
-                    else -> DomiStatusTone.WARNING
-                },
+            // Keep the full scene visible. Detected corners are analysis data only, never a
+            // moving outline, shaded cutout or extra capture gate in the camera preview.
+            AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+            ScannerCaptureStatus(
+                qualityLevel = quality.level,
+                captureMessage = captureMessage,
+                captureInProgress = captureInProgress,
+                autoCaptureEnabled = autoCaptureEnabled,
+                autoCaptureAllowed = autoCaptureAllowed,
                 modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 16.dp).padding(top = 76.dp),
-                accentColor = if (captureMessage == R.string.capture_saved || quality.level == QualityLevel.GREEN) VaultPositive else null,
             )
-            Canvas(Modifier.matchParentSize()) {
-                // CameraX rotates the landscape analysis stream into a portrait 3:4 preview.
-                // Mirror FIT_CENTER's letterbox geometry so detector points remain registered
-                // to the visible image rather than the surrounding black bars.
-                val imageAspect = 3f / 4f
-                val viewAspect = size.width / size.height
-                val contentWidth: Float
-                val contentHeight: Float
-                val offsetX: Float
-                val offsetY: Float
-                if (viewAspect > imageAspect) {
-                    contentHeight = size.height; contentWidth = contentHeight * imageAspect
-                    offsetX = (size.width - contentWidth) / 2f; offsetY = 0f
-                } else {
-                    contentWidth = size.width; contentHeight = contentWidth / imageAspect
-                    offsetX = 0f; offsetY = (size.height - contentHeight) / 2f
-                }
-                if (animatedOutline.size == 4) {
-                    val path = Path()
-                    animatedOutline.forEachIndexed { index, point ->
-                        val x = offsetX + point.first * contentWidth; val y = offsetY + point.second * contentHeight
-                        if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                    }
-                    path.close()
-                    val outlineColor = if (captureConfirmed || quality.level == QualityLevel.GREEN) VaultPositive else VaultWarning
-                    drawPath(
-                        path = path,
-                        color = outlineColor,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                            width = 3.dp.toPx(),
-                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                            join = androidx.compose.ui.graphics.StrokeJoin.Round,
-                        ),
-                    )
-                }
-                if (captureConfirmed) {
-                    // Confirmation stays centred even if the person removes the card immediately
-                    // after the shutter; it represents the saved still, not live detector state.
-                    val center = androidx.compose.ui.geometry.Offset(offsetX + contentWidth * .5f, offsetY + contentHeight * .5f)
-                    val radius = 27.dp.toPx()
-                    drawCircle(VaultPositive.copy(alpha = .16f), radius = radius + 5.dp.toPx(), center = center)
-                    drawCircle(VaultPositive.copy(alpha = .96f), radius = radius, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4.dp.toPx()))
-                    drawLine(
-                        color = VaultPositive,
-                        start = center + androidx.compose.ui.geometry.Offset(-12.dp.toPx(), 0f),
-                        end = center + androidx.compose.ui.geometry.Offset(-3.dp.toPx(), 9.dp.toPx()),
-                        strokeWidth = 4.dp.toPx(),
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    )
-                    drawLine(
-                        color = VaultPositive,
-                        start = center + androidx.compose.ui.geometry.Offset(-3.dp.toPx(), 9.dp.toPx()),
-                        end = center + androidx.compose.ui.geometry.Offset(14.dp.toPx(), -11.dp.toPx()),
-                        strokeWidth = 4.dp.toPx(),
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    )
-                }
-            }
         }
         Surface(modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp), color = VaultGlassHigh, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, VaultOutlineSoft), shadowElevation = 10.dp) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -518,6 +424,56 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     }
 }
 
+/** Stationary feedback only: readiness never moves a frame or changes capture/analysis policy. */
+@Composable
+internal fun ScannerCaptureStatus(
+    qualityLevel: QualityLevel,
+    captureMessage: Int?,
+    captureInProgress: Boolean,
+    autoCaptureEnabled: Boolean,
+    autoCaptureAllowed: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var settledReady by remember { mutableStateOf(false) }
+    LaunchedEffect(qualityLevel) {
+        settledReady = false
+        if (qualityLevel == QualityLevel.GREEN) {
+            // Ignore brief green flashes in the UI only. Manual/auto capture remain immediate.
+            delay(180)
+            settledReady = true
+        }
+    }
+    val ready = qualityLevel == QualityLevel.GREEN && settledReady
+    val saved = captureMessage == R.string.capture_saved
+    val failed = captureMessage == R.string.capture_failed
+    val color by animateColorAsState(
+        targetValue = when {
+            failed -> MewRose
+            saved || (ready && !captureInProgress) -> VaultPositive
+            else -> VaultTextMuted
+        },
+        animationSpec = tween(180),
+        label = "scanner-status-color",
+    )
+    // A permanent surface avoids enter/exit movement and keeps text at a fixed position.
+    Surface(modifier = modifier.fillMaxWidth(), color = VaultNightRaised.copy(alpha = .96f), shape = RoundedCornerShape(16.dp)) {
+        Text(
+            text = when {
+                captureMessage != null -> stringResource(captureMessage)
+                captureInProgress -> "Aufnahme läuft …"
+                !autoCaptureAllowed && autoCaptureEnabled -> "Auto pausiert – Warteschlange voll · manuell möglich"
+                ready && autoCaptureEnabled -> "Bereit – automatische Aufnahme"
+                ready -> "Bereit – Auslöser drücken"
+                else -> "Karte ruhig halten"
+            },
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            color = color,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
 /**
  * Orders CameraX candidates deterministically for card scanning.  CameraX receives the complete
  * ordered list, so a device whose preferred rear lens is temporarily unavailable can still fall
@@ -553,13 +509,14 @@ internal fun cardFingerprintDifference(first: IntArray, second: IntArray): Float
 
 internal class AutoCaptureGate(
     private val missingFramesToRearm: Int = 3,
-    private val readyFramesToCapture: Int = 1,
+    private val readyFramesToCapture: Int = 2,
     private val minimumNewCardDifference: Float = 13f,
 ) {
     private var armed = true
     private var transitionFrames = 0
     private var readyFrames = 0
     private var capturedFingerprint: IntArray? = null
+    private var confirmedRemoval = false
 
     fun onFrame(captureEligible: Boolean, fingerprint: IntArray? = null): Boolean {
         if (!armed) {
@@ -568,14 +525,28 @@ internal class AutoCaptureGate(
             // from the last capture so shaking/refocusing cannot create an automatic duplicate.
             val previous = capturedFingerprint
             val differentCard = when {
-                fingerprint == null -> previous == null
+                fingerprint == null -> false
                 previous == null -> true
                 else -> cardFingerprintDifference(previous, fingerprint) >= minimumNewCardDifference
             }
-            if (!captureEligible || differentCard) transitionFrames += 1
-            if (captureEligible && transitionFrames >= missingFramesToRearm && differentCard) {
-                armed = true
-                transitionFrames = 0
+            when {
+                !captureEligible -> {
+                    transitionFrames += 1
+                    if (transitionFrames >= missingFramesToRearm) confirmedRemoval = true
+                }
+                confirmedRemoval -> {
+                    armed = true
+                    transitionFrames = 0
+                    confirmedRemoval = false
+                }
+                differentCard -> {
+                    transitionFrames += 1
+                    if (transitionFrames >= missingFramesToRearm) {
+                        armed = true
+                        transitionFrames = 0
+                    }
+                }
+                else -> transitionFrames = 0
             }
         }
         readyFrames = if (armed && captureEligible) readyFrames + 1 else 0
@@ -583,16 +554,18 @@ internal class AutoCaptureGate(
             armed = false
             readyFrames = 0
             transitionFrames = 0
+            confirmedRemoval = false
             capturedFingerprint = fingerprint?.copyOf()
             return true
         }
         return false
     }
-    fun arm() { armed = true; transitionFrames = 0; readyFrames = 0; capturedFingerprint = null }
+    fun arm() { armed = true; transitionFrames = 0; readyFrames = 0; confirmedRemoval = false; capturedFingerprint = null }
     fun disarm(fingerprint: IntArray? = null) {
         armed = false
         transitionFrames = 0
         readyFrames = 0
+        confirmedRemoval = false
         if (fingerprint != null) capturedFingerprint = fingerprint.copyOf()
     }
 }
@@ -671,6 +644,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
     private val previous = IntArray(16 * 20)
     private var hasPrevious = false
     private var lastPublished = 0L
+    private var publishedFrameSequence = 0L
     private var stableReadyFrames = 0
     private var trackedFrame: CardFrame? = null
     private var missedTrackedFrames = 0
@@ -685,9 +659,20 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             // keeps every preview frame independent and discards stale analyzer input.
             val now = SystemClock.elapsedRealtime(); if (now - lastPublished < 140) return
             val plane = image.planes.first(); val buffer = plane.buffer; val width = image.width; val height = image.height
+            val crop = image.cropRect
+            val frameGeometry = CameraFrameGeometry(
+                bufferWidth = width,
+                bufferHeight = height,
+                cropLeft = crop.left,
+                cropTop = crop.top,
+                cropRight = crop.right,
+                cropBottom = crop.bottom,
+                rotationDegrees = image.imageInfo.rotationDegrees,
+            )
             var index = 0; var bright = 0; var dark = 0; var total = 0.0; var detail = 0.0; var centerDetail = 0.0; var centerPairs = 0
             for (gy in 0 until 20) for (gx in 0 until 16) {
-                val x = ((gx + .5) * width / 16).toInt().coerceIn(0, width - 1); val y = ((gy + .5) * height / 20).toInt().coerceIn(0, height - 1)
+                val x = (frameGeometry.cropLeftPx + (gx + .5) * frameGeometry.cropWidthPx / 16).toInt().coerceIn(frameGeometry.cropLeftPx, frameGeometry.cropRightPx - 1)
+                val y = (frameGeometry.cropTopPx + (gy + .5) * frameGeometry.cropHeightPx / 20).toInt().coerceIn(frameGeometry.cropTopPx, frameGeometry.cropBottomPx - 1)
                 val offset = y * plane.rowStride + x * plane.pixelStride; val value = buffer.get(offset).toInt() and 0xFF
                 samples[index] = value; total += value; if (value > 245) bright++; if (value < 20) dark++
                 if (gx > 0) detail += abs(value - samples[index - 1])
@@ -704,8 +689,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             val sharpnessScore = (detail / (samples.size - 20) / 28.0).toFloat().coerceIn(0f, 1f)
             val centeredCardEvidence = (centerDetail / centerPairs.coerceAtLeast(1) / 24.0).toFloat().coerceIn(0f, 1f)
             val stabilityScore = (1f - motion / 32f).coerceIn(0f, 1f)
-            val rotationDegrees = image.imageInfo.rotationDegrees
-            val detectedFrame = detector.detect(buffer, width, height, plane.rowStride, plane.pixelStride, rotationDegrees)
+            val detectedFrame = detector.detect(buffer, width, height, plane.rowStride, plane.pixelStride, frameGeometry)
             val frame = track(detectedFrame)
             val contourStability = contourStability(detectedFrame)
             val glareQuality = (1f - clippedBright / .42f).coerceIn(0f, 1f)
@@ -722,7 +706,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             val hasCardEvidence = isWholeTradingCardFrame(detectedFrame)
             val captureEligible = isCaptureEligibleTradingCardFrame(detectedFrame)
             val cardFingerprint = if (captureEligible) {
-                sampleCardFingerprint(buffer, width, height, plane.rowStride, plane.pixelStride, detectedFrame.corners, rotationDegrees)
+                sampleCardFingerprint(buffer, width, height, plane.rowStride, plane.pixelStride, detectedFrame.corners, frameGeometry)
             } else null
             // A textured background alone must never arm auto capture.  Centre
             // detail remains a guidance fallback, while capture requires an actual
@@ -733,6 +717,8 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
             val guidance = when { mean < 45 || clippedDark > .48f -> QualityGuidance.MORE_LIGHT; mean > 225 || clippedBright > .32f -> QualityGuidance.LESS_GLARE; stabilityScore < .47f || (frame.found && contourStability < .60f) -> QualityGuidance.HOLD_STILL; sharpnessScore < .15f -> QualityGuidance.FOCUS; !frame.found && centeredCardEvidence < .30f -> QualityGuidance.FIND_CARD; frame.found && frame.coverage < .15f -> QualityGuidance.MOVE_CLOSER; frame.found && frame.coverage > .96f -> QualityGuidance.MOVE_AWAY; frame.found && (frame.perspective < .56f || frame.aspectRatio !in .58f..0.84f) -> QualityGuidance.ALIGN_PARALLEL; stableReadyFrames >= 2 -> QualityGuidance.READY; else -> QualityGuidance.HOLD_STILL }
             val level = when { guidance == QualityGuidance.READY -> QualityLevel.GREEN; guidance in setOf(QualityGuidance.FIND_CARD, QualityGuidance.MOVE_CLOSER, QualityGuidance.MOVE_AWAY, QualityGuidance.ALIGN_PARALLEL) || baseReady -> QualityLevel.YELLOW; else -> QualityLevel.RED }
             val displayedCorners = overlayCorners.update(frame.corners, locked = level == QualityLevel.GREEN)
+            publishedFrameSequence = nextPublishedFrameSequence(publishedFrameSequence)
+            val frameSequence = publishedFrameSequence
             val scanState = when {
                 !frame.found -> AutoScanState.SEARCHING
                 guidance == QualityGuidance.READY -> AutoScanState.READY
@@ -754,7 +740,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                     usedMultiFrameEvidence = qualityWindow.hasTemporalEvidence,
                     reason = if (ScannerDebugState.snapshot.scanId.isBlank()) guidance.name else ScannerDebugState.snapshot.reason,
                 )
-                onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, displayedCorners, clippedBright, frameQualityScore, captureEligible, cardFingerprint))
+                onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, displayedCorners, clippedBright, frameQualityScore, captureEligible, cardFingerprint, frameGeometry.previewAspectRatio, frameSequence))
             }
         } finally { image.close() }
     }
@@ -771,7 +757,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
         rowStride: Int,
         pixelStride: Int,
         corners: List<Pair<Float, Float>>,
-        rotationDegrees: Int,
+        frameGeometry: CameraFrameGeometry,
     ): IntArray? {
         if (corners.size != 4) return null
         val ordered = corners.sortedBy { it.second }.let { vertical ->
@@ -791,7 +777,7 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                 val u = (column + .5f) / 6f
                 val previewX = leftX + (rightX - leftX) * u
                 val previewY = leftY + (rightY - leftY) * u
-                val (sourceX, sourceY) = previewToSource(previewX, previewY, rotationDegrees)
+                val (sourceX, sourceY) = frameGeometry.previewToSource(previewX, previewY)
                 val x = (sourceX * (width - 1)).toInt().coerceIn(0, width - 1)
                 val y = (sourceY * (height - 1)).toInt().coerceIn(0, height - 1)
                 output[index++] = buffer.get(y * rowStride + x * pixelStride).toInt() and 0xFF
@@ -892,19 +878,21 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 600) : AutoC
         sourceHeight: Int,
         rowStride: Int,
         pixelStride: Int,
-        rotationDegrees: Int = 0,
+        frameGeometry: CameraFrameGeometry = CameraFrameGeometry(sourceWidth, sourceHeight),
     ): CardFrame {
         if (!available) return CardFrame(false, 0f, 0f)
-        val scale = min(1f, maxAnalysisEdge.toFloat() / maxOf(sourceWidth, sourceHeight).coerceAtLeast(1))
-        val width = (sourceWidth * scale).toInt().coerceAtLeast(1)
-        val height = (sourceHeight * scale).toInt().coerceAtLeast(1)
+        val croppedSourceWidth = frameGeometry.cropWidthPx
+        val croppedSourceHeight = frameGeometry.cropHeightPx
+        val scale = min(1f, maxAnalysisEdge.toFloat() / maxOf(croppedSourceWidth, croppedSourceHeight).coerceAtLeast(1))
+        val width = (croppedSourceWidth * scale).toInt().coerceAtLeast(1)
+        val height = (croppedSourceHeight * scale).toInt().coerceAtLeast(1)
         val requiredBytes = width * height
         if (lumaBytes.size != requiredBytes) lumaBytes = ByteArray(requiredBytes)
         var target = 0
         for (y in 0 until height) {
-            val sourceY = (y * sourceHeight / height).coerceAtMost(sourceHeight - 1)
+            val sourceY = frameGeometry.cropTopPx + (y * croppedSourceHeight / height).coerceAtMost(croppedSourceHeight - 1)
             for (x in 0 until width) {
-                val sourceX = (x * sourceWidth / width).coerceAtMost(sourceWidth - 1)
+                val sourceX = frameGeometry.cropLeftPx + (x * croppedSourceWidth / width).coerceAtMost(croppedSourceWidth - 1)
                 lumaBytes[target++] = buffer.get(sourceY * rowStride + sourceX * pixelStride)
             }
         }
@@ -931,7 +919,12 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 600) : AutoC
                     val area = Imgproc.contourArea(contour); if (area < imageArea * .018 || area > imageArea * .86) return@forEach
                     val curve = MatOfPoint2f(*contour.toArray()); val approx = MatOfPoint2f(); val perimeter = Imgproc.arcLength(curve, true)
                     Imgproc.approxPolyDP(curve, approx, perimeter * .028, true)
-                    val points = approx.toArray(); if (points.size == 4 && Imgproc.isContourConvex(MatOfPoint(*points))) {
+                    val points = approx.toArray()
+                    val isConvexQuadrilateral = if (points.size == 4) {
+                        val polygon = MatOfPoint(*points)
+                        try { Imgproc.isContourConvex(polygon) } finally { polygon.release() }
+                    } else false
+                    if (isConvexQuadrilateral) {
                     val ordered = points.sortedBy { atan2(it.y - points.map { p -> p.y }.average(), it.x - points.map { p -> p.x }.average()) }
                     val lengths = ordered.indices.map { i -> hypot(ordered[(i + 1) % 4].x - ordered[i].x, ordered[(i + 1) % 4].y - ordered[i].y) }
                     val opposite = min(min(lengths[0], lengths[2]) / maxOf(lengths[0], lengths[2]), min(lengths[1], lengths[3]) / maxOf(lengths[1], lengths[3])).toFloat()
@@ -940,14 +933,13 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 600) : AutoC
                     val rightAngles = liveRightAngleScore(ordered)
                     val margin = points.all { it.x > width * .015 && it.x < width * .985 && it.y > height * .015 && it.y < height * .985 }
                     val perspective = min(min(opposite, aspectScore), rightAngles) * if (margin) 1f else .5f
-                    val sourceCorners = points.sortedWith(compareBy<Point> { it.y }.thenBy { it.x }).let { sorted ->
+                    val cropCorners = points.sortedWith(compareBy<Point> { it.y }.thenBy { it.x }).let { sorted ->
                         val top = sorted.take(2).sortedBy { it.x }; val bottom = sorted.takeLast(2).sortedByDescending { it.x }; top + bottom
                     }
-                    val visualCorners = sourceCorners.map {
-                        sourceToPreview(
+                    val visualCorners = cropCorners.map {
+                        frameGeometry.cropToPreview(
                             (it.x / width).toFloat().coerceIn(0f, 1f),
                             (it.y / height).toFloat().coerceIn(0f, 1f),
-                            rotationDegrees,
                         )
                     }
                     val rawCoverage = (area / imageArea).toFloat()
@@ -1002,7 +994,7 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 600) : AutoC
 
     /** Detects a still image in its own (unrotated) coordinate system. */
     fun detectPhoto(luma: ByteArray, width: Int, height: Int): CardFrame {
-        return detect(java.nio.ByteBuffer.wrap(luma), width, height, width, 1, rotationDegrees = 0)
+        return detect(java.nio.ByteBuffer.wrap(luma), width, height, width, 1)
     }
 
     override fun close() {
@@ -1021,20 +1013,100 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 600) : AutoC
     }
 }
 
-/** Maps CameraX analysis-buffer coordinates into the fixed portrait preview without guessing. */
-internal fun sourceToPreview(x: Float, y: Float, rotationDegrees: Int): Pair<Float, Float> =
-    when (((rotationDegrees % 360) + 360) % 360) {
+internal fun nextPublishedFrameSequence(current: Long): Long = current + 1L
+
+/** CameraX crop/rotation metadata needed to register ImageAnalysis points with FIT_CENTER preview. */
+internal data class CameraFrameGeometry(
+    val bufferWidth: Int,
+    val bufferHeight: Int,
+    val cropLeft: Int = 0,
+    val cropTop: Int = 0,
+    val cropRight: Int = bufferWidth,
+    val cropBottom: Int = bufferHeight,
+    val rotationDegrees: Int = 0,
+) {
+    private val safeWidth = bufferWidth.coerceAtLeast(1)
+    private val safeHeight = bufferHeight.coerceAtLeast(1)
+    internal val cropLeftPx = cropLeft.coerceIn(0, safeWidth - 1)
+    internal val cropTopPx = cropTop.coerceIn(0, safeHeight - 1)
+    internal val cropRightPx = cropRight.coerceIn(cropLeftPx + 1, safeWidth)
+    internal val cropBottomPx = cropBottom.coerceIn(cropTopPx + 1, safeHeight)
+    internal val cropWidthPx = cropRightPx - cropLeftPx
+    internal val cropHeightPx = cropBottomPx - cropTopPx
+    private val cropWidth = cropWidthPx.toFloat()
+    private val cropHeight = cropHeightPx.toFloat()
+    private val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
+
+    val previewAspectRatio: Float
+        get() = if (normalizedRotation == 90 || normalizedRotation == 270) cropHeight / cropWidth else cropWidth / cropHeight
+
+    fun sourceToPreview(x: Float, y: Float): Pair<Float, Float> {
+        val cropX = ((x.coerceIn(0f, 1f) * safeWidth - cropLeftPx) / cropWidth).coerceIn(0f, 1f)
+        val cropY = ((y.coerceIn(0f, 1f) * safeHeight - cropTopPx) / cropHeight).coerceIn(0f, 1f)
+        return cropToPreview(cropX, cropY)
+    }
+
+    fun cropToPreview(x: Float, y: Float): Pair<Float, Float> =
+        rotateNormalized(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f), normalizedRotation)
+
+    fun previewToSource(x: Float, y: Float): Pair<Float, Float> {
+        val (cropX, cropY) = inverseRotateNormalized(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f), normalizedRotation)
+        return ((cropLeftPx + cropX * cropWidth) / safeWidth).coerceIn(0f, 1f) to
+            ((cropTopPx + cropY * cropHeight) / safeHeight).coerceIn(0f, 1f)
+    }
+}
+
+internal data class PreviewContentBounds(val left: Float, val top: Float, val width: Float, val height: Float) {
+    val right: Float get() = left + width
+    val bottom: Float get() = top + height
+}
+
+/** Mirrors PreviewView.ScaleType.FIT_CENTER for the actual view and rotated analysis crop. */
+internal fun fitCenterPreviewBounds(viewWidth: Float, viewHeight: Float, imageAspectRatio: Float): PreviewContentBounds {
+    if (viewWidth <= 0f || viewHeight <= 0f || imageAspectRatio <= 0f || !imageAspectRatio.isFinite()) {
+        return PreviewContentBounds(0f, 0f, viewWidth.coerceAtLeast(0f), viewHeight.coerceAtLeast(0f))
+    }
+    val viewAspect = viewWidth / viewHeight
+    return if (viewAspect > imageAspectRatio) {
+        val width = viewHeight * imageAspectRatio
+        PreviewContentBounds((viewWidth - width) / 2f, 0f, width, viewHeight)
+    } else {
+        val height = viewWidth / imageAspectRatio
+        PreviewContentBounds(0f, (viewHeight - height) / 2f, viewWidth, height)
+    }
+}
+
+/** Largest calm portrait-card guide inside the visible preview; this is never a detector gate. */
+internal fun guidedCardZone(content: PreviewContentBounds): PreviewContentBounds {
+    val height = minOf(content.height * .74f, content.width * .72f / CardScanConfiguration.CARD_RATIO)
+    val width = height * CardScanConfiguration.CARD_RATIO
+    return PreviewContentBounds(
+        left = content.left + (content.width - width) / 2f,
+        top = content.top + (content.height - height) / 2f,
+        width = width,
+        height = height,
+    )
+}
+
+private fun rotateNormalized(x: Float, y: Float, rotationDegrees: Int): Pair<Float, Float> =
+    when (rotationDegrees) {
         90 -> (1f - y) to x
         180 -> (1f - x) to (1f - y)
         270 -> y to (1f - x)
         else -> x to y
-    }.let { (mappedX, mappedY) -> mappedX.coerceIn(0f, 1f) to mappedY.coerceIn(0f, 1f) }
+    }
 
-/** Inverse of [sourceToPreview], used only for sampling the unrotated CameraX luma buffer. */
-internal fun previewToSource(x: Float, y: Float, rotationDegrees: Int): Pair<Float, Float> =
-    when (((rotationDegrees % 360) + 360) % 360) {
+private fun inverseRotateNormalized(x: Float, y: Float, rotationDegrees: Int): Pair<Float, Float> =
+    when (rotationDegrees) {
         90 -> y to (1f - x)
         180 -> (1f - x) to (1f - y)
         270 -> (1f - y) to x
         else -> x to y
-    }.let { (mappedX, mappedY) -> mappedX.coerceIn(0f, 1f) to mappedY.coerceIn(0f, 1f) }
+    }
+
+/** Backwards-compatible pure helpers for full-buffer transforms. */
+internal fun sourceToPreview(x: Float, y: Float, rotationDegrees: Int): Pair<Float, Float> =
+    rotateNormalized(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f), ((rotationDegrees % 360) + 360) % 360)
+
+internal fun previewToSource(x: Float, y: Float, rotationDegrees: Int): Pair<Float, Float> =
+    inverseRotateNormalized(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f), ((rotationDegrees % 360) + 360) % 360)

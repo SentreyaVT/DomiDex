@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [CatalogCardEntity::class, BinderEntity::class, CollectionEntryEntity::class, CollectionSyncOutboxEntity::class, RawPriceSnapshotEntity::class, GradedMarketRecordEntity::class, GradingAnalysisEntity::class, AppMetadataEntity::class, CatalogSyncStateEntity::class],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 abstract class CardVaultDatabase : RoomDatabase() {
@@ -21,7 +21,7 @@ abstract class CardVaultDatabase : RoomDatabase() {
         fun get(context: Context): CardVaultDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, CardVaultDatabase::class.java, "cardvault.db")
                 // Every future schema version must provide explicit migrations. Never silently erase collections.
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
                 .build().also { instance = it }
         }
 
@@ -150,6 +150,13 @@ abstract class CardVaultDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_collection_entries_ownerUid_sourceSetId_sourceCardId ON collection_entries(ownerUid, sourceSetId, sourceCardId)")
+            }
+        }
+
+        /** Covers name filtering without loading every full catalog row; existing data is untouched. */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_catalog_cards_externalSource_externalProductId_name ON catalog_cards(externalSource, externalProductId, name)")
             }
         }
     }

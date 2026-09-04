@@ -58,21 +58,21 @@ class CardImageNormalizerInstrumentedTest {
         repeat(36) { row -> canvas.drawLine(190f, 235f + row * 18f, 680f, 235f + row * 18f, Paint().apply { color = Color.rgb(25, 70, 28); strokeWidth = 6f }) }
         repeat(22) { column -> canvas.drawLine(205f + column * 21f, 225f, 205f + column * 21f, 865f, Paint().apply { color = Color.rgb(130, 190, 90); strokeWidth = 4f }) }
 
-        val result = CardImageNormalizer.normalize(source)
-
-        assertNotNull("normalization failed: ${result.quality}", result.bitmap)
-        assertTrue(result.quality.cardDetected)
-        assertTrue(result.quality.frameConfidence >= CardScanConfiguration.MIN_FRAME_SCORE)
-        assertTrue(result.bitmap!!.width == CardScanConfiguration.NORMALIZED_WIDTH)
-        assertTrue(result.bitmap!!.height == CardScanConfiguration.NORMALIZED_HEIGHT)
+        withNormalizedCapture(source) { result ->
+            assertNotNull("normalization failed: ${result.quality}", result.bitmap)
+            assertTrue(result.quality.cardDetected)
+            assertTrue(result.quality.frameConfidence >= CardScanConfiguration.MIN_FRAME_SCORE)
+            assertTrue(result.bitmap!!.width == CardScanConfiguration.NORMALIZED_WIDTH)
+            assertTrue(result.bitmap!!.height == CardScanConfiguration.NORMALIZED_HEIGHT)
+        }
     }
 
     @Test fun rejectsImageWithoutPlausibleCardFrameOnDevice() {
         val background = Bitmap.createBitmap(720, 1_000, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(21, 22, 25)) }
-        val result = CardImageNormalizer.normalize(background)
-
-        assertNull(result.bitmap)
-        assertTrue(!result.quality.cardDetected || result.quality.reason.isNotBlank())
+        withNormalizedCapture(background) { result ->
+            assertNull(result.bitmap)
+            assertTrue(!result.quality.cardDetected || result.quality.reason.isNotBlank())
+        }
     }
 
     @Test fun rejectsTexturedFabricWithoutPhysicalCard() {
@@ -94,9 +94,9 @@ class CardImageNormalizerInstrumentedTest {
             })
         }
 
-        val result = CardImageNormalizer.normalize(background)
-
-        assertNull("fabric texture became a false card: ${result.quality}", result.bitmap)
+        withNormalizedCapture(background) { result ->
+            assertNull("fabric texture became a false card: ${result.quality}", result.bitmap)
+        }
     }
 
     @Test fun holoHighlightDoesNotInvalidateAnOtherwisePlausibleSpecialCard() {
@@ -114,12 +114,12 @@ class CardImageNormalizerInstrumentedTest {
         // Local foil reflection: significant but far from covering the card.
         canvas.drawOval(430f, 300f, 690f, 610f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE })
 
-        val result = CardImageNormalizer.normalize(source)
-
-        assertNotNull("holo normalization failed: ${result.quality}", result.bitmap)
-        assertTrue(result.quality.cardDetected)
-        assertTrue(result.quality.glare > 0f)
-        assertEquals(2, result.analysisVariants.size)
+        withNormalizedCapture(source) { result ->
+            assertNotNull("holo normalization failed: ${result.quality}", result.bitmap)
+            assertTrue(result.quality.cardDetected)
+            assertTrue(result.quality.glare > 0f)
+            assertEquals(2, result.analysisVariants.size)
+        }
     }
 
     @Test fun landscapeCardProducesOnlyAspectCorrectCanonicalCandidates() {
@@ -150,17 +150,17 @@ class CardImageNormalizerInstrumentedTest {
             )
         } }
 
-        val result = CardImageNormalizer.normalize(source)
-
-        assertNotNull("landscape card was rejected: ${result.quality}", result.bitmap)
-        assertEquals(
-            listOf(AnalysisOrientation.DEG_90, AnalysisOrientation.DEG_270),
-            result.analysisVariants.map(CanonicalCardAnalysisVariant::orientation),
-        )
-        assertTrue(result.analysisVariants.all {
-            it.bitmap.width == CardScanConfiguration.RECOGNITION_WIDTH &&
-                it.bitmap.height == CardScanConfiguration.RECOGNITION_HEIGHT
-        })
+        withNormalizedCapture(source) { result ->
+            assertNotNull("landscape card was rejected: ${result.quality}", result.bitmap)
+            assertEquals(
+                listOf(AnalysisOrientation.DEG_90, AnalysisOrientation.DEG_270),
+                result.analysisVariants.map(CanonicalCardAnalysisVariant::orientation),
+            )
+            assertTrue(result.analysisVariants.all {
+                it.bitmap.width == CardScanConfiguration.RECOGNITION_WIDTH &&
+                    it.bitmap.height == CardScanConfiguration.RECOGNITION_HEIGHT
+            })
+        }
     }
 
     @Test fun completesSmallInterruptionsInLowContrastOuterBorder() {
@@ -187,9 +187,26 @@ class CardImageNormalizerInstrumentedTest {
             )
         } }
 
-        val result = CardImageNormalizer.normalize(source)
+        withNormalizedCapture(source) { result ->
+            assertNotNull("interrupted foil-like border was not completed: ${result.quality}", result.bitmap)
+            assertTrue(result.quality.cardDetected)
+        }
+    }
 
-        assertNotNull("interrupted foil-like border was not completed: ${result.quality}", result.bitmap)
-        assertTrue(result.quality.cardDetected)
+    private inline fun withNormalizedCapture(source: Bitmap, verify: (NormalizedCardCapture) -> Unit) {
+        var result: NormalizedCardCapture? = null
+        try {
+            val capture = CardImageNormalizer.normalize(source)
+            result = capture
+            verify(capture)
+        } finally {
+            result?.let { capture ->
+                (listOfNotNull(capture.bitmap, capture.recognitionBitmap, capture.originalCrop) +
+                    capture.analysisVariants.map(CanonicalCardAnalysisVariant::bitmap))
+                    .distinct()
+                    .forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+            }
+            if (!source.isRecycled) source.recycle()
+        }
     }
 }

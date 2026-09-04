@@ -1,9 +1,10 @@
 package com.dominik.cardvault.ui
 
-/** Filled only after the owner provides a public support identity. */
+/** Public contact details supplied by the operator for support and privacy requests. */
 object AppSupportConfig {
-    const val displayName: String = ""
-    const val email: String = ""
+    const val displayName: String = "DomiDex · Dominik"
+    const val email: String = "Dominik.muxifeld@gmail.com"
+    const val privacyUrl: String = "https://domidex.web.app/datenschutz"
     const val communityUrl: String = "https://discord.gg/BE6upBbJ3E"
     val isConfigured: Boolean get() = displayName.isNotBlank() && email.isNotBlank()
     val hasCommunity: Boolean get() = communityUrl.isNotBlank()

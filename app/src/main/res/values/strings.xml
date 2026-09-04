@@ -149,6 +149,9 @@
     <string name="camera_permission_body">DomiDex benötigt die Kamera nur beim Scannen. Aufnahmen bleiben auf diesem Gerät.</string>
     <string name="camera_permission_allow">Kamera erlauben</string>
     <string name="camera_permission_retry">Erneut versuchen</string>
+    <string name="scanner_camera_intro_title">Bereit für deinen ersten Scan?</string>
+    <string name="scanner_camera_intro_body">DomiDex öffnet die Kamera nur im Scanner und verarbeitet Aufnahmen lokal auf diesem Gerät. Ein Upload erfolgt nur nach einer separaten, ausdrücklichen Zustimmung. Du kannst automatisch oder jederzeit manuell auslösen und prüfst jeden Treffer selbst.</string>
+    <string name="scanner_camera_intro_continue">Verstanden, Kamera öffnen</string>
     <string name="scanner_stability_planned">Geplant: automatische Aufnahme bei ruhigem Bild</string>
     <string name="scanner_boundary">Die Live-Kamera prüft die Aufnahmequalität und liest nach einer Aufnahme Text ausschließlich lokal. Grün bedeutet nur aufnahmebereit. Katalogtreffer sind Vorschläge und müssen bestätigt werden; Finish und exakte Variante werden nicht automatisch behauptet.</string>
     <string name="scanner_quality_active">Aktiv: Licht, Schärfe, Stabilität, Rahmen und Perspektive</string>
@@ -197,6 +200,7 @@
     <string name="scanner_candidates_boundary">Bitte den exakten Druck prüfen. Holo, Reverse-Holo und andere Varianten bleiben immer manuell bestätigbar.</string>
     <string name="grading_eyebrow">Vorabprüfung</string>
     <string name="grading_title">Zustandscheck</string>
+    <string name="grading_web_notice">Zustand ermitteln kommt mit einem sehr baldigen Update in die DomiDex-Web-App. In der Android-App ist diese Funktion nicht verfügbar.</string>
     <string name="grading_subtitle">Geführte Sichtprüfung vor einer professionellen Bewertung.</string>
     <string name="grading_disclaimer">Dies ist eine foto-basierte Vorabprüfung, keine garantierte PSA-Note. Die endgültige Bewertung erfolgt ausschließlich durch das Grading-Unternehmen.</string>
     <string name="photo_checklist">Foto-Checkliste</string>
