@@ -2,6 +2,8 @@ package com.dominik.cardvault.data
 
 internal data class MasterSetCard(
     val id: String,
+    val sourceSetId: String,
+    val sourceCardId: String,
     val name: String,
     val number: String,
     val finish: String,
@@ -147,13 +149,26 @@ Mega-Quajutsu-ex
         84, 85, 86,
     )
 
+    /**
+     * Source-declared base printings which have no ordinary Normal printing in
+     * the German ME04 catalogue. Later promotional Normal printings
+     * remain Normal because they are real declared printings of these cards.
+     */
+    private val holoBaseNumbers = setOf(
+        3, 7, 10, 15, 19, 22, 35, 39, 41, 42, 48, 55, 64, 65, 73, 84, 86,
+    ) + (87..122)
+
     val cards: List<MasterSetCard> = names.flatMapIndexed { index, name ->
         val number = index + 1
         val printedNumber = number.toString().padStart(3, '0')
+        val sourceSetId = "me04"
+        val sourceCardId = "$sourceSetId-$printedNumber"
         val imageUrl = "https://www.pokemon.com/static-assets/content-assets/cms2-de-de/img/cards/site_search/ME04/ME04_DE_${number}.png"
         buildList {
-            add(MasterSetCard("me04-$printedNumber-normal", name, "$printedNumber/122", "Normal", "Standard", imageUrl))
-            if (number in reverseNumbers) add(MasterSetCard("me04-$printedNumber-reverse", name, "$printedNumber/122", "Reverse Holo", "Reverse Holo", imageUrl))
+            val baseFinish = if (number in holoBaseNumbers) "Holo" else "Normal"
+            val baseVariant = if (number == 122) "Standard · Folie: Gold" else "Standard"
+            add(MasterSetCard("$sourceCardId-${baseFinish.lowercase()}", sourceSetId, sourceCardId, name, "$printedNumber/122", baseFinish, baseVariant, imageUrl))
+            if (number in reverseNumbers) add(MasterSetCard("$sourceCardId-reverse", sourceSetId, sourceCardId, name, "$printedNumber/122", "Reverse Holo", "Standard", imageUrl))
         }
     }
 }

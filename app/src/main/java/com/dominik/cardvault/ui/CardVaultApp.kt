@@ -1069,16 +1069,12 @@ private fun isOnline(context: Context): Boolean {
     visualCatalog: PokemonVisualCatalog = remember { PokemonVisualCatalog() },
 ) {
     var setReferences by remember(setName) { mutableStateOf<List<CollectionCard>>(emptyList()) }
-    var sourceSetCards by remember(setName) { mutableStateOf<List<PokemonVisualCard>>(emptyList()) }
+    var sourceSetCards by remember(setName) { mutableStateOf(wachsendesChaosSourceCards(setName)) }
     var refreshedCoverUrl by remember(setName) { mutableStateOf<String?>(null) }
     val displayedCoverUrl = fallbackCardImageUrl(refreshedCoverUrl, coverUrl)
     var referencesLoading by remember(setName) { mutableStateOf(true) }
     var refreshVersion by rememberSaveable(setName) { mutableIntStateOf(0) }
     LaunchedEffect(setName, refreshVersion) {
-        if (isWachsendesChaosSet(setName)) {
-            referencesLoading = false
-            return@LaunchedEffect
-        }
         referencesLoading = true
         try {
             // Only cached TCGdex slots carry source-confirmed German finishes.
@@ -1500,6 +1496,27 @@ private fun collectorNumberOf(value: String): Int? = Regex("\\d{1,4}").find(valu
 private fun isWachsendesChaosSet(setName: String): Boolean = setName.equals("Wachsendes Chaos", ignoreCase = true) ||
     setName.equals("Chaos Rising", ignoreCase = true)
 
+/** Immediate source identity for the fixed binder while live detail metadata loads. */
+internal fun wachsendesChaosSourceCards(setName: String): List<PokemonVisualCard> {
+    if (!isWachsendesChaosSet(setName)) return emptyList()
+    val set = PokemonSetRegistry.legacyOfflineSet("me04") ?: return emptyList()
+    return WachsendesChaosMasterSet.cards.groupBy { it.sourceCardId }.values.map { printings ->
+        val primary = printings.first()
+        PokemonVisualCard(
+            id = primary.sourceCardId,
+            name = primary.name,
+            number = primary.number.substringBefore('/'),
+            rarity = null,
+            smallImageUrl = primary.imageUrl,
+            largeImageUrl = primary.imageUrl,
+            set = set,
+            printVariants = printings.map { printing ->
+                PokemonPrintVariant(printing.id, printing.finish, printing.variant)
+            },
+        )
+    }
+}
+
 /** Source identity survives translated or edited display names in the Binder. */
 internal fun resolveBinderSourceSet(setName: String, cards: List<CollectionCard>, sets: List<PokemonSet>): PokemonSet? {
     val sourceSetId = cards.mapNotNull { it.sourceSetId?.trim()?.lowercase(Locale.ROOT)?.takeIf(String::isNotBlank) }
@@ -1523,6 +1540,21 @@ internal fun PokemonVisualCard.binderPrintVariants(): List<PokemonPrintVariant> 
         "${normalizeBinderMetadata(printing.finish)}|${normalizeBinderMetadata(printing.variant)}"
     }
     if (distinct.isEmpty()) return listOf(PokemonPrintVariant("normal", "Normal", "Standard"))
+    // Stamp, special-foil and error printings retain their exact product identity
+    // for manual selection, but they must not create extra canonical master slots.
+    // Pick one source printing per established Normal/Holo/Reverse slot and prefer
+    // the ordinary printing when the source also declares a special edition.
+    val canonicalByFinish = distinct
+        .groupBy { masterFinishOrder(it.finish, it.variant) }
+        .mapValues { (_, printings) ->
+            printings.minWithOrNull(
+                compareBy<PokemonPrintVariant> { printing ->
+                    listOf("untertyp:", "stempel:", "folie:").count { marker ->
+                        printing.variant.contains(marker, ignoreCase = true)
+                    }
+                }.thenBy { distinct.indexOf(it) },
+            )!!
+        }
     val number = collectorNumberOf(this.number)
     val inMainSet = number != null && set.printedTotal > 0 && number <= set.printedTotal
     val normalizedName = name.trim().lowercase(Locale.ROOT)
@@ -1530,11 +1562,12 @@ internal fun PokemonVisualCard.binderPrintVariants(): List<PokemonPrintVariant> 
     val isRuleBoxPokemon = Regex("(?:^|\\s|-)(ex|gx|v|vmax|vstar)$", RegexOption.IGNORE_CASE).containsMatchIn(normalizedName)
     val isSpecialRarity = listOf("ace", "special", "illustration", "ultra", "hyper", "secret", "rainbow", "gold")
         .any(normalizedRarity::contains)
-    if (!inMainSet || isRuleBoxPokemon || isSpecialRarity) return distinct.take(1)
+    val canonical = listOfNotNull(canonicalByFinish[0], canonicalByFinish[1], canonicalByFinish[2])
+    if (!inMainSet || isRuleBoxPokemon || isSpecialRarity) return canonical.take(1)
 
-    val normal = distinct.firstOrNull { masterFinishOrder(it.finish, it.variant) == 0 }
-    val reverse = distinct.firstOrNull { masterFinishOrder(it.finish, it.variant) == 2 }
-    return if (normal != null && reverse != null) listOf(normal, reverse) else distinct.take(2)
+    val normal = canonicalByFinish[0]
+    val reverse = canonicalByFinish[2]
+    return if (normal != null && reverse != null) listOf(normal, reverse) else canonical.take(2)
 }
 
 /** Every allowed source-confirmed printing gets its own master-set slot. */
@@ -1570,19 +1603,8 @@ private fun PokemonVisualCard.asBinderReferences(
 
 internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, capacity: Int, references: List<CollectionCard> = emptyList()): List<CollectionCard?> {
     if (isWachsendesChaosSet(setName)) {
-        return WachsendesChaosMasterSet.cards.map { reference ->
-            cards.firstOrNull { owned ->
-                normalizedCollectorNumber(owned.number) == normalizedCollectorNumber(reference.number) &&
-                    when {
-                        reference.finish.contains("reverse", true) || reference.variant.contains("reverse", true) ->
-                            owned.finish.contains("reverse", true) || owned.variant.contains("reverse", true) || owned.variant.contains("parallel", true)
-                        reference.finish.contains("holo", true) ->
-                            owned.finish.contains("holo", true) && !owned.finish.contains("reverse", true) && !owned.variant.contains("reverse", true)
-                        else ->
-                            !owned.finish.contains("reverse", true) && !owned.variant.contains("reverse", true) &&
-                                !owned.variant.contains("parallel", true) && !owned.finish.contains("holo", true)
-                    }
-            }?.withReferenceImage(reference.imageUrl) ?: CollectionCard(
+        val fixedSlots = WachsendesChaosMasterSet.cards.take(capacity).map { reference ->
+            CollectionCard(
                 entryId = 0,
                 id = reference.id,
                 name = reference.name,
@@ -1601,8 +1623,22 @@ internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, ca
                 acquisitionDateEpochDay = null,
                 accent = 0xFF24263A,
                 imageUrl = reference.imageUrl,
+                sourceSetId = reference.sourceSetId,
+                sourceCardId = reference.sourceCardId,
             )
-        }.take(capacity)
+        }
+        val claimedIndices = mutableSetOf<Int>()
+        val populatedSlots = fixedSlots.map { reference ->
+            cards.indices.firstOrNull { index ->
+                index !in claimedIndices && isSameWachsendesChaosSlot(reference, cards[index])
+            }?.let { index ->
+                claimedIndices += index
+                cards[index].withWachsendesChaosReference(reference)
+            } ?: reference
+        }
+        // Extra copies/conditions and legacy rows must remain visible without
+        // displacing any of the 194 official master-set positions.
+        return populatedSlots + cards.filterIndexed { index, _ -> index !in claimedIndices }
     }
     if (references.isNotEmpty()) {
         // A master binder is ordered by printed number, then its confirmed
@@ -1665,6 +1701,37 @@ internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, ca
 /** Enrich only the displayed, already matched slot; the saved collection entry is unchanged. */
 private fun CollectionCard.withReferenceImage(referenceImageUrl: String?): CollectionCard =
     if (imageUrl.isNullOrBlank() && !referenceImageUrl.isNullOrBlank()) copy(imageUrl = referenceImageUrl) else this
+
+/** Stable source identity is display-enriched only; persisted collection rows are untouched. */
+private fun CollectionCard.withWachsendesChaosReference(reference: CollectionCard): CollectionCard = copy(
+    imageUrl = imageUrl?.takeIf(String::isNotBlank) ?: reference.imageUrl,
+    sourceSetId = sourceSetId?.takeIf(String::isNotBlank) ?: reference.sourceSetId,
+    sourceCardId = sourceCardId?.takeIf(String::isNotBlank) ?: reference.sourceCardId,
+    finish = if (adoptsLegacyWachsendesChaosGold(reference)) reference.finish else finish,
+    variant = if (adoptsLegacyWachsendesChaosGold(reference)) reference.variant else variant,
+)
+
+private fun CollectionCard.adoptsLegacyWachsendesChaosGold(reference: CollectionCard): Boolean =
+    reference.sourceCardId.equals("me04-122", ignoreCase = true) &&
+        masterEdition(reference).isNotEmpty() && masterEdition(this).isEmpty()
+
+private fun isSameWachsendesChaosSlot(reference: CollectionCard, owned: CollectionCard): Boolean {
+    if (!owned.sourceSetId.isNullOrBlank() && !owned.sourceSetId.equals(reference.sourceSetId, ignoreCase = true)) return false
+    if (!owned.sourceCardId.isNullOrBlank() && !owned.sourceCardId.equals(reference.sourceCardId, ignoreCase = true)) return false
+    if (owned.sourceSetId.isNullOrBlank() && owned.sourceCardId.isNullOrBlank() && !isWachsendesChaosSet(owned.set)) return false
+    if (normalizedCollectorNumber(owned.number) != normalizedCollectorNumber(reference.number)) return false
+    val referenceIsReverse = masterFinishOrder(reference) == 2
+    val ownedIsReverse = masterFinishOrder(owned) == 2
+    if (referenceIsReverse != ownedIsReverse) return false
+    val referenceEdition = masterEdition(reference)
+    val ownedEdition = masterEdition(owned)
+    // Preserve Normal/Holo compatibility for legacy base rows, but never let a
+    // stamped or special-foil copy displace the ordinary fixed master slot.
+    val legacyGoldBase = reference.sourceCardId.equals("me04-122", ignoreCase = true) &&
+        referenceEdition.isNotEmpty() && ownedEdition.isEmpty()
+    return legacyGoldBase || (referenceEdition.isEmpty() && ownedEdition.isEmpty()) ||
+        (referenceEdition.isNotEmpty() && referenceEdition == ownedEdition)
+}
 
 private fun isSameMasterPrinting(reference: CollectionCard, owned: CollectionCard): Boolean {
     if (!isSameMasterCard(reference, owned) || masterFinishOrder(reference) != masterFinishOrder(owned)) return false
@@ -2659,7 +2726,8 @@ private fun openOfficialPage(context: Context, url: String) {
             val expansionId = resolveCardmarketExpansionId(cards, candidatesByMarketName)
             expansionId to cards.associate { card ->
                 val searchName = card.marketSearchName ?: card.name
-                val product = visualCardmarketProducts(card, cards, candidatesByMarketName[searchName].orEmpty(), expansionId).firstOrNull()
+                val options = visualCardmarketProducts(card, cards, candidatesByMarketName[searchName].orEmpty(), expansionId)
+                val product = preferredVisualCardmarketProduct(card, options)
                 card.id to VisualCardMarketPrice(product?.trendPriceEur, product != null, product != null)
             }
         }
@@ -2696,12 +2764,12 @@ private fun openOfficialPage(context: Context, url: String) {
                 selectedCard != null -> {
                     item { VisualCardRow(selectedCard!!) {} }
                     val selected = selectedCard!!
-                    val trendProduct = products.firstOrNull { it.trendPriceEur != null }
-                    val visibleTrendProduct = trendProduct
+                    val preferredProduct = preferredVisualCardmarketProduct(selected, products)
+                    val visibleTrendProduct = preferredProduct
                     item {
                         Button(
                             onClick = {
-                                val selection = catalogResultForVisualCard(selected, trendProduct)
+                                val selection = catalogResultForVisualCard(selected, preferredProduct)
                                 onSelected(selection)
                             },
                             enabled = !loading,
@@ -2740,10 +2808,11 @@ private fun openOfficialPage(context: Context, url: String) {
                     if (!loading && products.isEmpty()) item {
                         Text("Kein passender Cardmarket-Druck gefunden. Du kannst die Karte trotzdem direkt hinzufügen.", color = VaultTextMuted, fontSize = 12.sp)
                     }
-                    items(products, key = { it.productId }) { product ->
+                    items(products, key = { "${it.productId}|${it.finish}|${it.variant}" }) { product ->
                         OutlinedCard(onClick = { onSelected(catalogResultForVisualCard(selected, product)) }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface)) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("Cardmarket-Trendpreis", fontWeight = FontWeight.Bold)
                             Text(product.trendPriceEur?.let(::euro) ?: "Noch kein Trendpreis", color = MewIce, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text(listOfNotNull(product.finish, product.variant).filter(String::isNotBlank).joinToString(" · "), color = VaultTextMuted, fontSize = 11.sp)
                             Text(if (isExactVisualCatalogPriceMatch(selected, product)) "Exaktes Produkt auswählen" else "Gleichnamigen Druck prüfen und auswählen", color = if (isExactVisualCatalogPriceMatch(selected, product)) MewRoseSoft else VaultGold, fontSize = 12.sp)
                         } }
                     }
@@ -2780,7 +2849,17 @@ internal fun catalogResultForVisualCard(card: PokemonVisualCard, marketProduct: 
     // Cardmarket's catalogue variant ("Cardmarket-Produkt") is not a physical
     // printing. Only the selected source printing determines the Binder slot.
     val printings = card.binderPrintVariants()
-    val linkedPrintings = printings.filter { marketProduct != null && it.cardmarketProductId == marketProduct.productId }
+    // A deliberately selected special printing may live outside the canonical
+    // Binder wall. Preserve its source-declared identity so it appears as an
+    // owned overflow card instead of borrowing the ordinary slot and price.
+    val exactLinkedPrintings = card.printVariants.filter {
+        marketProduct != null && it.cardmarketProductId == marketProduct.productId &&
+            it.finish.equals(marketProduct.finish, ignoreCase = true) &&
+            it.variant.equals(marketProduct.variant, ignoreCase = true)
+    }
+    val linkedPrintings = exactLinkedPrintings.ifEmpty {
+        card.printVariants.filter { marketProduct != null && it.cardmarketProductId == marketProduct.productId }
+    }
     val eligiblePrintings = linkedPrintings.ifEmpty { printings }
     val printing = eligiblePrintings.firstOrNull { it.finish.equals(marketProduct?.finish, ignoreCase = true) }
         ?: eligiblePrintings.first()

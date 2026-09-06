@@ -3,6 +3,7 @@ package com.dominik.cardvault.ui
 import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
+import com.dominik.cardvault.data.catalog.isPokemonPocketSet
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionCard
 import com.dominik.cardvault.model.CollectionRepository
@@ -21,16 +22,26 @@ internal fun visualCardmarketProducts(
     candidates: List<CatalogSearchResult>,
     resolvedExpansionId: String? = null,
 ): List<CatalogSearchResult> {
+    // TCG Pocket is a digital catalogue. Even strong name/expansion evidence or a
+    // stale third-party id must never turn one of its cards into a physical price.
+    if (card.set.isPokemonPocketSet()) return emptyList()
     val declaredIds = card.printVariants.mapNotNull { it.cardmarketProductId }.distinct()
     if (declaredIds.isNotEmpty()) {
         // A source-declared product is stronger than a guessed expansion or name/order.
-        // If it is absent locally, never substitute another same-name printing.
-        return candidates.filter { it.hasMarketProduct && it.productId in declaredIds }
-            .distinctBy { it.productId }.map { product ->
-                product.copy(sourceSetId = card.set.id.lowercase(), sourceCardId = card.id.lowercase(),
-                    visualSetName = card.set.name, collectorNumber = card.number,
-                    imageUrl = card.largeImageUrl, marketSearchName = card.marketSearchName)
-            }
+        // Preserve every declared physical printing: Normal and Reverse may share
+        // one product id, while stamps/foils may have separate product ids.
+        return card.printVariants.mapNotNull { printing ->
+            val productId = printing.cardmarketProductId ?: return@mapNotNull null
+            val product = candidates.firstOrNull { it.hasMarketProduct && it.productId == productId }
+                ?: return@mapNotNull null
+            product.copy(
+                sourceSetId = card.set.id.lowercase(), sourceCardId = card.id.lowercase(),
+                visualSetName = card.set.name, collectorNumber = card.number,
+                imageUrl = card.largeImageUrl, marketSearchName = card.marketSearchName,
+                finish = printing.finish, variant = printing.variant,
+                trendPriceEur = product.realTrendFor(printing.finish),
+            )
+        }.distinctBy { "${it.productId}|${it.finish}|${it.variant}" }
     }
     val expansionId = resolvedExpansionId ?: card.set.cardmarketExpansionId ?: return emptyList()
     val searchName = card.marketSearchName ?: card.name
@@ -48,7 +59,7 @@ internal fun visualCardmarketProducts(
     val printedIndex = sameNamePrintings.indexOfFirst { it.id == card.id }
     // An incomplete set list must not turn a missing secret printing into its
     // first, usually main-set, namesake. Preserve the selected source identity.
-    if (printedIndex < 0) return emptyList()
+    if (printedIndex < 0 || samePrintingCandidates.size != sameNamePrintings.size) return emptyList()
     return samePrintingCandidates.getOrNull(printedIndex)?.copy(
         sourceSetId = card.set.id.lowercase(),
         sourceCardId = card.id.lowercase(),
@@ -57,6 +68,30 @@ internal fun visualCardmarketProducts(
         imageUrl = card.largeImageUrl,
         marketSearchName = card.marketSearchName,
     )?.let(::listOf).orEmpty()
+}
+
+/** Select one exact source printing without falling through to another special product. */
+internal fun visualCardmarketProductForPrinting(
+    printing: PokemonPrintVariant,
+    products: List<CatalogSearchResult>,
+): CatalogSearchResult? {
+    val exact = products.firstOrNull { product ->
+        (printing.cardmarketProductId == null || product.productId == printing.cardmarketProductId) &&
+            product.finish.equals(printing.finish, ignoreCase = true) &&
+            product.variant.equals(printing.variant, ignoreCase = true)
+    }
+    if (exact != null || printing.cardmarketProductId != null) return exact
+    // Undeclared legacy fallback produces exactly one verified product.
+    return products.singleOrNull()
+}
+
+/** The normal Binder printing is the default; a priced stamp never replaces it. */
+internal fun preferredVisualCardmarketProduct(
+    card: PokemonVisualCard,
+    products: List<CatalogSearchResult>,
+): CatalogSearchResult? {
+    val preferred = card.binderPrintVariants().firstOrNull() ?: return null
+    return visualCardmarketProductForPrinting(preferred, products)
 }
 
 /** Resolves a grey Binder slot only through its stable source identity and verified printing. */
@@ -92,6 +127,7 @@ internal fun binderReferenceCardmarketProducts(
 internal suspend fun loadVisualCardmarketCandidates(
     card: PokemonVisualCard, repository: CollectionRepository,
 ): List<CatalogSearchResult> {
+    if (card.set.isPokemonPocketSet()) return emptyList()
     val ids = card.printVariants.mapNotNull { it.cardmarketProductId }.distinct()
     return if (ids.isNotEmpty()) repository.catalogProducts(ids)
     else repository.searchCatalog(card.marketSearchName ?: card.name, 500)
@@ -105,6 +141,7 @@ internal fun resolveCardmarketExpansionId(
     cards: List<PokemonVisualCard>,
     candidatesByMarketName: Map<String, List<CatalogSearchResult>>,
 ): String? {
+    if (cards.any { it.set.isPokemonPocketSet() }) return null
     cards.firstOrNull()?.set?.cardmarketExpansionId?.let { return it }
     val matches = cards.asSequence().flatMap { card ->
         val name = card.marketSearchName ?: card.name

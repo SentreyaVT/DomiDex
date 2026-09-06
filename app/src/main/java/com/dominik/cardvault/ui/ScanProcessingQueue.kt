@@ -229,12 +229,13 @@ internal object CardScanCandidateResolver {
                 expansionBySet[visualCard.set.id] = resolved
                 resolved
             }
-            val verifiedProduct = visualCardmarketProducts(
+            val verifiedProducts = visualCardmarketProducts(
                 card = visualCard,
                 cardsInSet = setCards,
                 candidates = marketCandidates,
                 resolvedExpansionId = expansionId,
-            ).firstOrNull()
+            )
+            val verifiedProduct = visualCardmarketProductForPrinting(preparedCandidate.printing, verifiedProducts)
             ScanCandidate(
                 card = scannerCatalogResult(visualCard, preparedCandidate.printing, verifiedProduct),
                 score = preparedCandidate.score,

@@ -14,6 +14,8 @@ import okio.BufferedSource
 import okio.buffer
 import okio.source
 import java.net.HttpURLConnection
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 data class PokemonSet(
@@ -27,7 +29,11 @@ data class PokemonSet(
     val ptcgoCode: String?,
     /** Cardmarket's stable expansion id when it has been source-verified. */
     val cardmarketExpansionId: String? = CardmarketExpansionRegistry.idFor(id),
+    /** Stable upstream series identity; `tcgp` denotes the digital Pocket catalogue. */
+    val seriesId: String? = null,
 )
+
+internal fun PokemonSet.isPokemonPocketSet(): Boolean = seriesId.equals("tcgp", ignoreCase = true)
 
 /**
  * Cardmarket's public product/price downloads expose an expansion id but not
@@ -108,6 +114,10 @@ private fun cardImageUrl(value: String, quality: String): String {
     return if (base.substringBefore('?').substringAfterLast('/').contains('.')) base else "$base/$quality.webp"
 }
 
+/** Encode exactly one dynamic path segment, including an already encoded percent sign. */
+internal fun encodeCatalogPathSegment(value: String): String =
+    URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
+
 /** Maps only source-declared collectible printings to separate binder slots. */
 internal fun pokemonPrintVariantForSourceKey(key: String): PokemonPrintVariant? = when (key.lowercase()) {
     "normal", "unlimited" -> PokemonPrintVariant(key, "Normal", "Standard")
@@ -176,14 +186,14 @@ class PokemonVisualCatalog internal constructor(
             withContext(Dispatchers.IO) {
                 val germanLoad = async(Dispatchers.IO) {
                     catalogOrDefault<List<PokemonVisualCard>?>(null) {
-                        read("$germanBaseUrl/sets/${set.id}") { reader ->
+                        read("$germanBaseUrl/sets/${encodeCatalogPathSegment(set.id)}") { reader ->
                             parseSetCards(reader, set, hasGermanLocalizedName = true)
                         }
                     }
                 }
                 val englishLoad = async(Dispatchers.IO) {
                     catalogOrDefault<List<PokemonVisualCard>?>(null) {
-                        read("$englishBaseUrl/sets/${set.id}") { reader ->
+                        read("$englishBaseUrl/sets/${encodeCatalogPathSegment(set.id)}") { reader ->
                             parseSetCards(reader, set, hasGermanLocalizedName = false)
                         }
                     }
@@ -206,7 +216,16 @@ class PokemonVisualCatalog internal constructor(
     suspend fun withDeclaredPrintVariants(card: PokemonVisualCard): PokemonVisualCard {
         val detail = metadataCache.details.getOrLoad(card.id) {
             withContext(Dispatchers.IO) {
-                read("$germanBaseUrl/cards/${card.id}") { reader -> parseCardDetail(reader) }
+                val encodedId = encodeCatalogPathSegment(card.id)
+                catalogOrDefault<CatalogCardDetail?>(null) {
+                    read("$germanBaseUrl/cards/$encodedId") { reader -> parseCardDetail(reader) }
+                } ?: read("$englishBaseUrl/cards/$encodedId") { reader ->
+                    // English detail data may fill a missing source payload, but
+                    // it must not replace an already localized German rarity.
+                    parseCardDetail(reader).let { fallback ->
+                        fallback.copy(rarity = card.rarity ?: fallback.rarity)
+                    }
+                }
             }
         }
         return card.copy(
@@ -230,7 +249,7 @@ class PokemonVisualCatalog internal constructor(
                 .map { printings ->
                     val primary = printings.first()
                     PokemonVisualCard(
-                        primary.id,
+                        primary.sourceCardId,
                         primary.name,
                         number.toString().padStart(3, '0'),
                         null,
@@ -296,7 +315,7 @@ class PokemonVisualCatalog internal constructor(
     }
 
     private fun parseGermanSet(reader: JsonReader): PokemonSet? {
-        var id = ""; var name = ""; var total = 0; var official = 0; var logo: String? = null; var symbol: String? = null; var releaseDate = ""; var abbreviation: String? = null
+        var id = ""; var name = ""; var total = 0; var official = 0; var logo: String? = null; var symbol: String? = null; var releaseDate = ""; var abbreviation: String? = null; var seriesId: String? = null
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
             "id" -> id = reader.nextString(); "name" -> name = reader.nextString()
             "logo" -> logo = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else assetImageUrl(reader.nextString())
@@ -311,11 +330,17 @@ class PokemonVisualCatalog internal constructor(
                     else -> reader.skipValue()
                 }; reader.endObject()
             }
+            "serie" -> {
+                reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
+                    "id" -> seriesId = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
+                    else -> reader.skipValue()
+                }; reader.endObject()
+            }
             "cardCount" -> { reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) { "total" -> total = reader.nextInt(); "official" -> official = reader.nextInt(); else -> reader.skipValue() }; reader.endObject() }
             else -> reader.skipValue()
         }
         reader.endObject()
-        return if (id.isBlank() || name.isBlank()) null else PokemonSet(id, name, "Deutsch · TCGdex", official, total.coerceAtLeast(official), releaseDate, logo ?: symbol, abbreviation)
+        return if (id.isBlank() || name.isBlank()) null else PokemonSet(id, name, "Deutsch · TCGdex", official, total.coerceAtLeast(official), releaseDate, logo ?: symbol, abbreviation, seriesId = seriesId)
     }
 
     private fun parseSetCards(
@@ -325,6 +350,7 @@ class PokemonVisualCatalog internal constructor(
     ): List<PokemonVisualCard> {
         val cards = mutableListOf<PokemonVisualCard>()
         var abbreviation = set.ptcgoCode
+        var seriesId = set.seriesId
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
             "cards" -> readArray(reader) {
                 parseCardBrief(it, set, hasGermanLocalizedName)?.let(cards::add)
@@ -340,10 +366,19 @@ class PokemonVisualCatalog internal constructor(
                     else -> reader.skipValue()
                 }; reader.endObject()
             }
+            "serie" -> {
+                reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
+                    "id" -> seriesId = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
+                    else -> reader.skipValue()
+                }; reader.endObject()
+            }
             else -> reader.skipValue()
         }
         reader.endObject()
-        val detailedSet = set.copy(ptcgoCode = abbreviation?.takeIf(String::isNotBlank) ?: set.ptcgoCode)
+        val detailedSet = set.copy(
+            ptcgoCode = abbreviation?.takeIf(String::isNotBlank) ?: set.ptcgoCode,
+            seriesId = seriesId?.takeIf(String::isNotBlank) ?: set.seriesId,
+        )
         return cards.map { it.copy(set = detailedSet) }
     }
 
@@ -377,12 +412,27 @@ class PokemonVisualCatalog internal constructor(
             "image" -> image = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
             "rarity" -> rarity = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
             "variants_detailed" -> readArray(reader) { variantReader ->
-                var id = ""; var type = ""; var size = ""
+                var id = ""; var type = ""; var subtype = ""; var size = ""; var foil = ""
+                val stamps = mutableListOf<String>()
                 var cardmarketProductId: Long? = null
                 variantReader.beginObject(); while (variantReader.hasNext()) when (variantReader.nextName()) {
                     "variantId" -> id = variantReader.nextString()
                     "type" -> type = variantReader.nextString()
+                    "subtype" -> subtype = if (variantReader.peek() == JsonReader.Token.NULL) { variantReader.nextNull<Unit>(); "" } else variantReader.nextString()
                     "size" -> size = variantReader.nextString()
+                    "foil" -> foil = if (variantReader.peek() == JsonReader.Token.NULL) { variantReader.nextNull<Unit>(); "" } else variantReader.nextString()
+                    "stamp" -> when (variantReader.peek()) {
+                        JsonReader.Token.BEGIN_ARRAY -> {
+                            variantReader.beginArray()
+                            while (variantReader.hasNext()) {
+                                if (variantReader.peek() == JsonReader.Token.STRING) stamps += variantReader.nextString()
+                                else variantReader.skipValue()
+                            }
+                            variantReader.endArray()
+                        }
+                        JsonReader.Token.STRING -> stamps += variantReader.nextString()
+                        else -> variantReader.skipValue()
+                    }
                     "thirdParty" -> if (variantReader.peek() == JsonReader.Token.BEGIN_OBJECT) {
                         variantReader.beginObject()
                         while (variantReader.hasNext()) {
@@ -400,7 +450,15 @@ class PokemonVisualCatalog internal constructor(
                     type.equals("normal", true) -> "Normal"
                     else -> type.ifBlank { "Normal" }
                 }
-                if (id.isNotBlank()) result += PokemonPrintVariant(id, finish, size.takeIf { it.isNotBlank() } ?: finish, cardmarketProductId)
+                val normalizedStamps = stamps.map(String::trim).filter(String::isNotEmpty)
+                    .distinctBy { it.lowercase(Locale.ROOT) }.sortedBy { it.lowercase(Locale.ROOT) }
+                val sourceVariant = buildList {
+                    add(size.takeIf(String::isNotBlank) ?: finish)
+                    subtype.trim().takeIf(String::isNotEmpty)?.let { add("Untertyp: $it") }
+                    normalizedStamps.takeIf { it.isNotEmpty() }?.let { add("Stempel: ${it.joinToString(" + ")}") }
+                    foil.trim().takeIf(String::isNotEmpty)?.let { add("Folie: $it") }
+                }.joinToString(" · ")
+                if (id.isNotBlank()) result += PokemonPrintVariant(id, finish, sourceVariant, cardmarketProductId)
             }
             else -> reader.skipValue()
         }; reader.endObject()
