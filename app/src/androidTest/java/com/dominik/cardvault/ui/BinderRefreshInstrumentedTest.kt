@@ -46,6 +46,7 @@ class BinderRefreshInstrumentedTest {
                 "equals" -> proxy === args?.get(0)
                 "hashCode" -> System.identityHashCode(proxy)
                 "toString" -> "ReadOnlyBinderRegressionRepository"
+                "getPrivateBinders" -> kotlinx.coroutines.flow.flowOf(emptyList<PrivateBinderSummary>())
                 "binderReferences" -> {
                     reads.incrementAndGet()
                     // A saved canonical catalogue row duplicates an existing printing
@@ -110,10 +111,10 @@ class BinderRefreshInstrumentedTest {
             }
             compose.waitUntil(10_000) { completed.get() == pass + 2 }
             compose.waitForIdle()
-            compose.onNodeWithText("Kartenseite 2 von 9").assertExists()
+            compose.onNodeWithText("Kartenseite 2 von 9", useUnmergedTree = true).assertExists()
             compose.onNodeWithContentDescription("Binder aktualisieren").assertIsEnabled()
             compose.onRoot().performTouchInput { swipeLeft() }
-            compose.onNodeWithText("Kartenseite 3 von 9").assertExists()
+            compose.onNodeWithText("Kartenseite 3 von 9", useUnmergedTree = true).assertExists()
             compose.onNodeWithText("‹ Zurück").performClick()
             assertEquals(80, cached.get().size)
             assertTrue(cached.get().groupBy { it.number }.values.all { cards ->

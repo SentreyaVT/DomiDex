@@ -55,6 +55,21 @@ class ScannerReportFlowTest {
         assertEquals(1, uploads)
     }
 
+    @Test fun `released queue preview drops its per scan upload bookkeeping`() = runBlocking {
+        val flow = ScannerReportFlow(this) { _, _ -> ScannerReportReceipt("report-1") }
+        flow.updateAccess("tester", ScannerFeedbackAccess.WEB_REPORT)
+        val captured = scan()
+        flow.registerCapture(captured.id)
+        flow.open(captured)
+        flow.submit()
+        yield()
+        flow.dismiss()
+
+        assertEquals("report-1", flow.outcome(captured.id)?.reportId)
+        flow.releaseCapture(captured.id)
+        assertNull(flow.outcome(captured.id))
+    }
+
     @Test fun `automatic frames and gallery files never masquerade as manual reports`() = runBlocking {
         var uploads = 0
         val flow = ScannerReportFlow(this) { _, _ -> uploads++; ScannerReportReceipt("unexpected") }

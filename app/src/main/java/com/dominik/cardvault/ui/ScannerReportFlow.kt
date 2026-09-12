@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
@@ -111,6 +110,13 @@ internal class ScannerReportFlow(
     private fun outcomeKey(uid: String?, scanId: String): String = "$uid/$scanId"
     fun outcome(scanId: String): ScannerReportOutcome? = outcomes[outcomeKey(accountUid, scanId)]
     fun registerCapture(scanId: String) { captureAccounts[scanId] = accountUid }
+    fun releaseCapture(scanId: String) {
+        if (activeScanId == scanId || uploadingScanId == scanId) return
+        if (captureAccounts.containsKey(scanId)) {
+            outcomes.remove(outcomeKey(captureAccounts[scanId], scanId))
+            captureAccounts.remove(scanId)
+        }
+    }
 
     fun updateAccess(uid: String?, value: ScannerFeedbackAccess) {
         if (uid != accountUid || value == ScannerFeedbackAccess.LOCAL) {

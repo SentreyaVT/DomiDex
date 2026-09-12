@@ -205,6 +205,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
 @Composable fun LiveCameraScanner(
     modifier: Modifier = Modifier,
     autoCaptureAllowed: Boolean = true,
+    manualCaptureAllowed: Boolean = true,
     onCaptureStarted: (automatic: Boolean) -> Unit = {},
     onCaptureSaved: (File, Boolean, List<File>, automatic: Boolean) -> Unit = { _, _, _, _ -> },
     onCaptureFailed: () -> Unit = {},
@@ -259,7 +260,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         } }, mainExecutor)
     }
     fun capture(automatic: Boolean = false) {
-        if (captureInProgress) return
+        if (captureInProgress || (automatic && !autoCaptureAllowed) || (!automatic && !manualCaptureAllowed)) return
         captureInProgress = true; captureMessage = null
         onCaptureStarted(automatic)
         val captureId = System.nanoTime()
@@ -377,6 +378,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                 captureInProgress = captureInProgress,
                 autoCaptureEnabled = autoCaptureEnabled,
                 autoCaptureAllowed = autoCaptureAllowed,
+                manualCaptureAllowed = manualCaptureAllowed,
                 modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 16.dp).padding(top = 76.dp),
             )
         }
@@ -403,7 +405,7 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                             autoCaptureGate.disarm(quality.fingerprint)
                             capture(automatic = false)
                         },
-                        enabled = !captureInProgress,
+                        enabled = !captureInProgress && manualCaptureAllowed,
                         modifier = Modifier
                             .size(58.dp)
                             .semantics { contentDescription = "Foto aufnehmen" },
@@ -432,6 +434,7 @@ internal fun ScannerCaptureStatus(
     captureInProgress: Boolean,
     autoCaptureEnabled: Boolean,
     autoCaptureAllowed: Boolean,
+    manualCaptureAllowed: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     var settledReady by remember { mutableStateOf(false) }
@@ -461,7 +464,8 @@ internal fun ScannerCaptureStatus(
             text = when {
                 captureMessage != null -> stringResource(captureMessage)
                 captureInProgress -> "Aufnahme läuft …"
-                !autoCaptureAllowed && autoCaptureEnabled -> "Auto pausiert – Warteschlange voll · manuell möglich"
+                !manualCaptureAllowed -> "Warteschlange voll · bitte ein Ergebnis bearbeiten"
+                !autoCaptureAllowed && autoCaptureEnabled -> "Auto pausiert · manuell möglich"
                 ready && autoCaptureEnabled -> "Bereit – automatische Aufnahme"
                 ready -> "Bereit – Auslöser drücken"
                 else -> "Karte ruhig halten"

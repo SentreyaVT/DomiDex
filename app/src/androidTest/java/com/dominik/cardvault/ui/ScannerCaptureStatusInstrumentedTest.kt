@@ -45,7 +45,7 @@ class ScannerCaptureStatusInstrumentedTest {
         compose.onNodeWithText(AUTO_READY).assertIsDisplayed()
         compose.onNodeWithText(MANUAL_READY).assertDoesNotExist()
         update { copy(autoAllowed = false) }
-        compose.onNodeWithText("Auto pausiert – Warteschlange voll · manuell möglich").assertIsDisplayed()
+        compose.onNodeWithText("Auto pausiert · manuell möglich").assertIsDisplayed()
         compose.onNodeWithText(AUTO_READY).assertDoesNotExist()
     }
 
@@ -124,6 +124,13 @@ class ScannerCaptureStatusInstrumentedTest {
         assertNeutral()
     }
 
+    @Test fun fullQueueExplainsThatAnExistingResultMustBeHandled() {
+        showStatus()
+        update { copy(manualAllowed = false, autoAllowed = false) }
+
+        compose.onNodeWithText("Warteschlange voll · bitte ein Ergebnis bearbeiten").assertIsDisplayed()
+    }
+
     private fun showStatus() {
         compose.setContent {
             MaterialTheme {
@@ -135,6 +142,7 @@ class ScannerCaptureStatusInstrumentedTest {
                         captureInProgress = current.inProgress,
                         autoCaptureEnabled = current.autoEnabled,
                         autoCaptureAllowed = current.autoAllowed,
+                        manualCaptureAllowed = current.manualAllowed,
                         modifier = Modifier.width(340.dp).padding(top = 76.dp).testTag(STATUS_TAG),
                     )
                 }
@@ -167,6 +175,7 @@ class ScannerCaptureStatusInstrumentedTest {
         val inProgress: Boolean = false,
         val autoEnabled: Boolean = false,
         val autoAllowed: Boolean = true,
+        val manualAllowed: Boolean = true,
     )
 
     private companion object {

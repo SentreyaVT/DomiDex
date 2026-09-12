@@ -371,6 +371,60 @@ class CardVaultDatabaseTest {
         }
     }
 
+    @Test fun migrationTenToElevenAddsPrivateLayoutsWithoutChangingCollectionOrPrices() {
+        val name = "migration-ten-eleven-private-binders"
+        migrationHelper.createDatabase(name, 10).apply {
+            execSQL("INSERT INTO catalog_cards (id,tcg,setId,setName,name,collectorNumber,language,finish,variant,createdAtEpochMillis,externalSource,externalProductId,imageUrl,rarity,effectOverride) VALUES ('kept-v10','POKEMON','sv-test','Testset','Mew','101/100','GERMAN','Normal','Standard',1,'CARDMARKET_PUBLIC_DOWNLOAD',42,NULL,'Illustration Rare',NULL)")
+            execSQL("INSERT INTO binders (id,setKey,name,heroAsset,createdAtEpochMillis,updatedAtEpochMillis) VALUES ('tcgdex-sv-test','tcgdex-sv-test','Testset',NULL,1,1)")
+            execSQL("INSERT INTO collection_entries (id,cardId,quantity,condition,notes,createdAtEpochMillis,updatedAtEpochMillis,externalProductSource,externalProductId,binderId,ownerUid,syncId,syncState,remoteRevision,sourceSetId,sourceCardId) VALUES (7,'kept-v10',2,'Sehr gut','bleibt',1,2,'CARDMARKET_PUBLIC_DOWNLOAD',42,'tcgdex-sv-test','A','entry-v10','CLEAN',3,'sv-test','sv-test-101')")
+            execSQL("INSERT INTO raw_price_snapshots (id,cardId,source,currency,trendValueMinor,marketValueMinor,fetchedAtEpochMillis,effectiveAtEpochMillis) VALUES (9,'kept-v10','CARDMARKET_PUBLIC_DOWNLOAD','EUR',1234,1234,2,2)")
+            close()
+        }
+        migrationHelper.runMigrationsAndValidate(name, 11, true, CardVaultDatabase.MIGRATION_10_11).apply {
+            query("SELECT quantity,binderId,ownerUid,syncId,sourceCardId FROM collection_entries WHERE id=7").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(2, it.getInt(0))
+                assertEquals("tcgdex-sv-test", it.getString(1))
+                assertEquals("A", it.getString(2))
+                assertEquals("entry-v10", it.getString(3))
+                assertEquals("sv-test-101", it.getString(4))
+            }
+            query("SELECT trendValueMinor FROM raw_price_snapshots WHERE id=9").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(1234L, it.getLong(0))
+            }
+            query("SELECT COUNT(*) FROM private_binders").use { assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)) }
+            query("SELECT COUNT(*) FROM private_binder_placements").use { assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)) }
+            query("SELECT COUNT(*) FROM collection_layout").use { assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)) }
+            query("SELECT COUNT(*) FROM private_binder_sync_outbox").use { assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)) }
+            close()
+        }
+    }
+
+    @Test fun migrationElevenToTwelveKeepsPrivateBinderAndDefaultsPlacementAppearance() {
+        val name = "migration-eleven-twelve-private-binder-appearance"
+        migrationHelper.createDatabase(name, 11).apply {
+            execSQL("INSERT INTO catalog_cards (id,tcg,setId,setName,name,collectorNumber,language,finish,variant,createdAtEpochMillis,externalSource,externalProductId,imageUrl,rarity,effectOverride) VALUES ('kept-v11','POKEMON','sv-test','Testset','Mew','001/100','GERMAN','Normal','Standard',1,NULL,NULL,NULL,'UNKNOWN',NULL)")
+            execSQL("INSERT INTO binders (id,setKey,name,heroAsset,createdAtEpochMillis,updatedAtEpochMillis) VALUES ('tcgdex-sv-test','tcgdex-sv-test','Testset',NULL,1,1)")
+            execSQL("INSERT INTO collection_entries (id,cardId,quantity,condition,notes,createdAtEpochMillis,updatedAtEpochMillis,binderId,ownerUid,syncId,syncState,remoteRevision,sourceSetId,sourceCardId) VALUES (7,'kept-v11',1,'Nicht geprüft','',1,1,'tcgdex-sv-test','A','entry-v11','CLEAN',2,'sv-test','sv-test-001')")
+            execSQL("INSERT INTO private_binders (id,ownerUid,name,description,coverStyle,minimumPageCount,createdAtEpochMillis,updatedAtEpochMillis,syncState,remoteRevision) VALUES ('binder-v11','A','Altbestand',NULL,'DOMIDEX',1,1,1,'CLEAN',2)")
+            execSQL("INSERT INTO private_binder_placements (id,ownerUid,binderId,collectionEntryId,slotPosition,createdAtEpochMillis,updatedAtEpochMillis,syncState,remoteRevision) VALUES ('placement-v11','A','binder-v11',7,0,1,1,'CLEAN',2)")
+            close()
+        }
+        migrationHelper.runMigrationsAndValidate(name, 12, true, CardVaultDatabase.MIGRATION_11_12).apply {
+            query("SELECT coverStyle FROM private_binders WHERE id='binder-v11'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("DOMIDEX", it.getString(0))
+            }
+            query("SELECT holoEffectId,holoIntensity FROM private_binder_placements WHERE id='placement-v11'").use {
+                assertTrue(it.moveToFirst())
+                assertTrue(it.isNull(0))
+                assertEquals(0f, it.getFloat(1), 0f)
+            }
+            close()
+        }
+    }
+
     private fun sourceInput(externalProductId: Long? = null) = ManualCardInput(
         name = "Mew",
         setName = "Testset",

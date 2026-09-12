@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { after, before, beforeEach, test } from "node:test";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
-import { deleteDoc, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, setDoc } from "firebase/firestore";
 
 let environment;
 const id = "11111111-1111-4111-8111-111111111111";
@@ -30,6 +30,31 @@ function evidence(fingerprint) {
     candidateIds: ["source:sv1:sv1-001|normal|standard"], originalConfidence: 84,
     corrected: false, scannerVersion: "scanner-v2.1", knowledgeVersion: 1,
     observedAtClient: 1_788_220_800_000, updatedAt: serverTimestamp(),
+  };
+}
+
+function privateBinder(ownerUid, binderId, deleted = false, revision = 1) {
+  return {
+    binderId, ownerUid, name: "Tauschbinder", description: "Privat sortiert",
+    coverStyle: "DOMIDEX", minimumPageCount: 1, createdAtClient: 1_788_220_800_000,
+    updatedAtClient: 1_788_220_800_000, lastOpenedAtClient: null, deleted,
+    revision, lastMutationId: `private-binder-mutation-${revision}`, updatedAt: serverTimestamp(),
+  };
+}
+
+function privatePlacement(ownerUid, placementId, binderId, entrySyncId, deleted = false, revision = 1) {
+  return {
+    placementId, ownerUid, binderId, entrySyncId, slotPosition: 9,
+    holoEffectId: null, holoIntensity: 0,
+    createdAtClient: 1_788_220_800_000, updatedAtClient: 1_788_220_800_000,
+    deleted, revision, lastMutationId: `private-placement-mutation-${revision}`, updatedAt: serverTimestamp(),
+  };
+}
+
+function collectionLayout(ownerUid, entrySyncId, visibleInSetBinder = false, revision = 1) {
+  return {
+    entrySyncId, ownerUid, visibleInSetBinder, updatedAtClient: 1_788_220_800_000,
+    revision, lastMutationId: `collection-layout-mutation-${revision}`, updatedAt: serverTimestamp(),
   };
 }
 
@@ -82,6 +107,82 @@ test("source identity is optional but must be a valid complete pair", async () =
   const malformedId = "33333333-3333-4333-8333-333333333333";
   const malformed = { ...entry("A"), syncId: malformedId, sourceSetId: "SV 08", sourceCardId: "001" };
   await assertFails(setDoc(doc(userA, `users/A/collectionEntries/${malformedId}`), malformed));
+});
+
+test("private binders are owner-scoped, shape constrained and use tombstones", async () => {
+  const binderId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const userA = environment.authenticatedContext("A").firestore();
+  const userB = environment.authenticatedContext("B").firestore();
+  const reference = doc(userA, `users/A/privateBinders/${binderId}`);
+  await assertSucceeds(setDoc(reference, privateBinder("A", binderId)));
+  await assertFails(getDoc(doc(userB, `users/A/privateBinders/${binderId}`)));
+  await assertFails(getDocs(collection(userB, "users/A/privateBinders")));
+  await assertFails(setDoc(doc(userB, `users/A/privateBinders/${binderId}`), privateBinder("B", binderId)));
+  await assertFails(setDoc(reference, { ...privateBinder("A", binderId), admin: true }));
+  await assertFails(setDoc(reference, { ...privateBinder("A", binderId), minimumPageCount: 0 }));
+  await assertSucceeds(setDoc(reference, privateBinder("A", binderId, true, 2)));
+  await assertFails(setDoc(reference, privateBinder("A", binderId, false, 3)));
+  await assertFails(deleteDoc(reference));
+});
+
+test("private placements require the owner's live binder and exact collection entry", async () => {
+  const binderId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const placementId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const userA = environment.authenticatedContext("A").firestore();
+  await assertSucceeds(setDoc(doc(userA, `users/A/privateBinders/${binderId}`), privateBinder("A", binderId)));
+  await assertSucceeds(setDoc(doc(userA, `users/A/collectionEntries/${id}`), entry("A")));
+  const legacyPlacementId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const legacyPlacement = privatePlacement("A", legacyPlacementId, binderId, id);
+  delete legacyPlacement.holoEffectId;
+  delete legacyPlacement.holoIntensity;
+  await assertSucceeds(setDoc(
+    doc(userA, `users/A/privateBinderPlacements/${legacyPlacementId}`),
+    legacyPlacement,
+  ));
+  const reference = doc(userA, `users/A/privateBinderPlacements/${placementId}`);
+  await assertSucceeds(setDoc(reference, privatePlacement("A", placementId, binderId, id)));
+  await assertSucceeds(setDoc(reference, {
+    ...privatePlacement("A", placementId, binderId, id, false, 2),
+    holoEffectId: "reverse-holo", holoIntensity: 0.65,
+  }));
+  await assertFails(setDoc(reference, {
+    ...privatePlacement("A", placementId, binderId, id, false, 3), slotPosition: -1,
+  }));
+  await assertFails(setDoc(reference, {
+    ...privatePlacement("A", placementId, binderId, id, false, 3),
+    holoEffectId: "not a stable id", holoIntensity: 0.5,
+  }));
+  await assertFails(setDoc(reference, {
+    ...privatePlacement("A", placementId, binderId, id, false, 3),
+    holoEffectId: null, holoIntensity: 0.5,
+  }));
+
+  const missingPlacementId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  await assertFails(setDoc(
+    doc(userA, `users/A/privateBinderPlacements/${missingPlacementId}`),
+    privatePlacement("A", missingPlacementId, binderId, "missing-entry"),
+  ));
+  await assertSucceeds(setDoc(reference, privatePlacement("A", placementId, binderId, id, true, 3)));
+  await assertFails(setDoc(reference, privatePlacement("A", placementId, binderId, id, false, 4)));
+
+  const offlineDeleteId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  await assertSucceeds(setDoc(
+    doc(userA, `users/A/privateBinderPlacements/${offlineDeleteId}`),
+    privatePlacement("A", offlineDeleteId, "missing-binder", "missing-entry", true),
+  ));
+});
+
+test("set-binder visibility remains owner-scoped and references a real owned entry", async () => {
+  const userA = environment.authenticatedContext("A").firestore();
+  const userB = environment.authenticatedContext("B").firestore();
+  const reference = doc(userA, `users/A/collectionLayouts/${id}`);
+  await assertFails(setDoc(reference, collectionLayout("A", id)));
+  await assertSucceeds(setDoc(doc(userA, `users/A/collectionEntries/${id}`), entry("A")));
+  await assertSucceeds(setDoc(reference, collectionLayout("A", id)));
+  await assertFails(getDoc(doc(userB, `users/A/collectionLayouts/${id}`)));
+  await assertFails(setDoc(reference, { ...collectionLayout("A", id), visibleInSetBinder: "false" }));
+  await assertSucceeds(setDoc(reference, collectionLayout("A", id, true, 2)));
+  await assertFails(deleteDoc(reference));
 });
 
 test("scan evidence is private, idempotent and shape constrained", async () => {

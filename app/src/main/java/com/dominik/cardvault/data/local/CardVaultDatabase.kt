@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [CatalogCardEntity::class, BinderEntity::class, CollectionEntryEntity::class, CollectionSyncOutboxEntity::class, RawPriceSnapshotEntity::class, GradedMarketRecordEntity::class, GradingAnalysisEntity::class, AppMetadataEntity::class, CatalogSyncStateEntity::class],
-    version = 10,
+    entities = [CatalogCardEntity::class, BinderEntity::class, CollectionEntryEntity::class, CollectionSyncOutboxEntity::class, PrivateBinderEntity::class, PrivateBinderPlacementEntity::class, CollectionLayoutEntity::class, PrivateBinderSyncOutboxEntity::class, RawPriceSnapshotEntity::class, GradedMarketRecordEntity::class, GradingAnalysisEntity::class, AppMetadataEntity::class, CatalogSyncStateEntity::class],
+    version = 12,
     exportSchema = true,
 )
 abstract class CardVaultDatabase : RoomDatabase() {
@@ -21,7 +21,7 @@ abstract class CardVaultDatabase : RoomDatabase() {
         fun get(context: Context): CardVaultDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, CardVaultDatabase::class.java, "cardvault.db")
                 // Every future schema version must provide explicit migrations. Never silently erase collections.
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                 .build().also { instance = it }
         }
 
@@ -157,6 +157,97 @@ abstract class CardVaultDatabase : RoomDatabase() {
         val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_catalog_cards_externalSource_externalProductId_name ON catalog_cards(externalSource, externalProductId, name)")
+            }
+        }
+
+        /**
+         * Private binders are additive display state. Existing collection rows and their set
+         * binder assignment remain byte-for-byte untouched; a missing layout row means visible.
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS private_binders (
+                        id TEXT NOT NULL,
+                        ownerUid TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        coverStyle TEXT NOT NULL DEFAULT 'DOMIDEX',
+                        minimumPageCount INTEGER NOT NULL DEFAULT 1,
+                        createdAtEpochMillis INTEGER NOT NULL,
+                        updatedAtEpochMillis INTEGER NOT NULL,
+                        lastOpenedAtEpochMillis INTEGER,
+                        syncState TEXT NOT NULL DEFAULT 'LOCAL_ONLY',
+                        remoteRevision INTEGER NOT NULL DEFAULT 0,
+                        deletedAtEpochMillis INTEGER,
+                        PRIMARY KEY(ownerUid, id)
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_private_binders_ownerUid_deletedAtEpochMillis ON private_binders(ownerUid, deletedAtEpochMillis)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_private_binders_ownerUid_lastOpenedAtEpochMillis ON private_binders(ownerUid, lastOpenedAtEpochMillis)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS private_binder_placements (
+                        id TEXT NOT NULL,
+                        ownerUid TEXT NOT NULL,
+                        binderId TEXT NOT NULL,
+                        collectionEntryId INTEGER NOT NULL,
+                        slotPosition INTEGER NOT NULL,
+                        createdAtEpochMillis INTEGER NOT NULL,
+                        updatedAtEpochMillis INTEGER NOT NULL,
+                        syncState TEXT NOT NULL DEFAULT 'LOCAL_ONLY',
+                        remoteRevision INTEGER NOT NULL DEFAULT 0,
+                        deletedAtEpochMillis INTEGER,
+                        PRIMARY KEY(ownerUid, id),
+                        FOREIGN KEY(ownerUid, binderId) REFERENCES private_binders(ownerUid, id) ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(collectionEntryId) REFERENCES collection_entries(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_private_binder_placements_binderId ON private_binder_placements(binderId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_private_binder_placements_collectionEntryId ON private_binder_placements(collectionEntryId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_private_binder_placements_ownerUid_binderId_collectionEntryId ON private_binder_placements(ownerUid, binderId, collectionEntryId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_private_binder_placements_ownerUid_binderId_slotPosition ON private_binder_placements(ownerUid, binderId, slotPosition)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_private_binder_placements_ownerUid_deletedAtEpochMillis ON private_binder_placements(ownerUid, deletedAtEpochMillis)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS collection_layout (
+                        collectionEntryId INTEGER NOT NULL PRIMARY KEY,
+                        ownerUid TEXT NOT NULL,
+                        visibleInSetBinder INTEGER NOT NULL DEFAULT 1,
+                        updatedAtEpochMillis INTEGER NOT NULL,
+                        syncState TEXT NOT NULL DEFAULT 'LOCAL_ONLY',
+                        remoteRevision INTEGER NOT NULL DEFAULT 0,
+                        FOREIGN KEY(collectionEntryId) REFERENCES collection_entries(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_collection_layout_ownerUid ON collection_layout(ownerUid)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS private_binder_sync_outbox (
+                        entryKey TEXT NOT NULL PRIMARY KEY,
+                        mutationId TEXT NOT NULL,
+                        ownerUid TEXT NOT NULL,
+                        recordType TEXT NOT NULL,
+                        recordId TEXT NOT NULL,
+                        operation TEXT NOT NULL,
+                        expectedRemoteRevision INTEGER NOT NULL DEFAULT 0,
+                        updatedAtEpochMillis INTEGER NOT NULL,
+                        createdAtEpochMillis INTEGER NOT NULL,
+                        lastError TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_private_binder_sync_outbox_ownerUid_createdAtEpochMillis ON private_binder_sync_outbox(ownerUid, createdAtEpochMillis)")
+            }
+        }
+
+        /**
+         * Placement visuals are additive presentation metadata. Existing placements keep no
+         * Holo effect; the existing coverStyle remains the binder's stable cover-theme id.
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE private_binder_placements ADD COLUMN holoEffectId TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE private_binder_placements ADD COLUMN holoIntensity REAL NOT NULL DEFAULT 0.0")
             }
         }
     }

@@ -92,6 +92,85 @@ service cloud.firestore {
         && data.binderName is string && data.binderName.size() > 0 && data.binderName.size() <= 200
         && nullableString(data.binderHeroAsset, 2000);
     }
+    function validPrivateBinder(uid, binderId) {
+      let data = request.resource.data;
+      return own(uid)
+        && binderId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.keys().hasOnly([
+          'binderId', 'ownerUid', 'name', 'description', 'coverStyle', 'minimumPageCount',
+          'createdAtClient', 'updatedAtClient', 'lastOpenedAtClient', 'deleted',
+          'revision', 'lastMutationId', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'binderId', 'ownerUid', 'name', 'coverStyle', 'minimumPageCount', 'createdAtClient',
+          'updatedAtClient', 'deleted', 'revision', 'lastMutationId', 'updatedAt'
+        ])
+        && data.binderId == binderId
+        && data.ownerUid == uid
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 120
+        && nullableString(data.description, 1000)
+        && data.coverStyle is string && data.coverStyle.size() > 0 && data.coverStyle.size() <= 80
+        && data.minimumPageCount is int && data.minimumPageCount >= 1
+        && data.createdAtClient is int && data.createdAtClient > 0
+        && data.updatedAtClient is int && data.updatedAtClient > 0
+        && nullableInt(data.lastOpenedAtClient)
+        && data.deleted is bool
+        && data.revision is int && data.revision > 0
+        && data.lastMutationId is string && data.lastMutationId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.updatedAt == request.time;
+    }
+    function validPrivateBinderPlacement(uid, placementId) {
+      let data = request.resource.data;
+      return own(uid)
+        && placementId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.keys().hasOnly([
+          'placementId', 'ownerUid', 'binderId', 'entrySyncId', 'slotPosition',
+          'holoEffectId', 'holoIntensity', 'createdAtClient', 'updatedAtClient', 'deleted',
+          'revision', 'lastMutationId', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'placementId', 'ownerUid', 'binderId', 'entrySyncId', 'slotPosition',
+          'createdAtClient', 'updatedAtClient', 'deleted', 'revision', 'lastMutationId', 'updatedAt'
+        ])
+        && data.placementId == placementId
+        && data.ownerUid == uid
+        && data.binderId is string && data.binderId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.entrySyncId is string && data.entrySyncId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.slotPosition is int && data.slotPosition >= 0
+        && (data.get('holoEffectId', null) == null
+          || (data.get('holoEffectId', null) is string
+            && data.get('holoEffectId', null).matches('[A-Za-z0-9][A-Za-z0-9._-]{0,79}')))
+        && data.get('holoIntensity', 0) is number
+        && data.get('holoIntensity', 0) >= 0
+        && data.get('holoIntensity', 0) <= 1
+        && (data.get('holoEffectId', null) != null || data.get('holoIntensity', 0) == 0)
+        && data.createdAtClient is int && data.createdAtClient > 0
+        && data.updatedAtClient is int && data.updatedAtClient > 0
+        && data.deleted is bool
+        && data.revision is int && data.revision > 0
+        && data.lastMutationId is string && data.lastMutationId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.updatedAt == request.time;
+    }
+    function validCollectionLayout(uid, entrySyncId) {
+      let data = request.resource.data;
+      return own(uid)
+        && entrySyncId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.keys().hasOnly([
+          'entrySyncId', 'ownerUid', 'visibleInSetBinder', 'updatedAtClient',
+          'revision', 'lastMutationId', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'entrySyncId', 'ownerUid', 'visibleInSetBinder', 'updatedAtClient',
+          'revision', 'lastMutationId', 'updatedAt'
+        ])
+        && data.entrySyncId == entrySyncId
+        && data.ownerUid == uid
+        && data.visibleInSetBinder is bool
+        && data.updatedAtClient is int && data.updatedAtClient > 0
+        && data.revision is int && data.revision > 0
+        && data.lastMutationId is string && data.lastMutationId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.updatedAt == request.time;
+    }
 
     match /users/{uid}/collectionEntries/{entryId} {
       allow read: if own(uid);
@@ -103,6 +182,51 @@ service cloud.firestore {
         && request.resource.data.revision == resource.data.revision + 1
         && (!resource.data.deleted || request.resource.data.deleted);
       // Deletes are replicated as tombstones so an offline device cannot resurrect a card.
+      allow delete: if false;
+    }
+
+    match /users/{uid}/privateBinders/{binderId} {
+      allow read: if own(uid);
+      allow create: if validPrivateBinder(uid, binderId)
+        && request.resource.data.revision == 1;
+      allow update: if validPrivateBinder(uid, binderId)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.binderId == resource.data.binderId
+        && request.resource.data.revision == resource.data.revision + 1
+        && (!resource.data.deleted || request.resource.data.deleted);
+      allow delete: if false;
+    }
+
+    match /users/{uid}/privateBinderPlacements/{placementId} {
+      allow read: if own(uid);
+      allow create: if validPrivateBinderPlacement(uid, placementId)
+        && request.resource.data.revision == 1
+        && (request.resource.data.deleted == true || (
+          exists(/databases/$(database)/documents/users/$(uid)/privateBinders/$(request.resource.data.binderId))
+          && get(/databases/$(database)/documents/users/$(uid)/privateBinders/$(request.resource.data.binderId)).data.deleted == false
+          && exists(/databases/$(database)/documents/users/$(uid)/collectionEntries/$(request.resource.data.entrySyncId))
+          && get(/databases/$(database)/documents/users/$(uid)/collectionEntries/$(request.resource.data.entrySyncId)).data.deleted == false
+        ));
+      allow update: if validPrivateBinderPlacement(uid, placementId)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.placementId == resource.data.placementId
+        && request.resource.data.binderId == resource.data.binderId
+        && request.resource.data.entrySyncId == resource.data.entrySyncId
+        && request.resource.data.revision == resource.data.revision + 1
+        && (!resource.data.deleted || request.resource.data.deleted);
+      allow delete: if false;
+    }
+
+    match /users/{uid}/collectionLayouts/{entrySyncId} {
+      allow read: if own(uid);
+      allow create: if validCollectionLayout(uid, entrySyncId)
+        && request.resource.data.revision == 1
+        && exists(/databases/$(database)/documents/users/$(uid)/collectionEntries/$(entrySyncId))
+        && get(/databases/$(database)/documents/users/$(uid)/collectionEntries/$(entrySyncId)).data.deleted == false;
+      allow update: if validCollectionLayout(uid, entrySyncId)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.entrySyncId == resource.data.entrySyncId
+        && request.resource.data.revision == resource.data.revision + 1;
       allow delete: if false;
     }
 

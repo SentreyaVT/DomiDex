@@ -165,17 +165,25 @@ class FirebaseCollectionSession(
         val user = changedAuth.currentUser
         val uid = canonicalCollectionOwnerUid(user)
         mutableOwnerUid.value = collectionOwnerForUid(uid)
-        val generation = synchronized(entitlementLock) {
+        val (previousUid, generation) = synchronized(entitlementLock) {
+            val previousUid = entitledOwnerUid
             entitlementGeneration += 1L
             entitledOwnerUid = null
             detachRemoteListenerLocked()
-            entitlementGeneration
+            previousUid to entitlementGeneration
+        }
+        if (uid == null) PrivateBinderSyncScheduler.cancelAllPeriodic(context)
+        else if (previousUid != null && previousUid != uid) {
+            PrivateBinderSyncScheduler.cancelPeriodic(context, previousUid)
         }
         if (uid == null || user == null) return
         scope.launch {
             val account = runCatching { user.firebaseEntitlementAccount(forceRefresh = false) }
                 .getOrNull() ?: return@launch
-            if (!account.entitlements.canUseAppBackend) return@launch
+            if (!account.entitlements.canUseAppBackend) {
+                PrivateBinderSyncScheduler.cancelPeriodic(context, uid)
+                return@launch
+            }
             val activated = synchronized(entitlementLock) {
                 if (!started || entitlementGeneration != generation) return@synchronized false
                 if (canonicalCollectionOwnerUid(auth.currentUser) != uid || account.uid != uid) return@synchronized false
@@ -204,6 +212,9 @@ class FirebaseCollectionSession(
         val uid = synchronized(entitlementLock) { entitledOwnerUid } ?: return
         if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return
         CollectionSyncScheduler.schedule(context, uid)
+        // Separate bounded worker/outbox: no second full-collection listener is introduced.
+        PrivateBinderSyncScheduler.schedule(context, uid)
+        PrivateBinderSyncScheduler.ensurePeriodic(context, uid)
     }
 
     private fun detachRemoteListenerLocked() {
@@ -421,7 +432,7 @@ class FirebaseCollectionSession(
 }
 
 /** Shared listener/worker apply path. The owner gate is checked before and inside the transaction. */
-private suspend fun applyRemoteDocumentToRoom(
+internal suspend fun applyRemoteDocumentToRoom(
     database: CardVaultDatabase,
     uid: String,
     document: DocumentSnapshot,

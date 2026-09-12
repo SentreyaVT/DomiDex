@@ -3,6 +3,12 @@ package com.dominik.cardvault.data
 import androidx.room.InvalidationTracker
 import androidx.room.withTransaction
 import com.dominik.cardvault.data.local.*
+import com.dominik.cardvault.data.sync.PRIVATE_SYNC_BINDER
+import com.dominik.cardvault.data.sync.PRIVATE_SYNC_DELETE
+import com.dominik.cardvault.data.sync.PRIVATE_SYNC_LAYOUT
+import com.dominik.cardvault.data.sync.PRIVATE_SYNC_PLACEMENT
+import com.dominik.cardvault.data.sync.PRIVATE_SYNC_UPSERT
+import com.dominik.cardvault.data.sync.deterministicPrivatePlacementId
 import com.dominik.cardvault.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -61,6 +67,12 @@ class RoomCollectionRepository(
         } }
     }
 
+    override val setBinderVisibility: Flow<Map<Long, Boolean>> = activeOwnerUid.flatMapLatest { ownerUid ->
+        dao.observeCollectionLayouts(ownerUid).map { rows ->
+            rows.associate { it.collectionEntryId to it.visibleInSetBinder }
+        }
+    }
+
     override val portfolio: Flow<PortfolioSummary> = activeOwnerUid.flatMapLatest { ownerUid ->
         combine(
             dao.observeCollection(ownerUid),
@@ -95,6 +107,33 @@ class RoomCollectionRepository(
         }
     }.flowOn(Dispatchers.Default)
 
+    override val privateBinders: Flow<List<PrivateBinderSummary>> = activeOwnerUid.flatMapLatest { ownerUid ->
+        combine(
+            dao.observePrivateBinders(ownerUid),
+            dao.observeAllPrivateBinderPlacements(ownerUid),
+            portfolio,
+        ) { binderRows, placementRows, currentPortfolio ->
+            val cardsByEntry = currentPortfolio.cards.associateBy(CollectionCard::entryId)
+            val placementsByBinder = placementRows.groupBy(PrivateBinderPlacementEntity::binderId)
+            binderRows.map { binder ->
+                val cards = placementsByBinder[binder.id].orEmpty().mapNotNull { cardsByEntry[it.collectionEntryId] }
+                PrivateBinderSummary(
+                    id = binder.id,
+                    name = binder.name,
+                    description = binder.description,
+                    coverStyle = binder.coverStyle,
+                    minimumPageCount = binder.minimumPageCount,
+                    uniqueCards = cards.map(CollectionCard::entryId).distinct().size,
+                    ownedCards = cards.sumOf(CollectionCard::quantity),
+                    marketValueEur = cards.sumOf { it.currentValueEur * it.quantity },
+                    createdAtEpochMillis = binder.createdAtEpochMillis,
+                    updatedAtEpochMillis = binder.updatedAtEpochMillis,
+                    lastOpenedAtEpochMillis = binder.lastOpenedAtEpochMillis,
+                )
+            }
+        }
+    }.flowOn(Dispatchers.Default)
+
     override suspend fun seedIfNeeded() = database.withTransaction {
         // Historical builds identified demo rows only by real card ids. Deleting those ids can
         // destroy legitimate collections, so the cleanup is now permanently data-preserving.
@@ -106,16 +145,26 @@ class RoomCollectionRepository(
     }
 
     override suspend fun addManualCard(input: ManualCardInput): AddCardOutcome {
+        val result = addManualCard(input, BinderTarget.MatchingSetBinder)
+        return if (result.quantityIncremented) AddCardOutcome.QUANTITY_INCREMENTED else AddCardOutcome.CREATED
+    }
+
+    override suspend fun addManualCard(input: ManualCardInput, target: BinderTarget): TargetedAddCardResult {
         val ownerUid = activeOwnerUid.value
         validateManualInputForSync(input)
         val sourceIdentity = sourceIdentity(input.sourceSetId, input.sourceCardId)
         var scheduleSync = false
-        val outcome = database.withTransaction {
+        val result = database.withTransaction {
             val now = System.currentTimeMillis()
             val normalizedCondition = input.condition.trim()
             val normalizedFinish = input.finish.trim().ifBlank { "Normal" }
             val normalizedVariant = input.variant.trim().ifBlank { "Standard" }
             val amount = input.quantity.coerceAtLeast(1)
+            val privateTarget = (target as? BinderTarget.PrivateBinder)?.let { destination ->
+                dao.privateBinder(destination.binderId, ownerUid)
+                    ?.takeIf { it.deletedAtEpochMillis == null }
+                    ?: throw IllegalArgumentException("Der private Binder ist nicht verfügbar.")
+            }
             // TCGdex identity is authoritative. Cardmarket remains an independent price link and
             // may appear only after the first scan has already been saved.
             val existing = sourceIdentity?.let { source ->
@@ -124,19 +173,47 @@ class RoomCollectionRepository(
                 dao.findLinkedEntry(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, productId, normalizedCondition, normalizedFinish, normalizedVariant, ownerUid)
             }
             if (existing != null) {
-                val newQuantity = existing.quantity.toLong() + amount.toLong()
-                require(newQuantity in 1..com.dominik.cardvault.data.sync.CollectionSyncLimits.QUANTITY.toLong()) {
-                    "Die Gesamtanzahl darf ${com.dominik.cardvault.data.sync.CollectionSyncLimits.QUANTITY} nicht überschreiten."
-                }
                 val syncState = syncStateFor(ownerUid)
                 if (existing.externalProductId == null && input.externalProductId != null) {
                     dao.linkExternalProduct(existing.id, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, input.externalProductId, now, ownerUid, syncState)
+                    dao.getCollectionEntry(existing.id, ownerUid)?.let { changed ->
+                        scheduleSync = queueMutation(changed, "UPSERT") || scheduleSync
+                    }
+                }
+                val currentEntry = dao.getCollectionEntry(existing.id, ownerUid) ?: existing
+
+                if (privateTarget != null) {
+                    val assignment = assignToPrivateBinderInTransaction(
+                        binder = privateTarget,
+                        entry = currentEntry,
+                        requestedPosition = null,
+                        now = now,
+                    )
+                    scheduleSync = assignment.syncQueued || scheduleSync
+                    scheduleSync = setVisibleInSetBinderInTransaction(currentEntry, visible = false, now) || scheduleSync
+                    return@withTransaction TargetedAddCardResult(
+                        entryId = existing.id,
+                        ownershipCreated = false,
+                        quantityIncremented = false,
+                        privatePlacementId = assignment.placementId,
+                        privateAssignmentCreated = assignment.created,
+                    )
+                }
+
+                scheduleSync = setVisibleInSetBinderInTransaction(currentEntry, visible = true, now) || scheduleSync
+                val newQuantity = existing.quantity.toLong() + amount.toLong()
+                require(newQuantity in 1..com.dominik.cardvault.data.sync.CollectionSyncLimits.QUANTITY.toLong()) {
+                    "Die Gesamtanzahl darf ${com.dominik.cardvault.data.sync.CollectionSyncLimits.QUANTITY} nicht überschreiten."
                 }
                 dao.incrementQuantity(existing.id, amount, now, ownerUid, syncState)
                 dao.getCollectionEntry(existing.id, ownerUid)?.let { changed ->
                     scheduleSync = queueMutation(changed, "UPSERT") || scheduleSync
                 }
-                return@withTransaction AddCardOutcome.QUANTITY_INCREMENTED
+                return@withTransaction TargetedAddCardResult(
+                    entryId = existing.id,
+                    ownershipCreated = false,
+                    quantityIncremented = true,
+                )
             }
 
             val displaySetName = input.setName.trim().ifBlank { "Ohne Setzuordnung" }
@@ -200,10 +277,35 @@ class RoomCollectionRepository(
             // fresh successor id; the deleted row remains intact and can never be resurrected.
             val stored = entry.copy(id = dao.insertCollectionEntry(entry))
             scheduleSync = queueMutation(stored, "UPSERT") || scheduleSync
-            AddCardOutcome.CREATED
+            if (privateTarget == null) {
+                TargetedAddCardResult(
+                    entryId = stored.id,
+                    ownershipCreated = true,
+                    quantityIncremented = false,
+                )
+            } else {
+                val layout = CollectionLayoutEntity(
+                    collectionEntryId = stored.id,
+                    ownerUid = ownerUid,
+                    visibleInSetBinder = false,
+                    updatedAtEpochMillis = now,
+                    syncState = syncStateFor(ownerUid),
+                )
+                dao.upsertCollectionLayout(layout)
+                scheduleSync = queueCollectionLayoutMutation(layout, stored.syncId) || scheduleSync
+                val assignment = assignToPrivateBinderInTransaction(privateTarget, stored, null, now)
+                scheduleSync = assignment.syncQueued || scheduleSync
+                TargetedAddCardResult(
+                    entryId = stored.id,
+                    ownershipCreated = true,
+                    quantityIncremented = false,
+                    privatePlacementId = assignment.placementId,
+                    privateAssignmentCreated = assignment.created,
+                )
+            }
         }
         if (scheduleSync) onSyncNeeded()
-        return outcome
+        return result
     }
 
     override suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate) {
@@ -217,15 +319,29 @@ class RoomCollectionRepository(
     }
     override suspend fun deleteEntry(entryId: Long) {
         val ownerUid = activeOwnerUid.value
-        val queued = database.withTransaction {
-            val existing = dao.getCollectionEntry(entryId, ownerUid) ?: return@withTransaction false
+        var queued = false
+        database.withTransaction {
+            val existing = dao.getCollectionEntry(entryId, ownerUid) ?: return@withTransaction
             if (ownerUid == GUEST_OWNER_UID) {
                 dao.deleteCollectionEntry(entryId)
-                false
             } else {
                 val now = System.currentTimeMillis()
+                dao.activePrivateBinderPlacementsForEntry(entryId, ownerUid).forEach { placement ->
+                    val tombstone = placement.copy(
+                        updatedAtEpochMillis = now,
+                        syncState = SYNC_PENDING,
+                        deletedAtEpochMillis = now,
+                    )
+                    dao.updatePrivateBinderPlacement(tombstone)
+                    queued = queuePrivateBinderPlacementMutation(tombstone, PRIVATE_SYNC_DELETE) || queued
+                }
+                // A layout is presentation-only and its cloud id is tied to this immutable
+                // collection generation. Once the entry is tombstoned it can never become
+                // visible again, so an unsent layout mutation is obsolete rather than retryable.
+                dao.deleteCollectionLayout(entryId, ownerUid)
+                dao.deletePrivateBinderSyncOutbox("$ownerUid:$PRIVATE_SYNC_LAYOUT:${existing.syncId}")
                 dao.tombstoneCollectionEntry(entryId, ownerUid, now, SYNC_PENDING)
-                queueMutation(existing.copy(deletedAtEpochMillis = now, updatedAtEpochMillis = now, syncState = SYNC_PENDING), "DELETE")
+                queued = queueMutation(existing.copy(deletedAtEpochMillis = now, updatedAtEpochMillis = now, syncState = SYNC_PENDING), "DELETE") || queued
             }
         }
         if (queued) onSyncNeeded()
@@ -248,10 +364,287 @@ class RoomCollectionRepository(
         if (queued) onSyncNeeded()
     }
 
+    override suspend fun createPrivateBinder(name: String, description: String?, coverStyle: String): String {
+        val ownerUid = activeOwnerUid.value
+        val normalizedName = validatePrivateBinderName(name)
+        val normalizedDescription = validatePrivateBinderDescription(description)
+        val normalizedCover = validatePrivateBinderCover(coverStyle)
+        val binderId = UUID.randomUUID().toString()
+        val queued = database.withTransaction {
+            val now = System.currentTimeMillis()
+            val binder = PrivateBinderEntity(
+                id = binderId,
+                ownerUid = ownerUid,
+                name = normalizedName,
+                description = normalizedDescription,
+                coverStyle = normalizedCover,
+                createdAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+                syncState = syncStateFor(ownerUid),
+            )
+            dao.insertPrivateBinder(binder)
+            queuePrivateBinderMutation(binder, PRIVATE_SYNC_UPSERT)
+        }
+        if (queued) onSyncNeeded()
+        return binderId
+    }
+
+    override suspend fun updatePrivateBinder(binderId: String, name: String, description: String?, coverStyle: String) {
+        val ownerUid = activeOwnerUid.value
+        val normalizedName = validatePrivateBinderName(name)
+        val normalizedDescription = validatePrivateBinderDescription(description)
+        val normalizedCover = validatePrivateBinderCover(coverStyle)
+        val queued = database.withTransaction {
+            val existing = requireActivePrivateBinder(binderId, ownerUid)
+            val changed = existing.copy(
+                name = normalizedName,
+                description = normalizedDescription,
+                coverStyle = normalizedCover,
+                updatedAtEpochMillis = System.currentTimeMillis(),
+                syncState = syncStateFor(ownerUid),
+            )
+            dao.updatePrivateBinder(changed)
+            queuePrivateBinderMutation(changed, PRIVATE_SYNC_UPSERT)
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override suspend fun setPrivateBinderCoverTheme(binderId: String, coverThemeId: String) {
+        val ownerUid = activeOwnerUid.value
+        val normalizedThemeId = validatePrivateBinderAppearanceId(coverThemeId, "Der Binderstil")
+        val queued = database.withTransaction {
+            val existing = requireActivePrivateBinder(binderId, ownerUid)
+            if (existing.coverStyle == normalizedThemeId) return@withTransaction false
+            val changed = existing.copy(
+                coverStyle = normalizedThemeId,
+                updatedAtEpochMillis = System.currentTimeMillis(),
+                syncState = syncStateFor(ownerUid),
+            )
+            dao.updatePrivateBinder(changed)
+            queuePrivateBinderMutation(changed, PRIVATE_SYNC_UPSERT)
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override suspend fun setPrivateBinderMinimumPageCount(binderId: String, minimumPageCount: Int) {
+        require(minimumPageCount >= 1) { "Ein privater Binder muss mindestens eine Seite haben." }
+        val ownerUid = activeOwnerUid.value
+        val queued = database.withTransaction {
+            val existing = requireActivePrivateBinder(binderId, ownerUid)
+            if (existing.minimumPageCount == minimumPageCount) return@withTransaction false
+            val changed = existing.copy(
+                minimumPageCount = minimumPageCount,
+                updatedAtEpochMillis = System.currentTimeMillis(),
+                syncState = syncStateFor(ownerUid),
+            )
+            dao.updatePrivateBinder(changed)
+            queuePrivateBinderMutation(changed, PRIVATE_SYNC_UPSERT)
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override suspend fun markPrivateBinderOpened(binderId: String) {
+        val ownerUid = activeOwnerUid.value
+        val queued = database.withTransaction {
+            val existing = requireActivePrivateBinder(binderId, ownerUid)
+            val now = System.currentTimeMillis()
+            val changed = existing.copy(
+                updatedAtEpochMillis = now,
+                lastOpenedAtEpochMillis = now,
+                syncState = syncStateFor(ownerUid),
+            )
+            dao.updatePrivateBinder(changed)
+            queuePrivateBinderMutation(changed, PRIVATE_SYNC_UPSERT)
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override suspend fun deletePrivateBinder(binderId: String) {
+        val ownerUid = activeOwnerUid.value
+        var queued = false
+        database.withTransaction {
+            val binder = requireActivePrivateBinder(binderId, ownerUid)
+            val now = System.currentTimeMillis()
+            dao.activePrivateBinderPlacements(binderId, ownerUid).forEach { placement ->
+                val tombstone = placement.copy(
+                    updatedAtEpochMillis = now,
+                    syncState = syncStateFor(ownerUid),
+                    deletedAtEpochMillis = now,
+                )
+                dao.updatePrivateBinderPlacement(tombstone)
+                queued = queuePrivateBinderPlacementMutation(tombstone, PRIVATE_SYNC_DELETE) || queued
+            }
+            val tombstone = binder.copy(
+                updatedAtEpochMillis = now,
+                syncState = syncStateFor(ownerUid),
+                deletedAtEpochMillis = now,
+            )
+            dao.updatePrivateBinder(tombstone)
+            queued = queuePrivateBinderMutation(tombstone, PRIVATE_SYNC_DELETE) || queued
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override fun privateBinderContents(binderId: String): Flow<List<PrivateBinderCard>> =
+        activeOwnerUid.flatMapLatest { ownerUid ->
+            combine(dao.observePrivateBinderPlacements(binderId, ownerUid), portfolio) { placements, currentPortfolio ->
+                val cardsByEntry = currentPortfolio.cards.associateBy(CollectionCard::entryId)
+                placements.mapNotNull { placement ->
+                    cardsByEntry[placement.collectionEntryId]?.let { card ->
+                        PrivateBinderCard(
+                            placementId = placement.id,
+                            binderId = placement.binderId,
+                            position = placement.slotPosition,
+                            card = card,
+                            holoEffectId = placement.holoEffectId,
+                            holoIntensity = placement.holoIntensity,
+                        )
+                    }
+                }
+            }
+        }.flowOn(Dispatchers.Default)
+
+    override suspend fun assignToPrivateBinder(binderId: String, entryId: Long, position: Long?): String {
+        val ownerUid = activeOwnerUid.value
+        val assignment = database.withTransaction {
+            val binder = requireActivePrivateBinder(binderId, ownerUid)
+            val entry = dao.getCollectionEntry(entryId, ownerUid)
+                ?.takeIf { it.deletedAtEpochMillis == null }
+                ?: throw IllegalArgumentException("Die Karte ist nicht in dieser Sammlung verfügbar.")
+            assignToPrivateBinderInTransaction(binder, entry, position, System.currentTimeMillis())
+        }
+        if (assignment.syncQueued) onSyncNeeded()
+        return assignment.placementId
+    }
+
+    override suspend fun unassignFromPrivateBinder(binderId: String, entryId: Long): Boolean {
+        val ownerUid = activeOwnerUid.value
+        var queued = false
+        val removed = database.withTransaction {
+            requireActivePrivateBinder(binderId, ownerUid)
+            val placement = dao.privateBinderPlacementForEntry(binderId, entryId, ownerUid)
+                ?.takeIf { it.deletedAtEpochMillis == null }
+                ?: return@withTransaction false
+            val now = System.currentTimeMillis()
+            val tombstone = placement.copy(
+                updatedAtEpochMillis = now,
+                syncState = syncStateFor(ownerUid),
+                deletedAtEpochMillis = now,
+            )
+            dao.updatePrivateBinderPlacement(tombstone)
+            queued = queuePrivateBinderPlacementMutation(tombstone, PRIVATE_SYNC_DELETE)
+            true
+        }
+        if (queued) onSyncNeeded()
+        return removed
+    }
+
+    override suspend fun movePrivateBinderCard(binderId: String, placementId: String, targetPosition: Long) {
+        require(targetPosition >= 0L) { "Die Zielposition muss innerhalb des Binders liegen." }
+        val ownerUid = activeOwnerUid.value
+        var queued = false
+        database.withTransaction {
+            requireActivePrivateBinder(binderId, ownerUid)
+            val moving = dao.privateBinderPlacement(placementId, ownerUid)
+                ?.takeIf { it.binderId == binderId && it.deletedAtEpochMillis == null }
+                ?: throw IllegalArgumentException("Die Binderposition ist nicht verfügbar.")
+            if (moving.slotPosition == targetPosition) return@withTransaction
+            val now = System.currentTimeMillis()
+            val occupant = dao.privateBinderPlacementAt(binderId, targetPosition, ownerUid)
+                ?.takeIf { it.id != moving.id }
+            if (occupant != null) {
+                val swapped = occupant.copy(
+                    slotPosition = moving.slotPosition,
+                    updatedAtEpochMillis = now,
+                    syncState = syncStateFor(ownerUid),
+                )
+                dao.updatePrivateBinderPlacement(swapped)
+                queued = queuePrivateBinderPlacementMutation(swapped, PRIVATE_SYNC_UPSERT) || queued
+            }
+            val moved = moving.copy(
+                slotPosition = targetPosition,
+                updatedAtEpochMillis = now,
+                syncState = syncStateFor(ownerUid),
+            )
+            dao.updatePrivateBinderPlacement(moved)
+            queued = queuePrivateBinderPlacementMutation(moved, PRIVATE_SYNC_UPSERT) || queued
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override suspend fun setPrivateBinderPlacementHolo(
+        binderId: String,
+        placementId: String,
+        holoEffectId: String?,
+        holoIntensity: Float,
+    ) {
+        val normalizedEffectId = holoEffectId?.trim()?.ifBlank { null }?.let {
+            validatePrivateBinderAppearanceId(it, "Der Holo-Effekt")
+        }
+        require(holoIntensity.isFinite() && holoIntensity in 0f..1f) {
+            "Die Holo-Intensität muss zwischen 0 und 1 liegen."
+        }
+        val normalizedIntensity = if (normalizedEffectId == null) 0f else holoIntensity
+        val ownerUid = activeOwnerUid.value
+        val queued = database.withTransaction {
+            requireActivePrivateBinder(binderId, ownerUid)
+            val existing = dao.privateBinderPlacement(placementId, ownerUid)
+                ?.takeIf { it.binderId == binderId && it.deletedAtEpochMillis == null }
+                ?: throw IllegalArgumentException("Die Binderposition ist nicht verfügbar.")
+            if (existing.holoEffectId == normalizedEffectId && existing.holoIntensity == normalizedIntensity) {
+                return@withTransaction false
+            }
+            val changed = existing.copy(
+                holoEffectId = normalizedEffectId,
+                holoIntensity = normalizedIntensity,
+                updatedAtEpochMillis = System.currentTimeMillis(),
+                syncState = syncStateFor(ownerUid),
+            )
+            dao.updatePrivateBinderPlacement(changed)
+            queuePrivateBinderPlacementMutation(changed, PRIVATE_SYNC_UPSERT)
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override suspend fun setVisibleInSetBinder(entryId: Long, visible: Boolean) {
+        val ownerUid = activeOwnerUid.value
+        val queued = database.withTransaction {
+            val entry = dao.getCollectionEntry(entryId, ownerUid)
+                ?.takeIf { it.deletedAtEpochMillis == null }
+                ?: throw IllegalArgumentException("Die Karte ist nicht in dieser Sammlung verfügbar.")
+            setVisibleInSetBinderInTransaction(entry, visible, System.currentTimeMillis())
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override suspend fun applyBinderTargetSelection(entryId: Long, target: BinderTarget) {
+        val ownerUid = activeOwnerUid.value
+        var queued = false
+        database.withTransaction {
+            val entry = dao.getCollectionEntry(entryId, ownerUid)
+                ?.takeIf { it.deletedAtEpochMillis == null }
+                ?: throw IllegalArgumentException("Die Karte ist nicht in dieser Sammlung verfügbar.")
+            val now = System.currentTimeMillis()
+            when (target) {
+                BinderTarget.MatchingSetBinder -> {
+                    queued = setVisibleInSetBinderInTransaction(entry, visible = true, now) || queued
+                }
+                is BinderTarget.PrivateBinder -> {
+                    val binder = requireActivePrivateBinder(target.binderId, ownerUid)
+                    val assignment = assignToPrivateBinderInTransaction(binder, entry, null, now)
+                    queued = assignment.syncQueued || queued
+                    queued = setVisibleInSetBinderInTransaction(entry, visible = false, now) || queued
+                }
+            }
+        }
+        if (queued) onSyncNeeded()
+    }
+
     override suspend fun claimGuestCollectionForCurrentUser(): Int {
         val ownerUid = activeOwnerUid.value
         require(ownerUid != GUEST_OWNER_UID) { "Für die Übernahme ist eine Anmeldung erforderlich." }
         var claimed = 0
+        var privateStateClaimed = false
         database.withTransaction {
             val now = System.currentTimeMillis()
             dao.activeGuestEntries().forEach { guest ->
@@ -301,8 +694,49 @@ class RoomCollectionRepository(
                     claimed++
                 }
             }
+
+            // Private layouts reference the stable local collection primary key, so ownership can
+            // be transferred only after every guest collection row received its authenticated
+            // sync id. No quantity or set-binder identity is changed here.
+            dao.activeGuestPrivateBinders().forEach { guestBinder ->
+                val claimedBinder = guestBinder.copy(
+                    ownerUid = ownerUid,
+                    updatedAtEpochMillis = now,
+                    syncState = SYNC_PENDING,
+                    remoteRevision = 0L,
+                )
+                dao.upsertPrivateBinder(claimedBinder)
+                privateStateClaimed = queuePrivateBinderMutation(claimedBinder, PRIVATE_SYNC_UPSERT) || privateStateClaimed
+            }
+            dao.activeGuestPrivateBinderPlacements().forEach { guestPlacement ->
+                val entry = dao.getCollectionEntry(guestPlacement.collectionEntryId, ownerUid)
+                    ?: return@forEach
+                val claimedPlacement = guestPlacement.copy(
+                    ownerUid = ownerUid,
+                    updatedAtEpochMillis = now,
+                    syncState = SYNC_PENDING,
+                    remoteRevision = 0L,
+                )
+                dao.upsertPrivateBinderPlacement(claimedPlacement)
+                privateStateClaimed = queuePrivateBinderPlacementMutation(claimedPlacement, PRIVATE_SYNC_UPSERT) || privateStateClaimed
+                check(entry.ownerUid == ownerUid)
+            }
+            dao.guestCollectionLayouts().forEach { guestLayout ->
+                val entry = dao.getCollectionEntry(guestLayout.collectionEntryId, ownerUid)
+                    ?: return@forEach
+                val claimedLayout = guestLayout.copy(
+                    ownerUid = ownerUid,
+                    updatedAtEpochMillis = now,
+                    syncState = SYNC_PENDING,
+                    remoteRevision = 0L,
+                )
+                dao.updateCollectionLayout(claimedLayout)
+                privateStateClaimed = queueCollectionLayoutMutation(claimedLayout, entry.syncId) || privateStateClaimed
+            }
+            dao.deleteGuestPrivateBinderPlacements()
+            dao.deleteGuestPrivateBinders()
         }
-        if (claimed > 0) onSyncNeeded()
+        if (claimed > 0 || privateStateClaimed) onSyncNeeded()
         return claimed
     }
 
@@ -551,6 +985,186 @@ class RoomCollectionRepository(
 
     companion object {
         private const val DEMO_CLEANUP_KEY = "remove_accidental_demo_collection_v1"
+    }
+
+    private suspend fun requireActivePrivateBinder(binderId: String, ownerUid: String): PrivateBinderEntity =
+        dao.privateBinder(binderId, ownerUid)
+            ?.takeIf { it.deletedAtEpochMillis == null }
+            ?: throw IllegalArgumentException("Der private Binder ist nicht verfügbar.")
+
+    private data class PrivatePlacementAssignment(
+        val placementId: String,
+        val created: Boolean,
+        val syncQueued: Boolean,
+    )
+
+    private suspend fun assignToPrivateBinderInTransaction(
+        binder: PrivateBinderEntity,
+        entry: CollectionEntryEntity,
+        requestedPosition: Long?,
+        now: Long,
+    ): PrivatePlacementAssignment {
+        require(requestedPosition == null || requestedPosition >= 0L) {
+            "Die Zielposition muss innerhalb des Binders liegen."
+        }
+        require(binder.ownerUid == entry.ownerUid && binder.deletedAtEpochMillis == null && entry.deletedAtEpochMillis == null) {
+            "Binder und Karte gehören nicht zur gleichen aktiven Sammlung."
+        }
+        val existing = dao.privateBinderPlacementForEntry(binder.id, entry.id, entry.ownerUid)
+        if (existing?.deletedAtEpochMillis == null && existing != null && requestedPosition == null) {
+            return PrivatePlacementAssignment(existing.id, created = false, syncQueued = false)
+        }
+        val active = dao.activePrivateBinderPlacements(binder.id, entry.ownerUid)
+        val requestedIsFree = requestedPosition != null && active.none {
+            it.id != existing?.id && it.slotPosition == requestedPosition
+        }
+        val position = when {
+            requestedIsFree -> requestedPosition!!
+            existing != null && existing.slotPosition >= 0L && active.none {
+                it.id != existing.id && it.slotPosition == existing.slotPosition
+            } -> existing.slotPosition
+            else -> firstFreePrivateBinderPosition(active, existing?.id)
+        }
+        // Firestore tombstones are immutable. Reassigning a card after removal therefore creates
+        // a new placement generation instead of trying to resurrect the prior document.
+        val createsSuccessor = existing?.deletedAtEpochMillis != null
+        val placementId = when {
+            createsSuccessor -> UUID.randomUUID().toString()
+            existing != null -> existing.id
+            entry.ownerUid == GUEST_OWNER_UID -> UUID.randomUUID().toString()
+            else -> deterministicPrivatePlacementId(entry.ownerUid, binder.id, entry.syncId)
+        }
+        val placement = PrivateBinderPlacementEntity(
+            id = placementId,
+            ownerUid = entry.ownerUid,
+            binderId = binder.id,
+            collectionEntryId = entry.id,
+            slotPosition = position,
+            createdAtEpochMillis = existing?.createdAtEpochMillis?.takeUnless { createsSuccessor } ?: now,
+            updatedAtEpochMillis = now,
+            syncState = syncStateFor(entry.ownerUid),
+            deletedAtEpochMillis = null,
+        )
+        if (existing == null || createsSuccessor) dao.insertPrivateBinderPlacement(placement)
+        else dao.updatePrivateBinderPlacement(placement)
+        return PrivatePlacementAssignment(
+            placementId = placementId,
+            created = existing?.deletedAtEpochMillis != null || existing == null,
+            syncQueued = queuePrivateBinderPlacementMutation(placement, PRIVATE_SYNC_UPSERT),
+        )
+    }
+
+    private fun firstFreePrivateBinderPosition(
+        placements: List<PrivateBinderPlacementEntity>,
+        excludingPlacementId: String? = null,
+    ): Long {
+        val used = placements.asSequence()
+            .filter { it.id != excludingPlacementId && it.deletedAtEpochMillis == null && it.slotPosition >= 0L }
+            .map(PrivateBinderPlacementEntity::slotPosition)
+            .toHashSet()
+        var candidate = 0L
+        while (candidate in used) candidate++
+        return candidate
+    }
+
+    private suspend fun queuePrivateBinderMutation(binder: PrivateBinderEntity, operation: String): Boolean =
+        queuePrivateMutation(
+            ownerUid = binder.ownerUid,
+            recordType = PRIVATE_SYNC_BINDER,
+            recordId = binder.id,
+            operation = operation,
+            expectedRemoteRevision = binder.remoteRevision,
+            updatedAtEpochMillis = binder.updatedAtEpochMillis,
+        )
+
+    private suspend fun queuePrivateBinderPlacementMutation(
+        placement: PrivateBinderPlacementEntity,
+        operation: String,
+    ): Boolean = queuePrivateMutation(
+        ownerUid = placement.ownerUid,
+        recordType = PRIVATE_SYNC_PLACEMENT,
+        recordId = placement.id,
+        operation = operation,
+        expectedRemoteRevision = placement.remoteRevision,
+        updatedAtEpochMillis = placement.updatedAtEpochMillis,
+    )
+
+    private suspend fun queueCollectionLayoutMutation(
+        layout: CollectionLayoutEntity,
+        collectionEntrySyncId: String,
+    ): Boolean = queuePrivateMutation(
+        ownerUid = layout.ownerUid,
+        recordType = PRIVATE_SYNC_LAYOUT,
+        recordId = collectionEntrySyncId,
+        operation = PRIVATE_SYNC_UPSERT,
+        expectedRemoteRevision = layout.remoteRevision,
+        updatedAtEpochMillis = layout.updatedAtEpochMillis,
+    )
+
+    /** Keeps the last acknowledged revision so the next outbox item uses the correct CAS base. */
+    private suspend fun setVisibleInSetBinderInTransaction(
+        entry: CollectionEntryEntity,
+        visible: Boolean,
+        now: Long,
+    ): Boolean {
+        val existing = dao.collectionLayout(entry.id, entry.ownerUid)
+        if (existing?.visibleInSetBinder == visible || (existing == null && visible)) return false
+        val layout = existing?.copy(
+            visibleInSetBinder = visible,
+            updatedAtEpochMillis = now,
+            syncState = syncStateFor(entry.ownerUid),
+        ) ?: CollectionLayoutEntity(
+            collectionEntryId = entry.id,
+            ownerUid = entry.ownerUid,
+            visibleInSetBinder = visible,
+            updatedAtEpochMillis = now,
+            syncState = syncStateFor(entry.ownerUid),
+        )
+        dao.upsertCollectionLayout(layout)
+        return queueCollectionLayoutMutation(layout, entry.syncId)
+    }
+
+    private suspend fun queuePrivateMutation(
+        ownerUid: String,
+        recordType: String,
+        recordId: String,
+        operation: String,
+        expectedRemoteRevision: Long,
+        updatedAtEpochMillis: Long,
+    ): Boolean {
+        if (ownerUid == GUEST_OWNER_UID) return false
+        dao.upsertPrivateBinderSyncOutbox(
+            PrivateBinderSyncOutboxEntity(
+                entryKey = "$ownerUid:$recordType:$recordId",
+                mutationId = UUID.randomUUID().toString(),
+                ownerUid = ownerUid,
+                recordType = recordType,
+                recordId = recordId,
+                operation = operation,
+                expectedRemoteRevision = expectedRemoteRevision,
+                updatedAtEpochMillis = updatedAtEpochMillis,
+                createdAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+        return true
+    }
+
+    private fun validatePrivateBinderName(value: String): String = value.trim().also {
+        require(it.isNotEmpty() && it.length <= 120) { "Der Bindername muss 1 bis 120 Zeichen lang sein." }
+    }
+
+    private fun validatePrivateBinderDescription(value: String?): String? = value?.trim()?.ifBlank { null }.also {
+        require(it == null || it.length <= 1_000) { "Die Binderbeschreibung darf höchstens 1000 Zeichen lang sein." }
+    }
+
+    private fun validatePrivateBinderCover(value: String): String = value.trim().ifBlank { "DOMIDEX" }.also {
+        require(it.length <= 80) { "Der Binderstil darf höchstens 80 Zeichen lang sein." }
+    }
+
+    private fun validatePrivateBinderAppearanceId(value: String, label: String): String = value.trim().also {
+        require(it.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}"))) {
+            "$label muss eine stabile ID aus Buchstaben, Zahlen, Punkt, Unterstrich oder Bindestrich sein."
+        }
     }
 
     private fun validateManualInputForSync(input: ManualCardInput) {

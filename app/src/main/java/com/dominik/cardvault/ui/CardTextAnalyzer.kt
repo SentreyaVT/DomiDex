@@ -496,12 +496,17 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
                 }
 
                 val selected = variants.first { it.orientation == winner.orientation }
-                val selectedDisplay = Bitmap.createScaledBitmap(
-                    selected.bitmap,
-                    CardScanConfiguration.NORMALIZED_WIDTH,
-                    CardScanConfiguration.NORMALIZED_HEIGHT,
-                    true,
-                )
+                // The first analysis plane is the same preferred plane from which Module 1
+                // already created initialDisplay. Reuse it instead of performing an identical
+                // second 1200x1680 -> 900x1260 filtered scale for the normal upright path.
+                val selectedDisplay = if (selected === variants.first()) initialDisplay else {
+                    Bitmap.createScaledBitmap(
+                        selected.bitmap,
+                        CardScanConfiguration.NORMALIZED_WIDTH,
+                        CardScanConfiguration.NORMALIZED_HEIGHT,
+                        true,
+                    )
+                }
                 if (initialDisplay !== selectedDisplay && !initialDisplay.isRecycled) initialDisplay.recycle()
                 val raritySymbolEvidence = CardRaritySymbolAnalyzer.analyze(selectedDisplay)
                 val inputs = buildOcrInputs(selected.bitmap, null, selected.orientation)
@@ -748,18 +753,37 @@ private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant): 
         )
     }
     fun rc3Variants(region: CardOcrRegion, roi: CardRoi, profile: String, inverted: Boolean = false): List<OcrInput> {
+        // All variants use the same pixels. Crop once and derive enhanced/inverted views from
+        // that crop; this preserves the exact OCR evidence while avoiding duplicate bitmap work.
+        val regions = setOf(region)
+        val crop = cropAtReadableScale(variant.bitmap, roi)
+        val enhancedBitmap = enhanceForOcr(crop)
         val result = mutableListOf(
-            original(setOf(region), roi, profile),
-            enhanced(setOf(region), roi, profile),
+            OcrInput(
+                regions,
+                InputImage.fromBitmap(crop, 0),
+                dynamic = profile != "modern",
+                bitmap = crop,
+                profileId = "orientation_$profile",
+                variantId = "original",
+                isTightIdentityStrip = false,
+                orientation = variant.orientation,
+            ),
+            OcrInput(
+                regions,
+                InputImage.fromBitmap(enhancedBitmap, 0),
+                dynamic = profile != "modern",
+                bitmap = enhancedBitmap,
+                profileId = "orientation_$profile",
+                variantId = "enhanced",
+                isTightIdentityStrip = false,
+                orientation = variant.orientation,
+            ),
         )
         if (inverted) {
-            val crop = cropAtReadableScale(variant.bitmap, roi)
-            val enhancedBitmap = enhanceForOcr(crop)
             val invertedBitmap = invertForOcr(enhancedBitmap)
-            crop.recycle()
-            enhancedBitmap.recycle()
             result += OcrInput(
-                setOf(region),
+                regions,
                 InputImage.fromBitmap(invertedBitmap, 0),
                 dynamic = false,
                 bitmap = invertedBitmap,

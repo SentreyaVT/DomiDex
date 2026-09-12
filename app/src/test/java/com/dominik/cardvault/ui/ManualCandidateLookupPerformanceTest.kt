@@ -53,7 +53,25 @@ class ManualCandidateLookupPerformanceTest {
         assertFalse(result.candidates.any { it.card.hasMarketProduct })
     }
 
-    private class Fixture(private val products: Map<String, List<CatalogSearchResult>>) {
+    @Test fun sourceDeclaredProductIdsSkipSetWideExpansionLookupWithoutChangingResolution() = runBlocking {
+        val products = names.associateWith { name -> listOf(product(name, "44")) }.toMutableMap()
+        products["Alpha"] = listOf(
+            product("Alpha", "44", 900_001L),
+            product("Alpha", "44", 900_002L),
+        )
+        val fixture = Fixture(products, sourceDeclaredProductIds = true)
+        val result = fixture.resolve()
+
+        assertEquals(fixture.referenceResult(), result)
+        assertEquals(listOf("Alpha"), fixture.queries)
+        assertEquals(setOf(900_001L, 900_002L), result.candidates.map { it.card.productId }.toSet())
+        assertTrue(result.candidates.all { it.card.hasMarketProduct })
+    }
+
+    private class Fixture(
+        private val products: Map<String, List<CatalogSearchResult>>,
+        private val sourceDeclaredProductIds: Boolean = false,
+    ) {
         val queries = mutableListOf<String>()
         private val analysis = withManualScanIdentity(null, "sv08.5", "PRE", "001/004")
         private val catalog = PokemonVisualCatalog(PokemonCatalogMetadataCache()) { url ->
@@ -63,10 +81,17 @@ class ManualCandidateLookupPerformanceTest {
                     val number = (index + 1).toString().padStart(3, '0')
                     """{"id":"sv08.5-$number","name":"$name","localId":"$number"}"""
                 }.joinToString(prefix = "{\"cards\":[", postfix = "]}")
-                url.contains("/cards/") -> """{"variants_detailed":[
-                    {"variantId":"normal","type":"normal","size":"Standard"},
-                    {"variantId":"holo","type":"holo","size":"Holo"}
-                ]}"""
+                url.contains("/cards/") -> if (sourceDeclaredProductIds) {
+                    """{"variants_detailed":[
+                        {"variantId":"normal","type":"normal","size":"Standard","thirdParty":{"cardmarket":900001}},
+                        {"variantId":"holo","type":"holo","size":"Holo","thirdParty":{"cardmarket":900002}}
+                    ]}"""
+                } else {
+                    """{"variants_detailed":[
+                        {"variantId":"normal","type":"normal","size":"Standard"},
+                        {"variantId":"holo","type":"holo","size":"Holo"}
+                    ]}"""
+                }
                 else -> error("Unexpected request: $url")
             })
         }
@@ -92,10 +117,13 @@ class ManualCandidateLookupPerformanceTest {
             val allSearches = allCards.map { it.marketSearchName ?: it.name }.distinct()
                 .associateWith { products[it].orEmpty() }
             val expansion = resolveCardmarketExpansionId(allCards, allSearches)
-            val matched = visualCardmarketProducts(exactCard, allCards, allSearches["Alpha"].orEmpty(), expansion).firstOrNull()
+            val matched = visualCardmarketProducts(exactCard, allCards, allSearches["Alpha"].orEmpty(), expansion)
             val candidates = exactCard.printVariants.map { variant ->
                 val score = CardRecognitionRanker.score(analysis, scannerCatalogResult(exactCard, variant, null))
-                ScanCandidate(scannerCatalogResult(exactCard, variant, matched), score)
+                ScanCandidate(
+                    scannerCatalogResult(exactCard, variant, visualCardmarketProductForPrinting(variant, matched)),
+                    score,
+                )
             }
             return ScanCandidateResolution(
                 candidates,
@@ -106,8 +134,12 @@ class ManualCandidateLookupPerformanceTest {
 
     private companion object {
         val names = listOf("Alpha", "Beta", "Gamma", "Delta")
-        fun product(name: String, expansion: String) = CatalogSearchResult(
-            productId = ("$name-$expansion".hashCode().toLong() and 0x7fff_ffffL) + 1,
+        fun product(
+            name: String,
+            expansion: String,
+            productId: Long = ("$name-$expansion".hashCode().toLong() and 0x7fff_ffffL) + 1,
+        ) = CatalogSearchResult(
+            productId = productId,
             name = name,
             expansionId = expansion,
             trendPriceEur = 1.25,

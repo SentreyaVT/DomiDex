@@ -9,6 +9,24 @@ import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionRepository
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+
+/**
+ * Failure boundary for the complete scanner worker. Cancellation retains structured-concurrency
+ * semantics; every other failure is converted to the caller's terminal FAILED transition.
+ */
+internal suspend inline fun runScanWorkerAnalysis(
+    crossinline onFailure: (Throwable) -> Unit,
+    crossinline analysis: suspend () -> Unit,
+) {
+    try {
+        analysis()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Throwable) {
+        onFailure(failure)
+    }
+}
 
 internal object ScanQueuePolicy {
     // OCR, perspective correction and artwork verification are intentionally serialized.
@@ -16,27 +34,40 @@ internal object ScanQueuePolicy {
     // native bitmap/OpenCV pressure when two captures arrive close together.
     const val MAX_PARALLEL_WORKERS = 1
     const val MAX_VISUAL_CANDIDATES = 4
-    /** Four automatic items leave two deterministic slots for deliberate manual captures. */
-    const val MAX_AUTOMATIC_BACKLOG = 4
+    /** Backpressure bounds active work and full-resolution files without discarding pending review. */
+    const val MAX_AUTOMATIC_IN_FLIGHT = 4
     const val MAX_TOTAL_BACKLOG = 6
-    const val MAX_RETAINED_TERMINAL_RESULTS = 3
 
-    fun allowsAutomaticCapture(scans: List<QueuedCardScan>, capturePending: Boolean): Boolean =
+    fun allowsAutomaticCapture(
+        scans: List<QueuedCardScan>,
+        capturePending: Boolean,
+        protectedScanIds: Set<String> = emptySet(),
+    ): Boolean =
         !capturePending &&
-            scans.size < MAX_AUTOMATIC_BACKLOG &&
-            scans.size < MAX_TOTAL_BACKLOG
+            scans.count { !it.stage.isTerminal } < MAX_AUTOMATIC_IN_FLIGHT &&
+            (scans.size < MAX_TOTAL_BACKLOG || automaticEvictionCandidate(scans, protectedScanIds) != null)
 
-    /** Manual intake may reclaim an old result or a not-yet-started item, never active work. */
+    /** Automatic intake may reclaim only a resolved SAVED item, never pending review or active work. */
+    fun automaticEvictionCandidate(
+        scans: List<QueuedCardScan>,
+        protectedScanIds: Set<String> = emptySet(),
+    ): QueuedCardScan? = scans
+        .filter { it.id !in protectedScanIds && it.stage == ScanPipelineStage.SAVED }
+        .minByOrNull(QueuedCardScan::capturedAtMillis)
+
+    /** Manual intake may reclaim a resolved item or pending automatic capture, never pending review. */
     fun evictionCandidateForManualCapture(
         scans: List<QueuedCardScan>,
         protectedScanId: String? = null,
     ): QueuedCardScan? = scans
-        .filter { it.id != protectedScanId && it.stage.isTerminal }
+        .filter { it.id != protectedScanId && it.stage == ScanPipelineStage.SAVED }
         .minByOrNull(QueuedCardScan::capturedAtMillis)
         ?: scans
-            .filter { it.id != protectedScanId && it.stage == ScanPipelineStage.CAPTURED }
-            .sortedWith(compareBy<QueuedCardScan> { it.origin != ScanCaptureOrigin.AUTOMATIC }.thenBy(QueuedCardScan::capturedAtMillis))
-            .firstOrNull()
+            .filter {
+                it.id != protectedScanId && it.stage == ScanPipelineStage.CAPTURED &&
+                    it.origin == ScanCaptureOrigin.AUTOMATIC
+            }
+            .minByOrNull(QueuedCardScan::capturedAtMillis)
 }
 
 internal enum class ScanCaptureOrigin { AUTOMATIC, MANUAL, GALLERY }
@@ -103,6 +134,15 @@ internal fun CatalogSearchResult.scanIdentityKey(): String {
         "product:$productId"
     }
     return "$sourceKey|${finish.orEmpty().trim().lowercase()}|${variant.orEmpty().trim().lowercase()}"
+}
+
+/** Session duplicate identity: exact set + physical print + finish + variant, never card name. */
+internal fun CatalogSearchResult.scanSessionIdentityKey(): String {
+    val setKey = sourceSetId?.takeIf(String::isNotBlank) ?: "market-$expansionId"
+    val collectorKey = collectorNumber?.takeIf(String::isNotBlank) ?: "unknown"
+    val printKey = sourceCardId?.takeIf(String::isNotBlank) ?: "product-$productId"
+    fun canonical(value: String?) = value.orEmpty().trim().lowercase().ifBlank { "unknown" }
+    return "set:${canonical(setKey)}|collector:${canonical(collectorKey)}|print:${canonical(printKey)}|finish:${canonical(finish)}|variant:${canonical(variant)}"
 }
 
 internal data class ScanCandidateResolution(
@@ -213,10 +253,20 @@ internal object CardScanCandidateResolver {
             if (marketCandidates.none { cardmarketNameMatches(it.name, searchName) }) {
                 return@map ScanCandidate(preparedCandidate.unpriced, preparedCandidate.score)
             }
-            val setCards = cardsBySet.getOrPut(visualCard.set.id) {
-                runCatching { visualCatalog.cards(visualCard.set) }.getOrDefault(listOf(visualCard))
+            val hasDeclaredCardmarketProductIds = visualCard.printVariants.any { it.cardmarketProductId != null }
+            // Source-declared product ids are resolved before expansion/name-order bridging in
+            // visualCardmarketProducts. In that branch cardsInSet and resolvedExpansionId are not
+            // read, so loading every set name here would be pure work with no effect on evidence.
+            val setCards = if (hasDeclaredCardmarketProductIds) {
+                listOf(visualCard)
+            } else {
+                cardsBySet.getOrPut(visualCard.set.id) {
+                    runCatching { visualCatalog.cards(visualCard.set) }.getOrDefault(listOf(visualCard))
+                }
             }
-            val expansionId = if (expansionBySet.containsKey(visualCard.set.id)) {
+            val expansionId = if (hasDeclaredCardmarketProductIds) {
+                null
+            } else if (expansionBySet.containsKey(visualCard.set.id)) {
                 expansionBySet[visualCard.set.id]
             } else {
                 val resolved = visualCard.set.cardmarketExpansionId ?: run {

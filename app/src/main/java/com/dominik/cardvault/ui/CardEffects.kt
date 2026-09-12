@@ -9,7 +9,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import com.dominik.cardvault.model.CollectionCard
 import com.dominik.cardvault.ui.theme.MewIce
@@ -147,7 +146,8 @@ internal fun StaticCardEffectLayer(config: CardEffectConfig, modifier: Modifier 
                 )
             }
         }
-        if (CardEffectZone.BORDER in config.zones || config.metallic) drawRoundRect(Brush.sweepGradient(effectStops(config, .70f * config.intensity), center = center), style = Stroke(2.5f))
+        // The artwork supplies its own physical edge. A synthetic cyan perimeter becomes
+        // distracting while the card tilts, so only the actual foil regions are rendered.
     }
 }
 
@@ -187,6 +187,6 @@ internal fun HoloEffectLayer(config: CardEffectConfig, tiltX: Float, tiltY: Floa
                 }
             }
         }
-        if (CardEffectZone.BORDER in config.zones || config.metallic) drawRoundRect(Brush.sweepGradient(effectStops(config, .9f * config.intensity), center = center), style = Stroke(3f))
+        // Do not draw a synthetic perimeter; it exposes bright seams at 3D tilt angles.
     }
 }

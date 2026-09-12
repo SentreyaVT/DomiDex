@@ -73,6 +73,56 @@ data class CardPricePoint(
     val source: String,
 )
 data class BinderSummary(val id: String, val name: String, val heroAsset: String?, val uniqueCards: Int, val ownedCards: Int, val marketValueEur: Double, val lastPriceUpdatedAtEpochMillis: Long?)
+data class PrivateBinderSummary(
+    val id: String,
+    val name: String,
+    val description: String?,
+    val coverStyle: String,
+    /** Durable floor for the reader, independent of the highest occupied slot. */
+    val minimumPageCount: Int,
+    val uniqueCards: Int,
+    val ownedCards: Int,
+    val marketValueEur: Double,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+    val lastOpenedAtEpochMillis: Long?,
+)
+
+data class PrivateBinderCard(
+    val placementId: String,
+    val binderId: String,
+    /** Global stable slot: page = position / 9, slot = position % 9. */
+    val position: Long,
+    val card: CollectionCard,
+    /** Presentation override scoped to this binder placement, never to collection identity. */
+    val holoEffectId: String? = null,
+    val holoIntensity: Float = 0f,
+)
+
+sealed interface BinderTarget {
+    /** Existing behaviour: derive the one canonical binder from the card's real set identity. */
+    data object MatchingSetBinder : BinderTarget
+    data class PrivateBinder(val binderId: String) : BinderTarget
+}
+
+data class TargetedAddCardResult(
+    val entryId: Long,
+    val ownershipCreated: Boolean,
+    val quantityIncremented: Boolean,
+    val privatePlacementId: String? = null,
+    val privateAssignmentCreated: Boolean = false,
+)
+
+enum class BinderSortOrder {
+    MOST_CARDS,
+    PROGRESS_ASCENDING,
+    PROGRESS_DESCENDING,
+    NAME,
+    LAST_OPENED,
+}
+
+enum class BinderFilter { ALL, COMPLETE, INCOMPLETE, SET, PRIVATE }
+
 data class PortfolioSummary(val cards: List<CollectionCard>, val history: List<PortfolioPoint>) {
     val totalValue get() = cards.sumOf { it.currentValueEur * it.quantity }
     val totalCards get() = cards.sumOf { it.quantity }
@@ -97,6 +147,10 @@ enum class AddCardOutcome { CREATED, QUANTITY_INCREMENTED }
 interface CollectionRepository {
     val portfolio: Flow<PortfolioSummary>
     val binders: Flow<List<BinderSummary>>
+    /** User-created display binders. Their values never feed [portfolio]. */
+    val privateBinders: Flow<List<PrivateBinderSummary>>
+    /** Missing entries are intentionally interpreted as true for pre-schema-11 collections. */
+    val setBinderVisibility: Flow<Map<Long, Boolean>>
     /** Legacy/local rows waiting for an explicit, user-confirmed account transfer. */
     val guestEntryCount: Flow<Int>
     /** True optimistic-lock conflicts for the currently authenticated owner only. */
@@ -106,6 +160,36 @@ interface CollectionRepository {
     val catalogSyncStatus: Flow<CatalogSyncStatus>
     suspend fun seedIfNeeded()
     suspend fun addManualCard(input: ManualCardInput): AddCardOutcome
+    /**
+     * Atomic destination-aware add. Assigning an already-owned exact printing to a private binder
+     * does not increase its quantity; it creates only a display membership.
+     */
+    suspend fun addManualCard(input: ManualCardInput, target: BinderTarget): TargetedAddCardResult
+    suspend fun createPrivateBinder(name: String, description: String? = null, coverStyle: String = "DOMIDEX"): String
+    suspend fun updatePrivateBinder(binderId: String, name: String, description: String? = null, coverStyle: String = "DOMIDEX")
+    suspend fun setPrivateBinderCoverTheme(binderId: String, coverThemeId: String)
+    /** Persists manually added empty pages; values below one are rejected. */
+    suspend fun setPrivateBinderMinimumPageCount(binderId: String, minimumPageCount: Int)
+    suspend fun markPrivateBinderOpened(binderId: String)
+    suspend fun deletePrivateBinder(binderId: String)
+    fun privateBinderContents(binderId: String): Flow<List<PrivateBinderCard>>
+    suspend fun assignToPrivateBinder(binderId: String, entryId: Long, position: Long? = null): String
+    suspend fun unassignFromPrivateBinder(binderId: String, entryId: Long): Boolean
+    /** Occupied targets swap with the moving card; page boundaries need no special handling. */
+    suspend fun movePrivateBinderCard(binderId: String, placementId: String, targetPosition: Long)
+    suspend fun setPrivateBinderPlacementHolo(
+        binderId: String,
+        placementId: String,
+        holoEffectId: String?,
+        holoIntensity: Float,
+    )
+    /**
+     * Applies an explicit display destination to an already-owned entry without changing its
+     * ownership or quantity. A private target also creates its binder membership when needed;
+     * neither target removes existing private-binder memberships.
+     */
+    suspend fun applyBinderTargetSelection(entryId: Long, target: BinderTarget)
+    suspend fun setVisibleInSetBinder(entryId: Long, visible: Boolean)
     suspend fun updateEntry(entryId: Long, update: CollectionEntryUpdate)
     suspend fun deleteEntry(entryId: Long)
     suspend fun deleteBinder(binderId: String)

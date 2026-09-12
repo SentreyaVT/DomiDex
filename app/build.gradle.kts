@@ -51,7 +51,7 @@ android {
         applicationId = "com.dominik.cardvault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 18
+        versionCode = 19
         versionName = "1.0-pre-beta"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -139,6 +139,7 @@ dependencies {
     implementation(libs.androidx.credentials.play.services.auth)
     implementation(libs.googleid)
     implementation(libs.play.app.update)
+    implementation(libs.androidx.window)
     ksp(libs.androidx.room.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

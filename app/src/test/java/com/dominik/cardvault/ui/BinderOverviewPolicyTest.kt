@@ -1,0 +1,114 @@
+package com.dominik.cardvault.ui
+
+import com.dominik.cardvault.model.CardLanguage
+import com.dominik.cardvault.model.CollectionCard
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class BinderOverviewPolicyTest {
+    private val setComplete = BinderOverviewRecord("set-a", "Alpha", BinderOverviewKind.SET, 10, 10, lastOpenedAtEpochMillis = 2)
+    private val setSparse = BinderOverviewRecord("set-b", "Beta", BinderOverviewKind.SET, 2, 10, lastOpenedAtEpochMillis = 3)
+    private val privateLarge = BinderOverviewRecord("private-c", "Showcase", BinderOverviewKind.PRIVATE, 20, null, lastOpenedAtEpochMillis = 1)
+
+    @Test fun `default puts binders with most cards first`() {
+        val result = orderBinderOverview(listOf(setSparse, setComplete, privateLarge), BinderSortOption.MOST_CARDS, BinderFilterOption.ALL)
+        assertEquals(listOf("private-c", "set-a", "set-b"), result.map { it.id })
+    }
+
+    @Test fun `default sort uses physical count while progress uses filled set slots`() {
+        val duplicateHeavy = BinderOverviewRecord("duplicates", "Duplicates", BinderOverviewKind.SET, ownedCards = 25, totalSlots = 100, completedSlots = 5)
+        val varied = BinderOverviewRecord("varied", "Varied", BinderOverviewKind.SET, ownedCards = 12, totalSlots = 20, completedSlots = 12)
+        assertEquals(listOf("duplicates", "varied"), orderBinderOverview(listOf(varied, duplicateHeavy), BinderSortOption.MOST_CARDS, BinderFilterOption.ALL).map { it.id })
+        assertEquals(listOf("varied", "duplicates"), orderBinderOverview(listOf(duplicateHeavy, varied), BinderSortOption.HIGHEST_PROGRESS, BinderFilterOption.ALL).map { it.id })
+    }
+
+    @Test fun `progress sorts keep private binders after measurable set progress`() {
+        val high = orderBinderOverview(listOf(privateLarge, setSparse, setComplete), BinderSortOption.HIGHEST_PROGRESS, BinderFilterOption.ALL)
+        val low = orderBinderOverview(listOf(privateLarge, setComplete, setSparse), BinderSortOption.LOWEST_PROGRESS, BinderFilterOption.ALL)
+        assertEquals(listOf("set-a", "set-b", "private-c"), high.map { it.id })
+        assertEquals(listOf("set-b", "set-a", "private-c"), low.map { it.id })
+        assertNull(privateLarge.progress)
+    }
+
+    @Test fun `complete and incomplete filters never invent private progress`() {
+        val all = listOf(privateLarge, setSparse, setComplete)
+        assertEquals(listOf("set-a"), orderBinderOverview(all, BinderSortOption.MOST_CARDS, BinderFilterOption.COMPLETE).map { it.id })
+        assertEquals(listOf("set-b"), orderBinderOverview(all, BinderSortOption.MOST_CARDS, BinderFilterOption.INCOMPLETE).map { it.id })
+        assertTrue(setComplete.isComplete)
+        assertFalse(privateLarge.isComplete)
+    }
+
+    @Test fun `kind and last opened sorting are stable`() {
+        val all = listOf(setComplete, privateLarge, setSparse)
+        assertEquals(listOf("private-c"), orderBinderOverview(all, BinderSortOption.A_TO_Z, BinderFilterOption.PRIVATE_BINDERS).map { it.id })
+        assertEquals(listOf("set-b", "set-a", "private-c"), orderBinderOverview(all, BinderSortOption.LAST_OPENED, BinderFilterOption.ALL).map { it.id })
+    }
+
+    @Test fun `private binder tab contains only private binders`() {
+        val all = listOf(setComplete, privateLarge, setSparse)
+
+        assertEquals(
+            listOf("private-c"),
+            binderOverviewRecordsForTab(all, BinderOverviewTab.PRIVATE_BINDERS).map { it.id },
+        )
+        assertEquals(
+            listOf("set-a", "set-b"),
+            binderOverviewRecordsForTab(all, BinderOverviewTab.SET_BINDERS).map { it.id },
+        )
+    }
+
+    @Test fun `unknown stored values keep required defaults`() {
+        assertEquals(BinderSortOption.MOST_CARDS, BinderSortOption.fromStorage("future-value"))
+        assertEquals(BinderFilterOption.ALL, BinderFilterOption.fromStorage(null))
+    }
+
+    @Test fun `all persisted choices round trip through stable storage values`() {
+        BinderSortOption.entries.forEach { option ->
+            assertEquals(option, BinderSortOption.fromStorage(option.storageValue))
+        }
+        BinderFilterOption.entries.forEach { option ->
+            assertEquals(option, BinderFilterOption.fromStorage(option.storageValue))
+        }
+        BinderOverviewTab.entries.forEach { tab ->
+            assertEquals(tab, BinderOverviewTab.fromStorage(tab.storageValue))
+        }
+    }
+
+    @Test fun `completed slots count variants but not duplicate copies`() {
+        fun card(entryId: Long, finish: String, quantity: Int = 1) = CollectionCard(
+            entryId = entryId,
+            id = "card-$entryId",
+            name = "Testkarte",
+            set = "Testset",
+            number = "001/100",
+            language = CardLanguage.GERMAN,
+            finish = finish,
+            variant = "Standard",
+            condition = "Near Mint",
+            quantity = quantity,
+            currentValueEur = 1.0,
+            changePercent = 0.0,
+            priceUpdatedAtEpochMillis = 1L,
+            notes = "",
+            acquisitionPriceEur = null,
+            acquisitionDateEpochDay = null,
+            accent = 0L,
+            sourceSetId = "set-a",
+            sourceCardId = "set-a-001",
+        )
+
+        assertEquals(
+            2,
+            completedBinderSlotCount(
+                listOf(
+                    card(entryId = 1L, finish = "Normal", quantity = 4),
+                    card(entryId = 2L, finish = "Normal"),
+                    card(entryId = 3L, finish = "Reverse Holo"),
+                ),
+            ),
+        )
+    }
+}

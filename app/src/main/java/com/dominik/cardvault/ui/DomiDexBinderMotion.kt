@@ -308,7 +308,7 @@ internal fun BinderInsertionOverlay(card: CollectionCard, modifier: Modifier = M
                 Modifier.size(186.dp, 258.dp).background(Color(0xFF090A10), RoundedCornerShape(18.dp)).border(2.dp, MewRose.copy(alpha = .58f), RoundedCornerShape(18.dp)).padding(12.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Box(Modifier.fillMaxSize().background(Color(0xFF171821), RoundedCornerShape(12.dp)).border(1.dp, MewIce.copy(alpha = .22f), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF171821), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
                     if (card.imageUrl != null) AsyncImage(
                         card.imageUrl,
                         card.name,

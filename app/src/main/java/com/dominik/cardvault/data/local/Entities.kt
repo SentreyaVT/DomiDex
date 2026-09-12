@@ -101,6 +101,150 @@ data class CollectionEntryEntity(
     val sourceCardId: String? = null,
 )
 
+/**
+ * User-created binder metadata. Set binders intentionally remain in [BinderEntity]; keeping the
+ * two concepts separate prevents a private layout change from changing collection ownership.
+ */
+@Entity(
+    tableName = "private_binders",
+    primaryKeys = ["ownerUid", "id"],
+    indices = [
+        Index(value = ["ownerUid", "deletedAtEpochMillis"]),
+        Index(value = ["ownerUid", "lastOpenedAtEpochMillis"]),
+    ],
+)
+data class PrivateBinderEntity(
+    val id: String,
+    val ownerUid: String = GUEST_OWNER_UID,
+    val name: String,
+    val description: String? = null,
+    /** Stable cover-theme id retained in the original column for schema/cloud compatibility. */
+    @ColumnInfo(defaultValue = "'DOMIDEX'") val coverStyle: String = "DOMIDEX",
+    /** User-created empty pages are durable; occupied slots may still require more pages. */
+    @ColumnInfo(defaultValue = "1") val minimumPageCount: Int = 1,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+    val lastOpenedAtEpochMillis: Long? = null,
+    @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val syncState: String = SYNC_LOCAL_ONLY,
+    @ColumnInfo(defaultValue = "0") val remoteRevision: Long = 0L,
+    val deletedAtEpochMillis: Long? = null,
+)
+
+/**
+ * One display assignment in a private binder. It references ownership rather than duplicating it.
+ * slotPosition is global (page * 9 + slot), so pages remain stable and effectively unbounded.
+ */
+@Entity(
+    tableName = "private_binder_placements",
+    primaryKeys = ["ownerUid", "id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = PrivateBinderEntity::class,
+            parentColumns = ["ownerUid", "id"],
+            childColumns = ["ownerUid", "binderId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = CollectionEntryEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["collectionEntryId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index("binderId"),
+        Index("collectionEntryId"),
+        Index(value = ["ownerUid", "binderId", "collectionEntryId"]),
+        Index(value = ["ownerUid", "binderId", "slotPosition"]),
+        Index(value = ["ownerUid", "deletedAtEpochMillis"]),
+    ],
+)
+data class PrivateBinderPlacementEntity(
+    val id: String,
+    val ownerUid: String = GUEST_OWNER_UID,
+    val binderId: String,
+    val collectionEntryId: Long,
+    val slotPosition: Long,
+    /** Optional private-binder-only presentation effect; it never changes the owned card finish. */
+    val holoEffectId: String? = null,
+    @ColumnInfo(defaultValue = "0.0") val holoIntensity: Float = 0f,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+    @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val syncState: String = SYNC_LOCAL_ONLY,
+    @ColumnInfo(defaultValue = "0") val remoteRevision: Long = 0L,
+    val deletedAtEpochMillis: Long? = null,
+)
+
+/**
+ * Set-binder presentation is independent from ownership and private-binder membership. Absence of
+ * a row means visible, preserving every collection created before schema 11.
+ */
+@Entity(
+    tableName = "collection_layout",
+    foreignKeys = [
+        ForeignKey(
+            entity = CollectionEntryEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["collectionEntryId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("ownerUid")],
+)
+data class CollectionLayoutEntity(
+    @PrimaryKey val collectionEntryId: Long,
+    val ownerUid: String = GUEST_OWNER_UID,
+    @ColumnInfo(defaultValue = "1") val visibleInSetBinder: Boolean = true,
+    val updatedAtEpochMillis: Long,
+    @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val syncState: String = SYNC_LOCAL_ONLY,
+    @ColumnInfo(defaultValue = "0") val remoteRevision: Long = 0L,
+)
+
+/** Durable, coalesced mutations for private binder metadata, placements and set visibility. */
+@Entity(
+    tableName = "private_binder_sync_outbox",
+    indices = [Index(value = ["ownerUid", "createdAtEpochMillis"])],
+)
+data class PrivateBinderSyncOutboxEntity(
+    @PrimaryKey val entryKey: String,
+    val mutationId: String,
+    val ownerUid: String,
+    val recordType: String,
+    val recordId: String,
+    val operation: String,
+    @ColumnInfo(defaultValue = "0") val expectedRemoteRevision: Long = 0L,
+    val updatedAtEpochMillis: Long,
+    val createdAtEpochMillis: Long,
+    val lastError: String? = null,
+)
+
+/** Sync projection resolves the local collection primary key to its stable cloud identity. */
+data class PrivateBinderPlacementSyncProjection(
+    val id: String,
+    val ownerUid: String,
+    val binderId: String,
+    val collectionEntryId: Long,
+    val collectionEntrySyncId: String,
+    val slotPosition: Long,
+    val holoEffectId: String?,
+    val holoIntensity: Float,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+    val syncState: String,
+    val remoteRevision: Long,
+    val deletedAtEpochMillis: Long?,
+)
+
+data class CollectionLayoutSyncProjection(
+    val collectionEntryId: Long,
+    val collectionEntrySyncId: String,
+    val ownerUid: String,
+    val visibleInSetBinder: Boolean,
+    val updatedAtEpochMillis: Long,
+    val syncState: String,
+    val remoteRevision: Long,
+)
+
 /** One coalesced, idempotent cloud mutation per user-owned collection entry. */
 @Entity(
     tableName = "collection_sync_outbox",

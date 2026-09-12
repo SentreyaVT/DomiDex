@@ -73,8 +73,8 @@ class SettingsNavigationInstrumentedTest {
         waitText("Nicht angemeldet · Gastbestand bleibt lokal. Keine Kontosynchronisierung.")
         tap("Fertig")
         tap("Scanner-Verbesserung")
-        waitText("Nicht erkannte Karten zur Verbesserung senden")
-        waitText("Melde dich an, um deine Einwilligung zu verwalten.")
+        waitText("Fehlscans werden nur über „An ScanLab schicken“ gesendet.")
+        waitText("Melde dich an, um einen Fehlscan zu senden.")
         tap("Fertig")
         tap("Datenschutz")
         waitText("https://domidex.web.app/datenschutz")
@@ -101,6 +101,6 @@ class SettingsNavigationInstrumentedTest {
         waitText("Konto- & Datenverwaltung")
         assertNull(find(instrumentation.uiAutomation.rootInActiveWindow) { it.text?.toString() == "Admin / Entwickler" })
         tap("Binder")
-        waitText("Binder öffnen")
+        waitText("Deine Binder")
     }
 }

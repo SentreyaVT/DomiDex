@@ -92,7 +92,7 @@ class BinderPricePreviewInstrumentedTest {
         seedPrice()
         sync.value = CatalogSyncStatus("SUCCESS", 2_000L, null, 1, 1, null)
         compose.waitUntil(10_000) { compose.onAllNodesWithText(priceText).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Ziel-Binder").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Erkannte Set- und Slot-Identität").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Offizieller Sammelplatz 137 · Holo").assertExists()
         compose.onNodeWithText("In diesen Binder hinzufügen").assertIsEnabled().performClick()
         compose.waitUntil(10_000) { added.get() != null }
@@ -113,6 +113,7 @@ class BinderPricePreviewInstrumentedTest {
         compose.onNodeWithText(source.name).performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithText("Zum Binder hinzufügen · $priceText").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Zum Binder hinzufügen · $priceText").performClick()
+        compose.onNodeWithText("Erkannte Set- und Slot-Identität").assertExists()
         compose.onNodeWithText("Ziel-Binder").assertExists()
         compose.onNodeWithText("Offizieller Sammelplatz 137 · Holo").assertExists()
         compose.onNodeWithText("In diesen Binder hinzufügen").performClick()

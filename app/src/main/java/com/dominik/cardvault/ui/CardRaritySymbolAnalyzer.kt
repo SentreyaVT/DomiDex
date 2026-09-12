@@ -24,10 +24,10 @@ internal object CardRaritySymbolAnalyzer {
         var dark = 0
         var colored = 0
         var samples = 0
+        val hsv = FloatArray(3)
         val step = (minOf(bitmap.width, bitmap.height) / 96).coerceAtLeast(2)
         for (y in top until bottom step step) for (x in left until right step step) {
             val pixel = bitmap.getPixel(x, y)
-            val hsv = FloatArray(3)
             Color.colorToHSV(pixel, hsv)
             val hue = hsv[0]; val saturation = hsv[1]; val value = hsv[2]
             samples++

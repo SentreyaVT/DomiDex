@@ -70,6 +70,152 @@ interface CardVaultDao {
     @Query("SELECT id FROM binders WHERE setKey = :setKey LIMIT 1")
     suspend fun binderIdForSet(setKey: String): String?
 
+    @Query("SELECT * FROM private_binders WHERE ownerUid = :ownerUid AND deletedAtEpochMillis IS NULL ORDER BY COALESCE(lastOpenedAtEpochMillis, 0) DESC, name COLLATE NOCASE, id")
+    fun observePrivateBinders(ownerUid: String = GUEST_OWNER_UID): Flow<List<PrivateBinderEntity>>
+
+    @Query("SELECT * FROM private_binders WHERE id = :binderId AND ownerUid = :ownerUid LIMIT 1")
+    suspend fun privateBinder(binderId: String, ownerUid: String = GUEST_OWNER_UID): PrivateBinderEntity?
+
+    @Insert
+    suspend fun insertPrivateBinder(value: PrivateBinderEntity)
+
+    @Upsert
+    suspend fun upsertPrivateBinder(value: PrivateBinderEntity)
+
+    @Update
+    suspend fun updatePrivateBinder(value: PrivateBinderEntity)
+
+    @Query("SELECT * FROM private_binders WHERE ownerUid = '__domidex_guest__' AND deletedAtEpochMillis IS NULL ORDER BY id")
+    suspend fun activeGuestPrivateBinders(): List<PrivateBinderEntity>
+
+    @Query("DELETE FROM private_binders WHERE ownerUid = '__domidex_guest__'")
+    suspend fun deleteGuestPrivateBinders()
+
+    @Query("SELECT * FROM private_binder_placements WHERE ownerUid = :ownerUid AND binderId = :binderId AND deletedAtEpochMillis IS NULL ORDER BY slotPosition, id")
+    fun observePrivateBinderPlacements(binderId: String, ownerUid: String = GUEST_OWNER_UID): Flow<List<PrivateBinderPlacementEntity>>
+
+    @Query("SELECT * FROM private_binder_placements WHERE ownerUid = :ownerUid AND deletedAtEpochMillis IS NULL ORDER BY binderId, slotPosition, id")
+    fun observeAllPrivateBinderPlacements(ownerUid: String = GUEST_OWNER_UID): Flow<List<PrivateBinderPlacementEntity>>
+
+    @Query("SELECT * FROM private_binder_placements WHERE id = :placementId AND ownerUid = :ownerUid LIMIT 1")
+    suspend fun privateBinderPlacement(placementId: String, ownerUid: String = GUEST_OWNER_UID): PrivateBinderPlacementEntity?
+
+    @Query("SELECT * FROM private_binder_placements WHERE binderId = :binderId AND collectionEntryId = :entryId AND ownerUid = :ownerUid ORDER BY CASE WHEN deletedAtEpochMillis IS NULL THEN 0 ELSE 1 END, updatedAtEpochMillis DESC LIMIT 1")
+    suspend fun privateBinderPlacementForEntry(binderId: String, entryId: Long, ownerUid: String = GUEST_OWNER_UID): PrivateBinderPlacementEntity?
+
+    @Query("SELECT * FROM private_binder_placements WHERE binderId = :binderId AND slotPosition = :slotPosition AND ownerUid = :ownerUid AND deletedAtEpochMillis IS NULL LIMIT 1")
+    suspend fun privateBinderPlacementAt(binderId: String, slotPosition: Long, ownerUid: String = GUEST_OWNER_UID): PrivateBinderPlacementEntity?
+
+    @Query("SELECT * FROM private_binder_placements WHERE binderId = :binderId AND ownerUid = :ownerUid AND deletedAtEpochMillis IS NULL ORDER BY slotPosition, id")
+    suspend fun activePrivateBinderPlacements(binderId: String, ownerUid: String = GUEST_OWNER_UID): List<PrivateBinderPlacementEntity>
+
+    @Query("SELECT * FROM private_binder_placements WHERE collectionEntryId = :entryId AND ownerUid = :ownerUid AND deletedAtEpochMillis IS NULL ORDER BY binderId, slotPosition")
+    suspend fun activePrivateBinderPlacementsForEntry(entryId: Long, ownerUid: String = GUEST_OWNER_UID): List<PrivateBinderPlacementEntity>
+
+    @Query("SELECT * FROM private_binder_placements WHERE ownerUid = '__domidex_guest__' AND deletedAtEpochMillis IS NULL ORDER BY id")
+    suspend fun activeGuestPrivateBinderPlacements(): List<PrivateBinderPlacementEntity>
+
+    @Query("DELETE FROM private_binder_placements WHERE ownerUid = '__domidex_guest__'")
+    suspend fun deleteGuestPrivateBinderPlacements()
+
+    @Insert
+    suspend fun insertPrivateBinderPlacement(value: PrivateBinderPlacementEntity)
+
+    @Upsert
+    suspend fun upsertPrivateBinderPlacement(value: PrivateBinderPlacementEntity)
+
+    @Update
+    suspend fun updatePrivateBinderPlacement(value: PrivateBinderPlacementEntity)
+
+    @Query("SELECT * FROM collection_layout WHERE ownerUid = :ownerUid ORDER BY collectionEntryId")
+    fun observeCollectionLayouts(ownerUid: String = GUEST_OWNER_UID): Flow<List<CollectionLayoutEntity>>
+
+    @Query("SELECT * FROM collection_layout WHERE collectionEntryId = :entryId AND ownerUid = :ownerUid LIMIT 1")
+    suspend fun collectionLayout(entryId: Long, ownerUid: String = GUEST_OWNER_UID): CollectionLayoutEntity?
+
+    @Upsert
+    suspend fun upsertCollectionLayout(value: CollectionLayoutEntity)
+
+    @Update
+    suspend fun updateCollectionLayout(value: CollectionLayoutEntity)
+
+    @Query("SELECT * FROM collection_layout WHERE ownerUid = '__domidex_guest__' ORDER BY collectionEntryId")
+    suspend fun guestCollectionLayouts(): List<CollectionLayoutEntity>
+
+    @Query("""
+        SELECT p.id, p.ownerUid, p.binderId, p.collectionEntryId,
+               e.syncId AS collectionEntrySyncId, p.slotPosition,
+               p.holoEffectId, p.holoIntensity,
+               p.createdAtEpochMillis, p.updatedAtEpochMillis, p.syncState,
+               p.remoteRevision, p.deletedAtEpochMillis
+        FROM private_binder_placements p
+        JOIN collection_entries e ON e.id = p.collectionEntryId
+        WHERE p.ownerUid = :ownerUid AND p.id = :placementId
+        LIMIT 1
+    """)
+    suspend fun privateBinderPlacementSyncProjection(ownerUid: String, placementId: String): PrivateBinderPlacementSyncProjection?
+
+    @Query("""
+        SELECT l.collectionEntryId, e.syncId AS collectionEntrySyncId, l.ownerUid,
+               l.visibleInSetBinder, l.updatedAtEpochMillis, l.syncState,
+               l.remoteRevision
+        FROM collection_layout l
+        JOIN collection_entries e ON e.id = l.collectionEntryId
+        WHERE l.ownerUid = :ownerUid AND e.syncId = :entrySyncId
+          AND e.deletedAtEpochMillis IS NULL
+        LIMIT 1
+    """)
+    suspend fun collectionLayoutSyncProjection(ownerUid: String, entrySyncId: String): CollectionLayoutSyncProjection?
+
+    @Upsert
+    suspend fun upsertPrivateBinderSyncOutbox(value: PrivateBinderSyncOutboxEntity)
+
+    @Query("SELECT * FROM private_binder_sync_outbox WHERE ownerUid = :ownerUid ORDER BY createdAtEpochMillis LIMIT :limit")
+    suspend fun pendingPrivateBinderSyncOutbox(ownerUid: String, limit: Int = 50): List<PrivateBinderSyncOutboxEntity>
+
+    @Query("SELECT * FROM private_binder_sync_outbox WHERE entryKey = :entryKey LIMIT 1")
+    suspend fun privateBinderSyncOutbox(entryKey: String): PrivateBinderSyncOutboxEntity?
+
+    @Query("DELETE FROM private_binder_sync_outbox WHERE entryKey = :entryKey AND mutationId = :mutationId")
+    suspend fun deletePrivateBinderSyncOutboxIfCurrent(entryKey: String, mutationId: String)
+
+    @Query("UPDATE private_binder_sync_outbox SET expectedRemoteRevision = :revision WHERE entryKey = :entryKey AND expectedRemoteRevision < :revision")
+    suspend fun advancePrivateBinderSyncOutboxBaseRevision(entryKey: String, revision: Long)
+
+    @Query("DELETE FROM private_binder_sync_outbox WHERE entryKey = :entryKey")
+    suspend fun deletePrivateBinderSyncOutbox(entryKey: String)
+
+    @Query("DELETE FROM collection_layout WHERE collectionEntryId = :entryId AND ownerUid = :ownerUid")
+    suspend fun deleteCollectionLayout(entryId: Long, ownerUid: String)
+
+    @Query("UPDATE private_binders SET syncState = 'CLEAN', remoteRevision = :revision WHERE id = :binderId AND ownerUid = :ownerUid")
+    suspend fun markPrivateBinderSynced(ownerUid: String, binderId: String, revision: Long)
+
+    @Query("UPDATE private_binders SET syncState = 'PENDING', remoteRevision = :revision WHERE id = :binderId AND ownerUid = :ownerUid")
+    suspend fun rebasePendingPrivateBinder(ownerUid: String, binderId: String, revision: Long)
+
+    @Query("UPDATE private_binder_placements SET syncState = 'CLEAN', remoteRevision = :revision WHERE id = :placementId AND ownerUid = :ownerUid")
+    suspend fun markPrivateBinderPlacementSynced(ownerUid: String, placementId: String, revision: Long)
+
+    @Query("UPDATE private_binder_placements SET syncState = 'PENDING', remoteRevision = :revision WHERE id = :placementId AND ownerUid = :ownerUid")
+    suspend fun rebasePendingPrivateBinderPlacement(ownerUid: String, placementId: String, revision: Long)
+
+    @Query("""
+        UPDATE collection_layout SET syncState = 'CLEAN', remoteRevision = :revision
+        WHERE ownerUid = :ownerUid AND collectionEntryId = (
+            SELECT id FROM collection_entries WHERE ownerUid = :ownerUid AND syncId = :entrySyncId LIMIT 1
+        )
+    """)
+    suspend fun markCollectionLayoutSynced(ownerUid: String, entrySyncId: String, revision: Long)
+
+    @Query("""
+        UPDATE collection_layout SET syncState = 'PENDING', remoteRevision = :revision
+        WHERE ownerUid = :ownerUid AND collectionEntryId = (
+            SELECT id FROM collection_entries WHERE ownerUid = :ownerUid AND syncId = :entrySyncId LIMIT 1
+        )
+    """)
+    suspend fun rebasePendingCollectionLayout(ownerUid: String, entrySyncId: String, revision: Long)
+
     /** Only price rows reachable from the active owner's collection enter portfolio memory. */
     @Query("""
         SELECT p.* FROM raw_price_snapshots p
