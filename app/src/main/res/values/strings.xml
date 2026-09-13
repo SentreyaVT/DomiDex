@@ -80,7 +80,10 @@
     <string name="account_login_running">Anmeldung wird geöffnet …</string>
     <string name="account_login_cancelled">Anmeldung wurde abgebrochen.</string>
     <string name="account_login_failed">Anmeldung nicht möglich. Bitte Firebase-Anbieter und SHA-Konfiguration prüfen.</string>
+    <string name="account_switch">Konto wechseln</string>
+    <string name="account_switch_failed">Kontowechsel nicht möglich. Bitte erneut versuchen.</string>
     <string name="account_sign_out">Abmelden</string>
+    <string name="account_logout_credential_warning">Abgemeldet. Die Google-Kontoauswahl konnte nicht vollständig zurückgesetzt werden.</string>
     <string name="account_no_role">Die Anmeldung bestätigt nur deine Identität. Sie vergibt keine Admin-, Support- oder Pro-Rechte. Teamfunktionen bleiben ohne serverseitig bestätigte Rolle verborgen.</string>
     <string name="portfolio_private_badge">Privater Tresor</string>
     <string name="portfolio_history">Wertentwicklung</string>

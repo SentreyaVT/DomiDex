@@ -25,30 +25,37 @@ class GoogleAccountCardInstrumentedTest {
         val state = mutableStateOf(GoogleAccountState(true, "Testkonto Eins", "one@example.test"))
         var logins = 0
         var logouts = 0
+        var switches = 0
         compose.setContent {
             MaterialTheme {
                 GoogleAccountCardContent(state.value, false, null,
                     onSignIn = { logins++; state.value = GoogleAccountState(true, null, "two@example.test") },
                     onSignOut = { logouts++; state.value = GoogleAccountState(false, null) },
+                    onSwitchAccount = { switches++; state.value = GoogleAccountState(true, null, "switch@example.test") },
                 )
             }
         }
         compose.onNodeWithText("Testkonto Eins").assertIsDisplayed()
         compose.onNodeWithText("one@example.test").assertIsDisplayed()
+        compose.onNodeWithText("Konto wechseln").performClick()
+        compose.onNodeWithText("switch@example.test").assertIsDisplayed()
         compose.onNodeWithText("Abmelden").performClick()
         compose.onNodeWithText("Testkonto Eins").assertDoesNotExist()
         compose.onNodeWithText("one@example.test").assertDoesNotExist()
         compose.onNodeWithText("Mit Google anmelden").performClick()
         compose.onNodeWithText("two@example.test").assertIsDisplayed()
         compose.onNodeWithText("one@example.test").assertDoesNotExist()
-        compose.runOnIdle { assertEquals(1, logins); assertEquals(1, logouts) }
+        compose.runOnIdle { assertEquals(1, switches); assertEquals(1, logins); assertEquals(1, logouts) }
     }
 
     @Test fun signedOutDoesNotRenderStaleFieldsAndBusyLoginIsDisabled() {
         compose.setContent {
             MaterialTheme {
                 GoogleAccountCardContent(GoogleAccountState(false, "Stale", "stale@example.test"), true, null,
-                    onSignIn = { error("Busy login must not run") }, onSignOut = { error("Signed out") })
+                    onSignIn = { error("Busy login must not run") },
+                    onSignOut = { error("Signed out") },
+                    onSwitchAccount = { error("Switched") },
+                )
             }
         }
         compose.onNodeWithText("Stale").assertDoesNotExist()

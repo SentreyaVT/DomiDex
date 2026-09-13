@@ -93,6 +93,7 @@ import com.dominik.cardvault.R
 import com.dominik.cardvault.auth.FirebaseGoogleAuthGateway
 import com.dominik.cardvault.auth.GoogleAccountState
 import com.dominik.cardvault.auth.GoogleLoginResult
+import com.dominik.cardvault.auth.GoogleLogoutResult
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
 import com.dominik.cardvault.auth.currentFirebaseEntitlementAccount
 import com.dominik.cardvault.model.*
@@ -2270,7 +2271,32 @@ private fun ArrivalMoment(ready: Boolean, onContinue: () -> Unit) {
     }
     GoogleAccountCardContent(
         account, working, feedback,
-        onSignOut = { gateway.signOut(); account = gateway.currentAccount(); feedback = null },
+        onSignOut = {
+            working = true
+            feedback = null
+            scope.launch {
+                try {
+                    feedback = when (gateway.signOut()) {
+                        GoogleLogoutResult.Success -> null
+                        is GoogleLogoutResult.CredentialStateWarning -> R.string.account_logout_credential_warning
+                    }
+                    account = gateway.currentAccount()
+                } finally { working = false }
+            }
+        },
+        onSwitchAccount = {
+            working = true
+            feedback = null
+            scope.launch {
+                try {
+                    when (gateway.switchAccount()) {
+                        is GoogleLoginResult.Success -> account = gateway.currentAccount()
+                        GoogleLoginResult.Cancelled -> feedback = R.string.account_login_cancelled
+                        is GoogleLoginResult.Failed -> feedback = R.string.account_switch_failed
+                    }
+                } finally { working = false }
+            }
+        },
         onSignIn = {
             working = true
             feedback = null
@@ -2293,6 +2319,7 @@ private fun ArrivalMoment(ready: Boolean, onContinue: () -> Unit) {
     feedback: Int?,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
+    onSwitchAccount: () -> Unit,
 ) {
     OutlinedCard(colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised), shape = CardVaultShapes.card) {
         Column(Modifier.padding(CardVaultSpacing.card), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -2305,6 +2332,7 @@ private fun ArrivalMoment(ready: Boolean, onContinue: () -> Unit) {
             if (account.isSignedIn) {
                 account.displayName?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                 account.email?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                OutlinedButton(onClick = onSwitchAccount, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.account_switch)) }
                 OutlinedButton(onClick = onSignOut, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.account_sign_out)) }
             } else {
                 Button(onClick = onSignIn, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text(stringResource(if (working) R.string.account_login_running else R.string.account_login_google)) }
