@@ -21,7 +21,7 @@ object PokemonSetRegistry {
     @Volatile
     private var sourceDeclaredCodes: Set<String> = emptySet()
     @Volatile
-    private var sourceSetIdByDeclaredCode: Map<String, String> = emptyMap()
+    private var sourceSetIdsByDeclaredCode: Map<String, Set<String>> = emptyMap()
 
     /**
      * Printed expansion codes verified against the public Pokémon TCG set index.
@@ -45,6 +45,9 @@ object PokemonSetRegistry {
         "sv1" to "SVI", "sv2" to "PAL", "sv3" to "OBF", "sv35" to "MEW", "sv4" to "PAR", "sv45" to "PAF", "sv5" to "TEF", "sv6" to "TWM", "sv65" to "SFA", "sv7" to "SCR", "sv8" to "SSP", "sv85" to "PRE", "sv9" to "JTG", "sv10" to "DRI",
         "dpp" to "DP", "hgssp" to "HGSS", "bwp" to "BW", "xyp" to "XY", "smp" to "SM", "swshp" to "SWSH", "svp" to "SVP", "mep" to "MEP",
         "me1" to "MEG", "me2" to "PFL", "me25" to "ASC", "me3" to "POR", "me4" to "CRI", "me5" to "PBL",
+        // Both official 30th-anniversary catalogues print 30C. Their stable
+        // source ids and the physical collector denominator keep them separate.
+        "30th" to "30C", "30thc" to "30C",
     )
 
     /** Source-backed collector prefixes used by Black Star promo printings. */
@@ -88,6 +91,7 @@ object PokemonSetRegistry {
      * source set payload are admitted, and the assignment is atomic for the
      * camera/OCR worker threads.
      */
+    @Synchronized
     fun registerSourceSets(sets: List<PokemonSet>) {
         val declared = sets.mapNotNull { set ->
             val code = set.ptcgoCode
@@ -99,9 +103,12 @@ object PokemonSetRegistry {
         }
         if (declared.isNotEmpty()) {
             sourceDeclaredCodes = sourceDeclaredCodes + declared.map(Pair<String, String>::first)
-            sourceSetIdByDeclaredCode = sourceSetIdByDeclaredCode + declared.associate { (code, setId) ->
-                normalize(code) to setId
+            val updated = sourceSetIdsByDeclaredCode.toMutableMap()
+            declared.forEach { (code, setId) ->
+                val normalizedCode = normalize(code)
+                updated[normalizedCode] = updated[normalizedCode].orEmpty() + setId
             }
+            sourceSetIdsByDeclaredCode = updated.toMap()
         }
     }
 
@@ -119,15 +126,26 @@ object PokemonSetRegistry {
     )
 
     fun resolve(input: String, sourceSets: List<PokemonSet>): PokemonSet? {
+        return resolveAll(input, sourceSets).firstOrNull()
+    }
+
+    /**
+     * A printed code can legitimately belong to a main set and an official
+     * subset. Direct source ids stay exact; printed codes retain every source
+     * candidate so collector-number and artwork evidence can disambiguate.
+     */
+    fun resolveAll(input: String, sourceSets: List<PokemonSet>): List<PokemonSet> {
         val normalized = normalize(input)
-        val declaredSourceId = sourceSetIdByDeclaredCode[normalized]
-        return sourceSets.firstOrNull { set ->
+        sourceSets.firstOrNull { normalize(it.id) == normalized }?.let { return listOf(it) }
+        val declaredSourceIds = sourceSetIdsByDeclaredCode[normalized].orEmpty()
+            .map(::normalize)
+            .toSet()
+        return sourceSets.filter { set ->
             val metadata = metadata(set)
-            normalize(metadata.setId) == normalized ||
-                metadata.setCode?.let(::normalize) == normalized ||
+            metadata.setCode?.let(::normalize) == normalized ||
                 normalize(set.ptcgoCode.orEmpty()) == normalized ||
-                declaredSourceId?.let { normalize(set.id) == normalize(it) } == true
-        }
+                normalize(set.id) in declaredSourceIds
+        }.distinctBy { normalize(it.id) }
     }
 
     fun legacyOfflineSet(input: String): PokemonSet? {

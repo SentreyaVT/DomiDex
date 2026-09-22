@@ -101,4 +101,37 @@ class ScanFeedbackStoreTest {
         }
         return result
     }
+
+    @Test fun rejectsTraversalBeforeWritingAnyEarlierRecord() {
+        val manifest = """{"format":"domidex.scan-feedback","version":1,"feedback":[
+            {"id":"valid","createdAtEpochMillis":1,"imageRelativePath":"images/valid.jpg","annotations":[],"appVersion":"test"},
+            {"id":"../outside","createdAtEpochMillis":1,"imageRelativePath":"images/../outside.jpg","annotations":[],"appVersion":"test"}]}"""
+        val directory = File(root, "safe-store")
+        val store = ScanFeedbackStore(directory, true)
+        try { store.importFromZip(mapOf("scan_feedback/feedback.json" to manifest.toByteArray(), "scan_feedback/images/valid.jpg" to byteArrayOf(1))); org.junit.Assert.fail() }
+        catch (_: IllegalArgumentException) { }
+        assertTrue(store.list().isEmpty()); assertTrue(File(directory, "images").listFiles().orEmpty().isEmpty())
+    }
+
+    @Test fun databaseFailureRollsBackImportedFeedbackFiles() {
+        val manifest = """{"format":"domidex.scan-feedback","version":1,"feedback":[
+            {"id":"valid","createdAtEpochMillis":1,"imageRelativePath":"images/valid.jpg","annotations":[],"appVersion":"test"}]}"""
+        val directory = File(root, "rollback-store")
+        val store = ScanFeedbackStore(directory, true)
+        try { store.importAtomically(mapOf("scan_feedback/feedback.json" to manifest.toByteArray(), "scan_feedback/images/valid.jpg" to byteArrayOf(1))) { error("database failure") }; org.junit.Assert.fail() }
+        catch (_: IllegalStateException) { }
+        assertTrue(store.list().isEmpty()); assertTrue(File(directory, "images").listFiles().orEmpty().isEmpty())
+    }
+
+    @Test fun symlinkDirectoryCannotEscapeStore() {
+        val outside = File(root, "outside").apply { mkdirs() }
+        val directory = File(root, "linked-store").apply { mkdirs() }
+        android.system.Os.symlink(outside.absolutePath, File(directory, "images").absolutePath)
+        val store = ScanFeedbackStore(directory, true)
+        val image = File(root, "source.jpg").apply { writeBytes(byteArrayOf(1)) }
+        try { store.save(image, ScanFeedback("safe-id", 1, "", annotations = emptyList(), appVersion = "test")); org.junit.Assert.fail() }
+        catch (_: IllegalArgumentException) { }
+        assertTrue(outside.listFiles().orEmpty().isEmpty())
+        File(directory, "images").delete() // do not traverse the test symlink during cleanup
+    }
 }

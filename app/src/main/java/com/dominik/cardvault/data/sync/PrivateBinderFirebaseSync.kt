@@ -15,7 +15,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.dominik.cardvault.auth.canUseFirebaseAppBackend
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
-import com.dominik.cardvault.auth.currentFirebaseEntitlementAccount
+import com.dominik.cardvault.auth.currentVerifiedFirebaseEntitlementAccount
 import com.dominik.cardvault.data.local.CardVaultDao
 import com.dominik.cardvault.data.local.CardVaultDatabase
 import com.dominik.cardvault.data.local.AppMetadataEntity
@@ -195,7 +195,7 @@ class PrivateBinderSyncWorker(
             ?: return@withContext Result.success()
         val auth = FirebaseAuth.getInstance()
         suspend fun accessStillCurrent(): Boolean {
-            val account = auth.currentFirebaseEntitlementAccount(forceRefresh = false) ?: return false
+            val account = auth.currentVerifiedFirebaseEntitlementAccount(forceRefresh = false) ?: return false
             return account.uid == uid &&
                 canonicalCollectionOwnerUid(auth.currentUser) == uid &&
                 canUseFirebaseAppBackend(uid, canonicalCollectionOwnerUid(auth.currentUser), account.entitlements)

@@ -1,15 +1,71 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() { return request.auth != null; }
+    function signedIn() {
+      return request.auth != null
+        && !exists(/databases/$(database)/documents/accountDeletionLocks/$(request.auth.uid))
+        && (!exists(/databases/$(database)/documents/accountAccess/$(request.auth.uid))
+          || get(/databases/$(database)/documents/accountAccess/$(request.auth.uid)).data.get('disabled', false) != true);
+    }
+    // A server-owned denial immediately fences already-issued tokens. Missing documents
+    // retain existing claim-based grants during migration.
+    function roleAllowed(role) {
+      return !exists(/databases/$(database)/documents/accountAccess/$(request.auth.uid))
+        || get(/databases/$(database)/documents/accountAccess/$(request.auth.uid)).data.get(role, true) == true;
+    }
     function own(uid) { return signedIn() && request.auth.uid == uid; }
+    function admin() { return signedIn() && request.auth.token.get('admin', false) == true && roleAllowed('admin'); }
+    function appUser() { return admin() || (signedIn() && request.auth.token.get('appAccess', false) == true && roleAllowed('appAccess')); }
+    function ownApp(uid) { return own(uid) && appUser(); }
+    function pretester() { return admin() || (signedIn() && request.auth.token.get('pretester', false) == true && roleAllowed('pretester')); }
     function nullableString(value, maximum) {
       return value == null || (value is string && value.size() <= maximum);
     }
     function nullableInt(value) { return value == null || value is int; }
+    function nullableNumber(value) { return value == null || value is number; }
+    function validScannerReport(reportId) {
+      let data = request.resource.data;
+      return pretester()
+        && reportId.matches('[A-Za-z0-9._-]{1,128}')
+        && data.keys().hasOnly([
+          'schemaVersion', 'scanId', 'createdAt', 'captureType', 'captureImagePath',
+          'imageSha256', 'imageContentType', 'imageSizeBytes', 'attempts', 'ocrTokens',
+          'guessedName', 'guessedSet', 'guessedNumber', 'confidence', 'zoneConfidence',
+          'profileId', 'profileVersion', 'failureReason', 'reviewStatus', 'referenceCardId',
+          'referenceCardKey', 'reviewNote', 'reviewedAt'
+        ])
+        && data.keys().hasAll([
+          'schemaVersion', 'scanId', 'createdAt', 'captureType', 'captureImagePath',
+          'imageSha256', 'imageContentType', 'imageSizeBytes', 'attempts', 'ocrTokens',
+          'confidence', 'zoneConfidence', 'failureReason', 'reviewStatus'
+        ])
+        && data.schemaVersion == 1
+        && data.scanId is string && data.scanId.size() > 0 && data.scanId.size() <= 128
+        && data.createdAt is string && data.createdAt.size() <= 80
+        && data.captureType == 'MANUAL_CAPTURE'
+        && data.captureImagePath.matches('scanner-report-images/' + reportId + '/capture[.](jpg|png|webp)')
+        && data.imageSha256.matches('[a-f0-9]{64}')
+        && data.imageContentType in ['image/jpeg', 'image/png', 'image/webp']
+        && data.imageSizeBytes is int && data.imageSizeBytes > 0 && data.imageSizeBytes <= 10 * 1024 * 1024
+        && data.attempts is list && data.attempts.size() <= 4
+        && data.ocrTokens is list && data.ocrTokens.size() <= 100
+        && nullableString(data.guessedName, 200)
+        && nullableString(data.guessedSet, 160)
+        && nullableString(data.guessedNumber, 80)
+        && nullableNumber(data.confidence)
+        && data.zoneConfidence is map && data.zoneConfidence.size() <= 64
+        && nullableString(data.profileId, 128)
+        && nullableInt(data.profileVersion)
+        && data.failureReason is string && data.failureReason.size() <= 1000
+        && data.reviewStatus == 'NEW'
+        && data.referenceCardId == null
+        && data.referenceCardKey == null
+        && data.reviewNote == ''
+        && data.reviewedAt == null;
+    }
     function validScanEvidence(uid, fingerprint) {
       let data = request.resource.data;
-      return own(uid)
+      return ownApp(uid)
         && fingerprint.matches('[a-f0-9]{64}')
         && data.keys().hasOnly([
           'fingerprint', 'confirmedCardId', 'sourceSetId', 'cardNumber', 'setCode',
@@ -38,7 +94,7 @@ service cloud.firestore {
     }
     function validCollectionEntry(uid, entryId) {
       let data = request.resource.data;
-      return own(uid)
+      return ownApp(uid)
         && data.keys().hasOnly([
           'syncId', 'ownerUid', 'revision', 'lastMutationId', 'updatedAt',
           'updatedAtClient', 'deleted', 'deletedAtClient', 'name', 'setId',
@@ -92,9 +148,10 @@ service cloud.firestore {
         && data.binderName is string && data.binderName.size() > 0 && data.binderName.size() <= 200
         && nullableString(data.binderHeroAsset, 2000);
     }
+
     function validPrivateBinder(uid, binderId) {
       let data = request.resource.data;
-      return own(uid)
+      return ownApp(uid)
         && binderId.matches('[A-Za-z0-9._-]{1,128}')
         && data.keys().hasOnly([
           'binderId', 'ownerUid', 'name', 'description', 'coverStyle', 'minimumPageCount',
@@ -121,7 +178,7 @@ service cloud.firestore {
     }
     function validPrivateBinderPlacement(uid, placementId) {
       let data = request.resource.data;
-      return own(uid)
+      return ownApp(uid)
         && placementId.matches('[A-Za-z0-9._-]{1,128}')
         && data.keys().hasOnly([
           'placementId', 'ownerUid', 'binderId', 'entrySyncId', 'slotPosition',
@@ -153,7 +210,7 @@ service cloud.firestore {
     }
     function validCollectionLayout(uid, entrySyncId) {
       let data = request.resource.data;
-      return own(uid)
+      return ownApp(uid)
         && entrySyncId.matches('[A-Za-z0-9._-]{1,128}')
         && data.keys().hasOnly([
           'entrySyncId', 'ownerUid', 'visibleInSetBinder', 'updatedAtClient',
@@ -173,7 +230,7 @@ service cloud.firestore {
     }
 
     match /users/{uid}/collectionEntries/{entryId} {
-      allow read: if own(uid);
+      allow read: if ownApp(uid);
       allow create: if validCollectionEntry(uid, entryId)
         && request.resource.data.revision == 1;
       allow update: if validCollectionEntry(uid, entryId)
@@ -186,7 +243,7 @@ service cloud.firestore {
     }
 
     match /users/{uid}/privateBinders/{binderId} {
-      allow read: if own(uid);
+      allow read: if ownApp(uid);
       allow create: if validPrivateBinder(uid, binderId)
         && request.resource.data.revision == 1;
       allow update: if validPrivateBinder(uid, binderId)
@@ -198,7 +255,7 @@ service cloud.firestore {
     }
 
     match /users/{uid}/privateBinderPlacements/{placementId} {
-      allow read: if own(uid);
+      allow read: if ownApp(uid);
       allow create: if validPrivateBinderPlacement(uid, placementId)
         && request.resource.data.revision == 1
         && (request.resource.data.deleted == true || (
@@ -218,7 +275,7 @@ service cloud.firestore {
     }
 
     match /users/{uid}/collectionLayouts/{entrySyncId} {
-      allow read: if own(uid);
+      allow read: if ownApp(uid);
       allow create: if validCollectionLayout(uid, entrySyncId)
         && request.resource.data.revision == 1
         && exists(/databases/$(database)/documents/users/$(uid)/collectionEntries/$(entrySyncId))
@@ -235,41 +292,133 @@ service cloud.firestore {
     match /users/{uid}/scanEvidence/{fingerprint} {
       allow create, update: if validScanEvidence(uid, fingerprint)
         && (resource == null || request.resource.data.fingerprint == resource.data.fingerprint);
-      allow get: if own(uid);
+      allow get: if ownApp(uid);
       allow list, delete: if false;
     }
 
     // Shared, identity-free aggregate. Android clients can read one relevant document only;
     // writes and STABLE transitions are exclusively performed through the Admin SDK.
     match /scanKnowledge/{fingerprint} {
-      allow get: if signedIn() && fingerprint.matches('[a-f0-9]{64}');
+      allow get: if appUser() && fingerprint.matches('[a-f0-9]{64}');
       allow list, create, update, delete: if false;
     }
 
     match /communitySubmissions/{submissionId} {
-      allow create: if signedIn()
+      allow create: if appUser()
         && request.resource.data.keys().hasOnly(['submitterUid', 'status', 'createdAt', 'appVersion', 'imagePath', 'cardHint'])
         && request.resource.data.submitterUid == request.auth.uid
         && request.resource.data.status == 'PENDING_UPLOAD'
         && request.resource.data.imagePath == 'community-submissions/' + request.auth.uid + '/' + submissionId + '/front.jpg'
         && request.resource.data.appVersion is string && request.resource.data.cardHint is string;
-      allow update: if own(resource.data.submitterUid)
+      allow update: if ownApp(resource.data.submitterUid)
         && resource.data.status in ['PENDING_UPLOAD', 'PENDING_REVIEW']
         && request.resource.data.status == 'WITHDRAW_REQUESTED'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
-      allow get: if own(resource.data.submitterUid);
+      allow get: if ownApp(resource.data.submitterUid);
       allow list, delete: if false;
     }
 
     match /supportRequests/{requestId} {
       // Metadata only: never camera/screen streams, raw logs, or diagnostics.
-      allow create: if signedIn()
+      allow create: if appUser()
         && request.resource.data.keys().hasOnly(['requesterUid', 'status', 'createdAt', 'appVersion'])
         && request.resource.data.requesterUid == request.auth.uid
         && request.resource.data.status == 'PENDING'
         && request.resource.data.appVersion is string;
-      allow get: if own(resource.data.requesterUid);
+      allow get: if ownApp(resource.data.requesterUid);
       allow list, update, delete: if false;
+    }
+
+    // Public product copy contains no user data or secrets. Only an authenticated
+    // Firebase administrator may change it; private collections are never exposed here.
+    match /siteContent/{documentId} {
+      allow read: if documentId == 'public';
+      allow create, update: if documentId == 'public' && admin()
+        && request.resource.data.keys().hasOnly([
+          'heroTitle', 'heroSubtitle', 'statusBanner', 'currentVersion', 'currentBuild',
+          'releaseStatus', 'discordUrl', 'discordText', 'githubUrl', 'kickstarterUrl',
+          'kickstarterCta', 'updates', 'roadmap'
+        ])
+        && request.resource.data.heroTitle is string && request.resource.data.heroTitle.size() <= 240
+        && request.resource.data.heroSubtitle is string && request.resource.data.heroSubtitle.size() <= 1000
+        && request.resource.data.statusBanner is string && request.resource.data.statusBanner.size() <= 400
+        && request.resource.data.currentVersion is string && request.resource.data.currentVersion.size() <= 40
+        && request.resource.data.currentBuild is string && request.resource.data.currentBuild.size() <= 40
+        && request.resource.data.releaseStatus is string && request.resource.data.releaseStatus.size() <= 40
+        && request.resource.data.discordUrl is string && request.resource.data.discordUrl.size() <= 2000
+        && request.resource.data.discordText is string && request.resource.data.discordText.size() <= 1000
+        // Existing deployed editor may still submit this bounded legacy field.
+        && nullableString(request.resource.data.get('githubUrl', null), 2000)
+        && request.resource.data.kickstarterUrl is string && request.resource.data.kickstarterUrl.size() <= 2000
+        && request.resource.data.kickstarterCta is string && request.resource.data.kickstarterCta.size() <= 100
+        && request.resource.data.updates is list && request.resource.data.updates.size() <= 50
+        && request.resource.data.roadmap is list && request.resource.data.roadmap.size() <= 80;
+      allow delete: if false;
+    }
+
+    // Scanner Control Center: drafts, candidates, benchmarks and audit data remain
+    // private to explicitly claimed administrators. Signed-in clients may only read
+    // the immutable production profile referenced by the release manifest.
+    match /scannerProfiles/{profileId} {
+      allow read: if admin();
+      allow write: if false;
+    }
+
+    match /scannerProfileVersions/{versionId} {
+      allow read: if admin() || (appUser() && resource.data.status == 'production');
+      // Immutable client-side. Authorized versioning/publication uses server IAM.
+      allow write: if false;
+    }
+
+    match /scannerReleaseManifest/{manifestId} {
+      allow read: if appUser() && manifestId == 'production';
+      allow write: if false;
+    }
+
+    match /scannerBenchmarks/{benchmarkId} {
+      allow read: if admin();
+      allow write: if false;
+    }
+
+    // Raw scan reports contain technical data only. Pretesters may submit a strict
+    // MANUAL_CAPTURE report, but only administrators may ever read or review it.
+    match /scannerReports/{reportId} {
+      allow read: if admin();
+      // The authenticated server upload atomically persists validated reports and ownership.
+      allow create: if false;
+      allow update: if admin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'reviewStatus', 'reviewNote', 'referenceCardId', 'referenceCardKey', 'referenceVariant', 'reviewedAt', 'reviewedBy'
+        ])
+        && request.resource.data.reviewStatus in [
+          'NEW', 'IN_REVIEW', 'RESOLVED', 'PROFILE_CHANGE_REQUIRED',
+          'CANDIDATE_TESTING', 'PUBLISHED', 'REJECTED'
+        ]
+        && nullableString(request.resource.data.reviewNote, 2000)
+        && nullableString(request.resource.data.referenceCardId, 128)
+        && nullableString(request.resource.data.referenceCardKey, 128)
+        && nullableString(request.resource.data.referenceVariant, 120)
+        && ((request.resource.data.referenceCardId == null && request.resource.data.referenceCardKey == null && request.resource.data.referenceVariant == null)
+          || (request.resource.data.referenceCardId is string && request.resource.data.referenceCardKey is string))
+        && nullableString(request.resource.data.reviewedAt, 80)
+        && request.resource.data.reviewedBy is string
+        && request.resource.data.reviewedBy.size() <= 128;
+      allow delete: if false;
+    }
+
+    match /scannerLayouts/{layoutId} {
+      allow read, create, update: if admin();
+      allow delete: if false;
+    }
+
+    match /scannerAudit/{auditId} {
+      allow read: if admin();
+      allow write: if false;
+    }
+
+    match /accountAccess/{uid} {
+      allow get: if request.auth != null && request.auth.uid == uid;
+      allow list, create, update, delete: if false;
     }
 
     // Default deny. Admin SDK is the only moderation/publication/claim-management path.

@@ -9,6 +9,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScanPipelineStateTest {
+    @Test fun `throwing failure callback is not called a second time`() = runBlocking {
+        var calls = 0
+        val callbackError = IllegalStateException("callback")
+        try {
+            runScanWorkerAnalysis(onFailure = { calls++; throw callbackError }) { error("analysis") }
+            org.junit.Assert.fail("Callback failure should propagate")
+        } catch (failure: IllegalStateException) { org.junit.Assert.assertSame(callbackError, failure) }
+        assertEquals(1, calls)
+    }
+
+    @Test fun `whole pipeline timeout reports once and permits subsequent work`() = runBlocking {
+        var failures = 0
+        var finished = false
+        runScanWorkerAnalysis(onFailure = { assertTrue(it is ScanPipelineTimeoutException); failures++ }, timeoutMillis = 20) {
+            kotlinx.coroutines.awaitCancellation()
+        }
+        runScanWorkerAnalysis(onFailure = { throw it }) { finished = true }
+        assertEquals(1, failures)
+        assertTrue(finished)
+    }
     @Test fun `worker failure boundary converts any non cancellation failure to terminal failure`() = runBlocking {
         val failure = AssertionError("artwork fusion failed")
         var terminalFailure: Throwable? = null

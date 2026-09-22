@@ -1,6 +1,7 @@
 package com.dominik.cardvault.ui
 
 import com.dominik.cardvault.data.catalog.PokemonSetRegistry
+import com.dominik.cardvault.data.catalog.classic30thLocalIdForPrintedCollector
 
 internal fun manualCollectorNumber(
     input: String,
@@ -8,6 +9,15 @@ internal fun manualCollectorNumber(
     setSourceId: String? = null,
     printedSetCode: String? = null,
 ): String? {
+    if (isSelectedClassicCollection(setSourceId)) {
+        val historic = Regex("^\\s*0*(\\d{1,4})\\s*/\\s*0*(\\d{1,4})\\s*$").matchEntire(input)
+        if (historic != null) {
+            val canonical = "${historic.groupValues[1].toInt()}/${historic.groupValues[2].toInt()}"
+            return canonical.takeIf { classic30thLocalIdForPrintedCollector(it) != null }
+        }
+        val local = input.filter(Char::isDigit).toIntOrNull() ?: return null
+        return local.takeIf { it in 1..30 }?.toString()?.padStart(3, '0')
+    }
     val digits = input.substringBefore('/').filter(Char::isDigit)
     if (digits.isBlank() || digits.length > 4) return null
     // Promo catalogue totals grow over time; they are not a denominator printed on the card.
@@ -24,7 +34,9 @@ internal fun withManualScanIdentity(
     collectorNumber: String,
 ): CardTextAnalysis {
     val current = base ?: CardTextAnalysis(emptyList(), null, null, null, emptyList())
-    val selectedNumber = if (isSelectedPromoSet(setSourceId, printedSetCode)) {
+    val selectedNumber = if (isSelectedClassicCollection(setSourceId)) {
+        manualCollectorNumber(collectorNumber, 0, setSourceId, printedSetCode) ?: collectorNumber
+    } else if (isSelectedPromoSet(setSourceId, printedSetCode)) {
         manualCollectorNumber(collectorNumber, 0) ?: collectorNumber
     } else collectorNumber
     return current.copy(
@@ -42,6 +54,9 @@ internal fun withManualScanIdentity(
         manualIdentityConfirmed = true,
     )
 }
+
+private fun isSelectedClassicCollection(setSourceId: String?): Boolean =
+    PokemonSetRegistry.normalize(setSourceId.orEmpty()) == "30thc"
 
 private fun isSelectedPromoSet(setSourceId: String?, printedSetCode: String?): Boolean {
     if (setSourceId.isNullOrBlank() || printedSetCode.isNullOrBlank()) return false

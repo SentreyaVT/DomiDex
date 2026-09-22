@@ -66,6 +66,38 @@ class BinderMasterSlotTest {
         assertEquals(references.toSet(), slots.toSet())
     }
 
+    @Test fun classicCollectionUsesSubsetOrderWhileDisplayingHistoricCollectorNumbers() {
+        val slot26 = sourceCard("Normal").copy(
+            id = "classic-026", sourceSetId = "30th-c", sourceCardId = "30th-c-026", number = "269/264",
+        )
+        val slot27 = sourceCard("Normal").copy(
+            id = "classic-027", sourceSetId = "30th-c", sourceCardId = "30th-c-027", number = "123/172",
+        )
+
+        val slots = arrangeBinderCards(
+            "30 Jahre: Klassische Sammlung", emptyList(), 30, listOf(slot27, slot26),
+        )
+
+        assertEquals(listOf(slot26, slot27), slots)
+    }
+
+    @Test fun classicLegacyRowClaimsOnlyItsFullHistoricCollectorNumber() {
+        val slot3 = sourceCard("Normal").copy(
+            id = "classic-003", set = "30 Jahre: Klassische Sammlung",
+            sourceSetId = "30th-c", sourceCardId = "30th-c-003", number = "11/113",
+        )
+        val slot4 = slot3.copy(id = "classic-004", sourceCardId = "30th-c-004", number = "11/101")
+        val legacyOwned = slot4.copy(
+            entryId = 42, id = "legacy-classic", sourceSetId = null, sourceCardId = null,
+        )
+
+        val slots = arrangeBinderCards(
+            "30 Jahre: Klassische Sammlung", listOf(legacyOwned), 30, listOf(slot3, slot4),
+        )
+
+        assertEquals(listOf(slot3, legacyOwned), slots)
+    }
+
     private fun sourceCard(finish: String) = card(0, finish, if (finish == "Normal") "Standard" else finish)
         .copy(id = "tcgdex-sv03-sv03-001-$finish", sourceSetId = "sv03", sourceCardId = "sv03-001")
 

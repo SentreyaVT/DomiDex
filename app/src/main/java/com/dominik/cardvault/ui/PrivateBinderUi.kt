@@ -1083,7 +1083,7 @@ private fun PrivateBinderSlot(
             Text(if (moveTargetActive) "Hier ablegen" else "Freier Platz", color = if (moveTargetActive) MewRose else VaultTextFaint, fontSize = 8.sp, textAlign = TextAlign.Center)
         }
         if (selectedForMove) Surface(Modifier.align(Alignment.TopEnd).padding(4.dp), color = VaultPositive, shape = RoundedCornerShape(99.dp)) {
-            Text("MOVE", color = Color.Black, fontSize = 7.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+            Text("Verschieben", color = Color.Black, fontSize = 8.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
         }
     }
 }

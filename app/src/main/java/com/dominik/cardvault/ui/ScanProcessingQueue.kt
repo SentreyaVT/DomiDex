@@ -4,12 +4,16 @@ import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
+import com.dominik.cardvault.data.catalog.classic30thLocalIdForPrintedCollector
 import com.dominik.cardvault.data.catalog.collectorIdentityForSourceLookup
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionRepository
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
+
+internal class ScanPipelineTimeoutException : Exception("Die Analyse hat das Zeitlimit erreicht.")
 
 /**
  * Failure boundary for the complete scanner worker. Cancellation retains structured-concurrency
@@ -17,15 +21,22 @@ import kotlinx.coroutines.CancellationException
  */
 internal suspend inline fun runScanWorkerAnalysis(
     crossinline onFailure: (Throwable) -> Unit,
+    timeoutMillis: Long = 40_000L,
     crossinline analysis: suspend () -> Unit,
 ) {
-    try {
-        analysis()
+    val outcome = try {
+        // Carry the failure as data across the timeout scope, preserving the original throwable
+        // and cancellation semantics (coroutine debug stack recovery otherwise copies it).
+        withTimeoutOrNull(timeoutMillis) { runCatching { analysis() } }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: Throwable) {
-        onFailure(failure)
+        Result.failure(failure)
     }
+    // The terminal callback is outside the failure boundary: if it throws, never call it twice.
+    val failure = if (outcome == null) ScanPipelineTimeoutException() else outcome.exceptionOrNull()
+    if (failure is CancellationException) throw failure
+    if (failure != null) onFailure(failure)
 }
 
 internal object ScanQueuePolicy {
@@ -181,7 +192,11 @@ internal suspend fun lookupScannerVisualMatches(
     val selectedSourceId = analysis.manualSetSourceId
     val exact = (selectedSourceId ?: analysis.setIdentifier)
         ?.let { findExact(it, number) }
-        ?.filter { printedDenominatorMatches(number, it.set.printedTotal) }
+        ?.filter { candidate ->
+            printedDenominatorMatches(number, candidate.set.printedTotal) ||
+                (candidate.set.id.equals("30th-c", ignoreCase = true) &&
+                    classic30thLocalIdForPrintedCollector(number) != null)
+        }
         .orEmpty()
     if (selectedSourceId != null) {
         if (selectedSourceId.isBlank()) return emptyList()
@@ -238,52 +253,24 @@ internal object CardScanCandidateResolver {
             .sortedByDescending(PreparedCandidate::score)
             .take(8)
 
-        val cardsBySet = mutableMapOf<String, List<PokemonVisualCard>>()
-        val expansionBySet = mutableMapOf<String, String?>()
-        val candidatesBySearch = mutableMapOf<String, List<CatalogSearchResult>>()
+        val declaredCandidatesByCard = mutableMapOf<String, List<CatalogSearchResult>>()
         val candidates = prepared.map { preparedCandidate ->
             val visualCard = preparedCandidate.visualCard
-            val searchName = visualCard.marketSearchName ?: visualCard.name
-            val marketCandidates = candidatesBySearch.getOrPut(searchName) {
-                repository.searchCatalog(searchName, 500)
-            }
-            // The expansion bridge cannot produce a product when this exact card name has
-            // no compatible candidate. Keep the existing unpriced result without searching
-            // every other set name solely to establish an expansion that cannot be used.
-            if (marketCandidates.none { cardmarketNameMatches(it.name, searchName) }) {
+            val hasDeclaredCardmarketProductIds = visualCard.printVariants.any { it.cardmarketProductId != null }
+            // Recognition is independent from pricing. Without an exact source product id,
+            // preserve the identified card and score rather than guessing by name/order.
+            if (!hasDeclaredCardmarketProductIds) {
                 return@map ScanCandidate(preparedCandidate.unpriced, preparedCandidate.score)
             }
-            val hasDeclaredCardmarketProductIds = visualCard.printVariants.any { it.cardmarketProductId != null }
-            // Source-declared product ids are resolved before expansion/name-order bridging in
-            // visualCardmarketProducts. In that branch cardsInSet and resolvedExpansionId are not
-            // read, so loading every set name here would be pure work with no effect on evidence.
-            val setCards = if (hasDeclaredCardmarketProductIds) {
-                listOf(visualCard)
-            } else {
-                cardsBySet.getOrPut(visualCard.set.id) {
-                    runCatching { visualCatalog.cards(visualCard.set) }.getOrDefault(listOf(visualCard))
-                }
-            }
-            val expansionId = if (hasDeclaredCardmarketProductIds) {
-                null
-            } else if (expansionBySet.containsKey(visualCard.set.id)) {
-                expansionBySet[visualCard.set.id]
-            } else {
-                val resolved = visualCard.set.cardmarketExpansionId ?: run {
-                    val names = setCards.map { it.marketSearchName ?: it.name }.distinct()
-                    val marketCandidates = names.associateWith { name ->
-                        candidatesBySearch.getOrPut(name) { repository.searchCatalog(name, 500) }
-                    }
-                    resolveCardmarketExpansionId(setCards, marketCandidates)
-                }
-                expansionBySet[visualCard.set.id] = resolved
-                resolved
+            val key = "${visualCard.set.id.lowercase()}|${visualCard.id.lowercase()}"
+            val marketCandidates = declaredCandidatesByCard.getOrPut(key) {
+                loadVisualCardmarketCandidates(visualCard, repository)
             }
             val verifiedProducts = visualCardmarketProducts(
                 card = visualCard,
-                cardsInSet = setCards,
+                cardsInSet = listOf(visualCard),
                 candidates = marketCandidates,
-                resolvedExpansionId = expansionId,
+                resolvedExpansionId = null,
             )
             val verifiedProduct = visualCardmarketProductForPrinting(preparedCandidate.printing, verifiedProducts)
             ScanCandidate(

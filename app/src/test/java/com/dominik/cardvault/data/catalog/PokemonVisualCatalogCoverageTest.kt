@@ -38,4 +38,24 @@ class PokemonVisualCatalogCoverageTest {
         assertTrue(merged.first().hasGermanLocalizedName)
         assertFalse(merged.last().hasGermanLocalizedName)
     }
+
+    @Test
+    fun officialAnniversaryAssetsFillOnlyMissingRemoteMetadata() {
+        val classic = PokemonSet("30th-c", "30 Jahre: Klassische Sammlung", "Mega-Entwicklung", 0, 30, "2026-09-16", null, "30C")
+        val filled = fillMissingSetLogos(listOf(classic), emptyList()).single()
+
+        assertEquals(30, classic.displayCardCount())
+        assertTrue(filled.logoUrl.orEmpty().contains("30th_logo_169_de.png"))
+        assertTrue(officialPokemonCardImageUrl("30th", "158").orEmpty().endsWith("30TH_DE_158.png"))
+        assertTrue(officialPokemonCardImageUrl("30th-c", "030").orEmpty().endsWith("30TH-C_DE_30.png"))
+        assertEquals(null, officialPokemonCardImageUrl("30th-c", "031"))
+    }
+
+    @Test
+    fun anniversarySetsSortAheadOfEarlierMegaEvolutionSets() {
+        val anniversary = PokemonSet("30th", "30 Jahre", "Mega-Entwicklung", 128, 158, "2026-09-16", null, "30C")
+        val regular = PokemonSet("me05", "Mega-Set", "Mega-Entwicklung", 100, 120, "2026-08-01", null, "PBL")
+
+        assertTrue(catalogSetRecencyKey(anniversary) > catalogSetRecencyKey(regular))
+    }
 }

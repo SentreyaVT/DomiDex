@@ -23,8 +23,8 @@ import com.dominik.cardvault.data.local.SYNC_CLEAN
 import com.dominik.cardvault.data.local.SYNC_CONFLICT
 import com.dominik.cardvault.data.local.SYNC_PENDING
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
-import com.dominik.cardvault.auth.currentFirebaseEntitlementAccount
-import com.dominik.cardvault.auth.firebaseEntitlementAccount
+import com.dominik.cardvault.auth.currentVerifiedFirebaseEntitlementAccount
+import com.dominik.cardvault.auth.effectiveFirebaseEntitlements
 import com.dominik.cardvault.data.knowledge.ScanKnowledgeScheduler
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
@@ -34,11 +34,14 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Source
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -126,6 +129,12 @@ internal fun shouldRunEntitledCollectionSync(
     canUseFirebaseAppBackend(expectedUid, currentUid, entitlements)
 internal fun shouldScheduleCollectionSyncContinuation(processed: Int, limit: Int, hasPending: Boolean): Boolean =
     processed >= limit && hasPending
+
+/** Room synchronizes observer triggers; collection and cancellation stay on the caller's IO scope. */
+internal fun CoroutineScope.observeCollectionOutbox(database: CardVaultDatabase, onChange: () -> Unit): Job = launch {
+    database.invalidationTracker.createFlow("collection_sync_outbox", "private_binder_sync_outbox")
+        .collect { onChange() }
+}
 internal fun shouldResumeServerReread(entryState: String, outboxState: String): Boolean =
     entryState == SYNC_CLEAN && outboxState == SYNC_PENDING
 internal fun remoteConflictReason(revision: Long): String = "$REMOTE_REVISION_CONFLICT_PREFIX$revision"
@@ -152,10 +161,19 @@ class FirebaseCollectionSession(
 ) : AutoCloseable {
     private val mutableOwnerUid = MutableStateFlow(collectionOwnerForUid(canonicalCollectionOwnerUid(auth.currentUser)))
     val ownerUid: StateFlow<String> = mutableOwnerUid
+    private val mutableCloudState = MutableStateFlow(CollectionCloudState(
+        if (canonicalCollectionOwnerUid(auth.currentUser) == null) CollectionCloudStatus.SIGNED_OUT else CollectionCloudStatus.CHECKING,
+        canonicalCollectionOwnerUid(auth.currentUser),
+    ))
+    val cloudState: StateFlow<CollectionCloudState> = mutableCloudState
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val entitlementLock = Any()
     private var remoteListener: ListenerRegistration? = null
+    private var accessListener: ListenerRegistration? = null
+    private var serverSnapshot = false
+    private var snapshotError = false
     @Volatile private var started = false
+    @Volatile private var closed = false
     @Volatile private var entitlementGeneration = 0L
     @Volatile private var entitledOwnerUid: String? = null
 
@@ -170,6 +188,13 @@ class FirebaseCollectionSession(
             entitlementGeneration += 1L
             entitledOwnerUid = null
             detachRemoteListenerLocked()
+            accessListener?.remove()
+            accessListener = null
+            serverSnapshot = false
+            snapshotError = false
+            mutableCloudState.value = CollectionCloudState(
+                if (uid == null) CollectionCloudStatus.SIGNED_OUT else CollectionCloudStatus.CHECKING, uid,
+            )
             previousUid to entitlementGeneration
         }
         if (uid == null) PrivateBinderSyncScheduler.cancelAllPeriodic(context)
@@ -178,17 +203,48 @@ class FirebaseCollectionSession(
         }
         if (uid == null || user == null) return
         scope.launch {
-            val account = runCatching { user.firebaseEntitlementAccount(forceRefresh = false) }
-                .getOrNull() ?: return@launch
+            val account = try { auth.currentVerifiedFirebaseEntitlementAccount(firestore) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    synchronized(entitlementLock) {
+                        if (entitlementGeneration == generation && mutableOwnerUid.value == uid) {
+                            mutableCloudState.value = CollectionCloudState(
+                                if (failure is FirebaseFirestoreException && failure.code == FirebaseFirestoreException.Code.PERMISSION_DENIED)
+                                    CollectionCloudStatus.NO_ACCESS else CollectionCloudStatus.LOCAL_ONLY, uid,
+                            )
+                        }
+                    }
+                    return@launch
+                } ?: return@launch
             if (!account.entitlements.canUseAppBackend) {
                 PrivateBinderSyncScheduler.cancelPeriodic(context, uid)
+                synchronized(entitlementLock) {
+                    if (entitlementGeneration == generation && mutableOwnerUid.value == uid)
+                        mutableCloudState.value = CollectionCloudState(CollectionCloudStatus.NO_ACCESS, uid)
+                }
                 return@launch
             }
             val activated = synchronized(entitlementLock) {
                 if (!started || entitlementGeneration != generation) return@synchronized false
                 if (canonicalCollectionOwnerUid(auth.currentUser) != uid || account.uid != uid) return@synchronized false
                 entitledOwnerUid = uid
+                mutableCloudState.value = CollectionCloudState(CollectionCloudStatus.LOCAL_ONLY, uid, accessConfirmed = true)
                 attachRemoteListenerLocked(uid)
+                accessListener = firestore.collection("accountAccess").document(uid)
+                    .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                        synchronized(entitlementLock) {
+                            if (entitlementGeneration != generation || mutableOwnerUid.value != uid) return@addSnapshotListener
+                            if (error != null || (snapshot != null && !snapshot.metadata.isFromCache && !effectiveFirebaseEntitlements(account.entitlements, snapshot.data.orEmpty()).canUseAppBackend)) {
+                                entitledOwnerUid = null
+                                detachRemoteListenerLocked()
+                                PrivateBinderSyncScheduler.cancelPeriodic(context, uid)
+                                mutableCloudState.value = CollectionCloudState(
+                                    if (error == null || error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED)
+                                        CollectionCloudStatus.NO_ACCESS else CollectionCloudStatus.LOCAL_ONLY, uid,
+                                )
+                            }
+                        }
+                    }
                 true
             }
             if (!activated) return@launch
@@ -200,21 +256,43 @@ class FirebaseCollectionSession(
 
     fun start() {
         synchronized(entitlementLock) {
-            if (started) return
+            if (started || closed) return
             started = true
+            scope.observeCollectionOutbox(database, ::refreshCloudState)
+            // Keep registration ordered with close when Activity teardown races IO startup.
+            handleIdTokenState(auth)
+            auth.addIdTokenListener(idTokenListener)
         }
-        // Resolve deterministically before relying on Firebase's documented initial callback.
-        handleIdTokenState(auth)
-        auth.addIdTokenListener(idTokenListener)
     }
 
     fun requestSync() {
-        val uid = synchronized(entitlementLock) { entitledOwnerUid } ?: return
+        val uid = synchronized(entitlementLock) { entitledOwnerUid }
+        if (uid == null) {
+            if (started && canonicalCollectionOwnerUid(auth.currentUser) != null) handleIdTokenState(auth)
+            return
+        }
         if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return
         CollectionSyncScheduler.schedule(context, uid)
         // Separate bounded worker/outbox: no second full-collection listener is introduced.
         PrivateBinderSyncScheduler.schedule(context, uid)
         PrivateBinderSyncScheduler.ensurePeriodic(context, uid)
+        refreshCloudState()
+    }
+
+    private fun refreshCloudState() {
+        val uid = synchronized(entitlementLock) { entitledOwnerUid } ?: return
+        scope.launch {
+            val dao = database.cardVaultDao()
+            val pending = dao.pendingSyncOutbox(uid, 1).isNotEmpty() || dao.pendingPrivateBinderSyncOutbox(uid, 1).isNotEmpty()
+            val error = dao.erroredSyncOutbox(uid).isNotEmpty() || dao.conflictedSyncOutbox(uid).isNotEmpty()
+            synchronized(entitlementLock) {
+                if (started && entitledOwnerUid == uid && mutableOwnerUid.value == uid) {
+                    mutableCloudState.value = CollectionCloudState(
+                        collectionCloudStatus(false, true, false, serverSnapshot, pending, error || snapshotError), uid, true,
+                    )
+                }
+            }
+        }
     }
 
     private fun detachRemoteListenerLocked() {
@@ -225,22 +303,38 @@ class FirebaseCollectionSession(
     private fun attachRemoteListenerLocked(uid: String) {
         detachRemoteListenerLocked()
         if (entitledOwnerUid != uid) return
+        val generation = entitlementGeneration
         remoteListener = firestore.collection("users").document(uid).collection("collectionEntries")
-            .addSnapshotListener { snapshot, error ->
+            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                if (entitlementGeneration != generation || mutableOwnerUid.value != uid || entitledOwnerUid != uid) return@addSnapshotListener
                 if (error != null) {
                     Log.w(LOG_TAG, "Collection listener unavailable (${error.code}).")
+                    synchronized(entitlementLock) {
+                        if (entitlementGeneration != generation || entitledOwnerUid != uid) return@addSnapshotListener
+                        snapshotError = true
+                        if (error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                            entitledOwnerUid = null
+                            detachRemoteListenerLocked()
+                            mutableCloudState.value = CollectionCloudState(CollectionCloudStatus.NO_ACCESS, uid)
+                        }
+                    }
+                    refreshCloudState()
                     return@addSnapshotListener
                 }
-                if (mutableOwnerUid.value != uid || entitledOwnerUid != uid) return@addSnapshotListener
+                synchronized(entitlementLock) {
+                    serverSnapshot = snapshot != null && !snapshot.metadata.isFromCache && !snapshot.metadata.hasPendingWrites()
+                    snapshotError = false
+                }
                 snapshot?.documentChanges
                     ?.filter { it.type != DocumentChange.Type.REMOVED }
                     ?.forEach { change ->
                         scope.launchSafely {
                             applyRemoteDocumentToRoom(database, uid, change.document) {
-                                mutableOwnerUid.value == uid && entitledOwnerUid == uid
+                                entitlementGeneration == generation && mutableOwnerUid.value == uid && entitledOwnerUid == uid
                             }
                         }
                     }
+                refreshCloudState()
             }
     }
 
@@ -418,11 +512,13 @@ class FirebaseCollectionSession(
 
     override fun close() {
         synchronized(entitlementLock) {
-            if (!started) return
+            closed = true
             started = false
             entitlementGeneration += 1L
             entitledOwnerUid = null
             detachRemoteListenerLocked()
+            accessListener?.remove()
+            accessListener = null
         }
         auth.removeIdTokenListener(idTokenListener)
         scope.cancel()
@@ -548,7 +644,7 @@ class CollectionSyncWorker(
             ?.takeIf(String::isNotBlank)
             ?: return@withContext Result.success()
         suspend fun accessStillCurrent(): Boolean {
-            val account = auth.currentFirebaseEntitlementAccount(forceRefresh = false) ?: return false
+            val account = auth.currentVerifiedFirebaseEntitlementAccount(forceRefresh = false) ?: return false
             return shouldRunEntitledCollectionSync(
                 expectedUid = uid,
                 currentUid = canonicalCollectionOwnerUid(auth.currentUser),
@@ -557,7 +653,8 @@ class CollectionSyncWorker(
         }
         val initiallyAllowed = try {
             accessStillCurrent()
-        } catch (error: Throwable) {
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (error: Exception) {
             Log.w("DomiDexCollectionSync", "Entitlement konnte nicht geprüft werden (${error.javaClass.simpleName}).")
             return@withContext Result.retry()
         }
@@ -569,7 +666,8 @@ class CollectionSyncWorker(
         while (processed < MAX_MUTATIONS_PER_RUN) {
             val stillAllowed = try {
                 accessStillCurrent()
-            } catch (error: Throwable) {
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (error: Exception) {
                 Log.w("DomiDexCollectionSync", "Entitlement konnte nicht erneut geprüft werden (${error.javaClass.simpleName}).")
                 return@withContext Result.retry()
             }
@@ -591,7 +689,7 @@ class CollectionSyncWorker(
                     firestore.document(collectionEntryPath(uid, mutation.syncId))
                         .get(Source.SERVER)
                         .awaitSyncTask()
-                }.getOrElse { return@withContext Result.retry() }
+                }.getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
                 if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
                     return@withContext Result.success()
                 }
@@ -599,7 +697,7 @@ class CollectionSyncWorker(
                     applyRemoteDocumentToRoom(database, uid, fresh) {
                         shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
                     }
-                }.getOrElse { return@withContext Result.retry() }
+                }.getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
                 if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
                     return@withContext Result.success()
                 }
@@ -635,7 +733,7 @@ class CollectionSyncWorker(
                             firestore.document(collectionEntryPath(uid, mutation.syncId))
                                 .get(Source.SERVER)
                                 .awaitSyncTask()
-                        }.getOrElse { return@withContext Result.retry() }
+                        }.getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
                         if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
                             return@withContext Result.success()
                         }
@@ -643,7 +741,7 @@ class CollectionSyncWorker(
                             applyRemoteDocumentToRoom(database, uid, fresh) {
                                 shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
                             }
-                        }.getOrElse { return@withContext Result.retry() }
+                        }.getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
                         if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
                             return@withContext Result.success()
                         }
@@ -665,7 +763,8 @@ class CollectionSyncWorker(
         val hasPending = dao.pendingSyncOutbox(uid, 1).isNotEmpty()
         val mayContinue = try {
             accessStillCurrent()
-        } catch (error: Throwable) {
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (error: Exception) {
             return@withContext Result.retry()
         }
         if (shouldScheduleCollectionSyncContinuation(processed, MAX_MUTATIONS_PER_RUN, hasPending) && mayContinue) {
@@ -696,18 +795,19 @@ class CollectionSyncWorker(
                 nextRevision
             }.awaitSyncTask()
             PushOutcome.Ack(revision)
-        } catch (error: Throwable) {
-            val conflict = generateSequence(error) { it.cause }.filterIsInstance<CollectionSyncConflictException>().firstOrNull()
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (error: Exception) {
+            val conflict = generateSequence<Throwable>(error) { it.cause }.filterIsInstance<CollectionSyncConflictException>().firstOrNull()
             if (conflict != null) PushOutcome.Conflict(
                 if (conflict.remoteDeleted) remoteDeletedConflictReason(conflict.remoteRevision)
                 else remoteConflictReason(conflict.remoteRevision),
             )
             else when {
                 error is IllegalArgumentException -> PushOutcome.Terminal("invalid-payload")
-                generateSequence(error) { it.cause }
+                generateSequence<Throwable>(error) { it.cause }
                     .filterIsInstance<FirebaseFirestoreException>()
                     .any { it.code == FirebaseFirestoreException.Code.PERMISSION_DENIED } -> PushOutcome.Terminal("permission-denied")
-                generateSequence(error) { it.cause }
+                generateSequence<Throwable>(error) { it.cause }
                     .filterIsInstance<FirebaseFirestoreException>()
                     .any { it.code == FirebaseFirestoreException.Code.INVALID_ARGUMENT } -> PushOutcome.Terminal("invalid-argument")
                 else -> PushOutcome.Retry
@@ -845,6 +945,7 @@ private data class RemoteCollectionEntry(
 private fun CoroutineScope.launchSafely(block: suspend () -> Unit) {
     launch {
         runCatching { block() }.onFailure { error ->
+            if (error is CancellationException) throw error
             Log.w("DomiDexCollectionSync", "Remote snapshot was ignored (${error.javaClass.simpleName}).")
         }
     }

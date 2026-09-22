@@ -26,8 +26,16 @@ class AboveMainSetPriceTest {
 
     private val set = PokemonSet("me03", "Optimale Ordnung", "Mega", 88, 124, "", null, "POR", "6443")
     private val cards = rows("cards").map { row ->
+        val verified = rows("cases").firstOrNull { it.text("id") == row.text("id") }
+        val variants = verified?.get("variants") as? Map<*, *>
+        val productId = verified?.id("productId")
+        val printings = buildList {
+            if (variants?.get("normal") == true) add(PokemonPrintVariant("normal", "Normal", "Standard", productId))
+            if (variants?.get("holo") == true) add(PokemonPrintVariant("holo", "Holo", "Holo", productId))
+            if (variants?.get("reverse") == true) add(PokemonPrintVariant("reverse", "Reverse Holo", "Reverse Holo", productId))
+        }
         PokemonVisualCard(row.text("id"), row.text("name"), row.text("number"), null, "", "", set,
-            marketSearchName = row.text("marketName"))
+            marketSearchName = row.text("marketName"), printVariants = printings)
     }
     private val products = rows("products").map { row ->
         val price = rows("prices").single { it.id("productId") == row.id("id") }
@@ -40,7 +48,7 @@ class AboveMainSetPriceTest {
             val card = cards.single { it.id == case.text("id") }
             // Both localId and the full printed numerator/denominator must work above 088.
             listOf(card, card.copy(number = "${card.number}/088")).forEach { selected ->
-                val product = visualCardmarketProducts(selected, cards, products).single()
+                val product = visualCardmarketProducts(selected, cards, products).first()
                 assertEquals(card.id, case.id("productId"), product.productId)
                 assertEquals(card.id, product.sourceCardId)
                 assertEquals("me03", product.sourceSetId)
@@ -53,7 +61,7 @@ class AboveMainSetPriceTest {
     @Test fun aboveMainSetHoloPriceSurvivesManualAddAndGreyBinderPreview() {
         rows("cases").filter { it.text("number").toInt() > 88 }.forEach { case ->
             val card = cards.single { it.id == case.text("id") }.copy(
-                rarity = case.text("rarity"), printVariants = listOf(PokemonPrintVariant("holo", "Holo", "Holo")),
+                rarity = case.text("rarity"), printVariants = listOf(PokemonPrintVariant("holo", "Holo", "Holo", case.id("productId"))),
             )
             val market = visualCardmarketProducts(card, cards, products).single()
             val selected = catalogResultForVisualCard(card, market)
@@ -85,8 +93,9 @@ class AboveMainSetPriceTest {
     @Test fun missingSecretProductOrWrongSetNeverFallsBackToAPricedMainSetCard() {
         val secret = cards.single { it.number == "090" }
         assertTrue(visualCardmarketProducts(secret, cards, products.filterNot { it.productId == 877507L }).isEmpty())
-        assertTrue(visualCardmarketProducts(secret, cards.filterNot { it.id == secret.id }, products).isEmpty())
-        assertTrue(visualCardmarketProducts(secret, cards, products.map { it.copy(expansionId = "another-set") }).isEmpty())
+        // An exact source ID remains authoritative even if a set-list page is incomplete.
+        assertEquals(877507L, visualCardmarketProducts(secret, cards.filterNot { it.id == secret.id }, products).single().productId)
+        assertTrue(visualCardmarketProducts(secret, cards, products.map { it.copy(productId = it.productId + 10000) }).isEmpty())
         assertTrue(binderReferenceCardmarketProducts(reference(secret, "Holo").copy(sourceCardId = "me03-010"), secret, cards, products).isEmpty())
     }
 

@@ -13,11 +13,12 @@ const contributionMetadata = {
 
 before(async () => {
   environment = await initializeTestEnvironment({
-    projectId: "demo-domidex-storage",
+    projectId: process.env.GCLOUD_PROJECT || "demo-domidex-storage",
+    firestore: { rules: readFileSync(new URL("../firestore.rules", import.meta.url), "utf8") },
     storage: { rules: readFileSync(new URL("../storage.rules", import.meta.url), "utf8") },
   });
 });
-beforeEach(async () => environment.clearStorage());
+beforeEach(async () => { await environment.clearStorage(); await environment.clearFirestore(); });
 after(async () => environment.cleanup());
 
 test("A: unauthenticated upload is denied", async () => {
@@ -26,33 +27,33 @@ test("A: unauthenticated upload is denied", async () => {
 });
 
 test("B: user A can write an image below users/A", async () => {
-  const storage = environment.authenticatedContext("A").storage();
+  const storage = environment.authenticatedContext("A", { appAccess: true }).storage();
   await assertSucceeds(uploadBytes(ref(storage, "users/A/scans/image.jpg"), jpeg, { contentType: "image/jpeg" }));
 });
 
 test("C: user A cannot write below users/B", async () => {
-  const storage = environment.authenticatedContext("A").storage();
+  const storage = environment.authenticatedContext("A", { appAccess: true }).storage();
   await assertFails(uploadBytes(ref(storage, "users/B/image.jpg"), jpeg, { contentType: "image/jpeg" }));
 });
 
 test("D: user A can create a private catalogue contribution below A", async () => {
-  const storage = environment.authenticatedContext("A").storage();
+  const storage = environment.authenticatedContext("A", { appAccess: true }).storage();
   await assertSucceeds(uploadBytes(ref(storage, `catalog-contributions/A/${hash}/card.jpg`), jpeg, contributionMetadata));
 });
 
 test("E: arbitrary non-image MIME type is denied", async () => {
-  const storage = environment.authenticatedContext("A").storage();
+  const storage = environment.authenticatedContext("A", { appAccess: true }).storage();
   await assertFails(uploadBytes(ref(storage, "users/A/document.pdf"), jpeg, { contentType: "application/pdf" }));
 });
 
 test("F: image above 10 MiB is denied", async () => {
-  const storage = environment.authenticatedContext("A").storage();
+  const storage = environment.authenticatedContext("A", { appAccess: true }).storage();
   const oversized = new Uint8Array(10 * 1024 * 1024 + 1);
   await assertFails(uploadBytes(ref(storage, "users/A/large.jpg"), oversized, { contentType: "image/jpeg" }));
 });
 
 test("cross-user contribution reads and writes are denied", async () => {
-  const storage = environment.authenticatedContext("B").storage();
+  const storage = environment.authenticatedContext("B", { appAccess: true }).storage();
   await assertFails(uploadBytes(ref(storage, `catalog-contributions/A/${hash}/card.jpg`), jpeg, {
     ...contributionMetadata,
     customMetadata: { ...contributionMetadata.customMetadata, ownerUid: "B" },

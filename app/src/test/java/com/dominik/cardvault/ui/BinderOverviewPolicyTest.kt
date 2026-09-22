@@ -111,4 +111,55 @@ class BinderOverviewPolicyTest {
             ),
         )
     }
+
+    @Test fun `classic historic denominators keep equal numerators as distinct cards`() {
+        fun classic(entryId: Long, number: String) = CollectionCard(
+            entryId = entryId,
+            id = "classic-$entryId",
+            name = "Klassische Karte",
+            set = "30 Jahre: Klassische Sammlung",
+            number = number,
+            language = CardLanguage.GERMAN,
+            finish = "Normal",
+            variant = "Standard",
+            condition = "Near Mint",
+            quantity = 1,
+            currentValueEur = 1.0,
+            changePercent = 0.0,
+            priceUpdatedAtEpochMillis = 1L,
+            notes = "",
+            acquisitionPriceEur = null,
+            acquisitionDateEpochDay = null,
+            accent = 0L,
+        )
+
+        assertEquals(2, completedBinderSlotCount(listOf(classic(1, "11/113"), classic(2, "11/101"))))
+        assertEquals(3, completedBinderSlotCount(listOf(
+            classic(1, "106/106"), classic(2, "106/160"), classic(3, "106/105"),
+        )))
+    }
+
+    @Test fun `ordinary legacy number with and without denominator remains one slot`() {
+        fun ordinary(entryId: Long, number: String) = CollectionCard(
+            entryId = entryId,
+            id = "ordinary-$entryId",
+            name = "Normale Karte",
+            set = "Normales Set",
+            number = number,
+            language = CardLanguage.GERMAN,
+            finish = "Normal",
+            variant = "Standard",
+            condition = "Near Mint",
+            quantity = 1,
+            currentValueEur = 1.0,
+            changePercent = 0.0,
+            priceUpdatedAtEpochMillis = 1L,
+            notes = "",
+            acquisitionPriceEur = null,
+            acquisitionDateEpochDay = null,
+            accent = 0L,
+        )
+
+        assertEquals(1, completedBinderSlotCount(listOf(ordinary(1, "001"), ordinary(2, "001/100"))))
+    }
 }

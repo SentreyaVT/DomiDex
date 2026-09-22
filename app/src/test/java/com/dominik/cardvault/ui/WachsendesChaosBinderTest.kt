@@ -14,18 +14,18 @@ import org.junit.Test
 
 class WachsendesChaosBinderTest {
     @Test
-    fun `all 194 fixed slots keep canonical source identity and order`() {
+    fun `all 198 fixed slots keep canonical source identity and order`() {
         val slots = emptySlots()
 
-        assertEquals(194, slots.size)
+        assertEquals(198, slots.size)
         assertEquals(
             WachsendesChaosMasterSet.cards.map { listOf(it.sourceSetId, it.sourceCardId, it.number, it.finish, it.variant) },
             slots.map { listOf(it.sourceSetId, it.sourceCardId, it.number, it.finish, it.variant) },
         )
         assertSlot(slots, "me04-001", "Normal", 0)
-        assertSlot(slots, "me04-050", "Normal", 90)
-        assertSlot(slots, "me04-087", "Holo", 158)
-        assertSlot(slots, "me04-122", "Holo", 193, "Standard · Folie: Gold")
+        assertSlot(slots, "me04-050", "Normal", 92)
+        assertSlot(slots, "me04-087", "Holo", 162)
+        assertSlot(slots, "me04-122", "Holo", 197, "Standard · Folie: Gold")
     }
 
     @Test
@@ -36,7 +36,7 @@ class WachsendesChaosBinderTest {
         assertEquals((1..122).map { "me04-${it.toString().padStart(3, '0')}" }, cards.map { it.id })
         assertEquals(listOf("Normal", "Reverse Holo"), cards.first().printVariants.map { it.finish })
         assertEquals(listOf("Holo"), cards.last().printVariants.map { it.finish })
-        assertEquals(193, cards.flatMap { it.printVariants }.count { it.variant == "Standard" })
+        assertEquals(197, cards.flatMap { it.printVariants }.count { it.variant == "Standard" })
         assertEquals("Standard · Folie: Gold", cards.last().printVariants.single().variant)
     }
 
@@ -46,21 +46,21 @@ class WachsendesChaosBinderTest {
         val early = references[0].owned(11)
         val middle = references[112].owned(12)
         val late = references.last().owned(13)
-        val legacy = references[158].owned(14).copy(sourceSetId = null, sourceCardId = null)
+        val legacy = references[162].owned(14).copy(sourceSetId = null, sourceCardId = null)
         val overflow = references[0].owned(15).copy(
             id = "me04-999-owned", name = "Nicht zugeordnete Karte", number = "999/122",
             sourceCardId = "me04-999",
         )
 
-        val slots = arrangeBinderCards(SET_NAME, listOf(late, overflow, early, legacy, middle), 194).filterNotNull()
+        val slots = arrangeBinderCards(SET_NAME, listOf(late, overflow, early, legacy, middle), WachsendesChaosMasterSet.cards.size).filterNotNull()
 
-        assertEquals(195, slots.size)
+        assertEquals(199, slots.size)
         assertEquals(11L, slots[0].entryId)
         assertEquals(12L, slots[112].entryId)
-        assertEquals(14L, slots[158].entryId)
-        assertEquals("me04", slots[158].sourceSetId)
-        assertEquals("me04-087", slots[158].sourceCardId)
-        assertEquals(13L, slots[193].entryId)
+        assertEquals(14L, slots[162].entryId)
+        assertEquals("me04", slots[162].sourceSetId)
+        assertEquals("me04-087", slots[162].sourceCardId)
+        assertEquals(13L, slots[197].entryId)
         assertEquals(15L, slots.last().entryId)
         assertEquals(5, slots.count { it.entryId > 0L })
     }
@@ -71,9 +71,9 @@ class WachsendesChaosBinderTest {
         val first = reference.owned(21)
         val second = reference.owned(22).copy(id = "second-condition", condition = "Gespielt")
 
-        val slots = arrangeBinderCards(SET_NAME, listOf(first, second), 194).filterNotNull()
+        val slots = arrangeBinderCards(SET_NAME, listOf(first, second), WachsendesChaosMasterSet.cards.size).filterNotNull()
 
-        assertEquals(195, slots.size)
+        assertEquals(199, slots.size)
         assertEquals(21L, slots.first().entryId)
         assertEquals(22L, slots.last().entryId)
         assertEquals(2, slots.count { it.entryId > 0L })
@@ -84,9 +84,9 @@ class WachsendesChaosBinderTest {
         val reference = emptySlots().first { it.sourceCardId == "me04-010" && it.finish == "Holo" }
         val stamped = reference.owned(23).copy(variant = "Standard · Stempel: GameStop")
 
-        val slots = arrangeBinderCards(SET_NAME, listOf(stamped), 194).filterNotNull()
+        val slots = arrangeBinderCards(SET_NAME, listOf(stamped), WachsendesChaosMasterSet.cards.size).filterNotNull()
 
-        assertEquals(195, slots.size)
+        assertEquals(199, slots.size)
         assertEquals(0L, slots.first { it.id == reference.id }.entryId)
         assertEquals(23L, slots.last().entryId)
         assertEquals("Standard · Stempel: GameStop", slots.last().variant)
@@ -97,9 +97,9 @@ class WachsendesChaosBinderTest {
         val reference = emptySlots().last()
         val legacy = reference.owned(24).copy(variant = "Standard")
 
-        val slots = arrangeBinderCards(SET_NAME, listOf(legacy), 194).filterNotNull()
+        val slots = arrangeBinderCards(SET_NAME, listOf(legacy), WachsendesChaosMasterSet.cards.size).filterNotNull()
 
-        assertEquals(194, slots.size)
+        assertEquals(198, slots.size)
         assertEquals(24L, slots.last().entryId)
         assertEquals("Holo", slots.last().finish)
         assertEquals("Standard · Folie: Gold", slots.last().variant)
@@ -126,6 +126,16 @@ class WachsendesChaosBinderTest {
         val candidate = marketProduct(reverse, 886393L, 0.86, 0.08)
 
         assertTrue(binderReferenceCardmarketProducts(reverse, source, listOf(source), listOf(candidate)).isEmpty())
+    }
+
+    @Test fun `four newly enumerated reverse slots keep their exact product price and ownership`() {
+        mapOf("013" to 886405L, "029" to 886421L, "051" to 886443L, "068" to 886460L).forEach { (number, productId) ->
+            val reference = emptySlots().single { it.sourceCardId == "me04-$number" && it.finish == "Reverse Holo" }
+            assertResolvedPrice(reference, productId, 0.07, 0.07)
+            val result = arrangeBinderCards(SET_NAME, listOf(reference.owned(productId)), WachsendesChaosMasterSet.cards.size).filterNotNull()
+            assertEquals(198, result.size)
+            assertEquals(productId, result.single { it.sourceCardId == reference.sourceCardId && it.finish == reference.finish }.entryId)
+        }
     }
 
     private fun assertResolvedPrice(reference: CollectionCard, productId: Long, expectedPrice: Double, reversePrice: Double?) {
@@ -167,7 +177,7 @@ class WachsendesChaosBinderTest {
     )
 
     private fun emptySlots(): List<CollectionCard> =
-        arrangeBinderCards(SET_NAME, emptyList(), 194).filterNotNull()
+        arrangeBinderCards(SET_NAME, emptyList(), WachsendesChaosMasterSet.cards.size).filterNotNull()
 
     private fun CollectionCard.owned(entry: Long) = copy(
         entryId = entry,

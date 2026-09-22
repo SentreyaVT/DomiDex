@@ -61,7 +61,7 @@ class PocketCardmarketIsolationTest {
         val candidates = inferredCards.associate { card ->
             card.marketSearchName!! to listOf(product(card.marketSearchName, "900", 1.0))
         }
-        assertEquals("900", resolveCardmarketExpansionId(inferredCards, candidates))
+        assertNull(resolveCardmarketExpansionId(inferredCards, candidates))
     }
 
     private fun set(id: String, name: String, seriesId: String) = PokemonSet(

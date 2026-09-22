@@ -70,15 +70,38 @@ after(async () => environment.cleanup());
 test("collection entries require authentication and matching UID", async () => {
   const anonymous = environment.unauthenticatedContext().firestore();
   await assertFails(setDoc(doc(anonymous, `users/A/collectionEntries/${id}`), entry("A")));
-  const userA = environment.authenticatedContext("A").firestore();
+  const userA = environment.authenticatedContext("A", { appAccess: true }).firestore();
   await assertSucceeds(setDoc(doc(userA, `users/A/collectionEntries/${id}`), entry("A")));
-  const userB = environment.authenticatedContext("B").firestore();
+  const userB = environment.authenticatedContext("B", { appAccess: true }).firestore();
   await assertFails(getDoc(doc(userB, `users/A/collectionEntries/${id}`)));
   await assertFails(setDoc(doc(userB, `users/A/collectionEntries/${id}`), entry("B")));
 });
 
+test("unapproved owners cannot create collection, private binder, or evidence data", async () => {
+  const unapproved = environment.authenticatedContext("A").firestore();
+  await assertFails(setDoc(doc(unapproved, `users/A/collectionEntries/${id}`), entry("A")));
+  await assertFails(setDoc(doc(unapproved, "users/A/privateBinders/binder"), privateBinder("A", "binder")));
+  await assertFails(setDoc(doc(unapproved, `users/A/scanEvidence/${"a".repeat(64)}`), evidence("a".repeat(64))));
+});
+
+test("revocation and deletion lock protect private binder reads with old claims", async () => {
+  const owner = environment.authenticatedContext("A", { appAccess: true }).firestore();
+  const ref = doc(owner, "users/A/privateBinders/binder");
+  await assertSucceeds(setDoc(ref, privateBinder("A", "binder")));
+  await environment.withSecurityRulesDisabled(async context => {
+    await setDoc(doc(context.firestore(), "accountAccess/A"), { appAccess: false });
+  });
+  await assertFails(getDoc(ref));
+  await assertFails(setDoc(doc(owner, "accountAccess/A"), { appAccess: true }));
+  await environment.withSecurityRulesDisabled(async context => {
+    await setDoc(doc(context.firestore(), "accountAccess/A"), { appAccess: true });
+    await setDoc(doc(context.firestore(), "accountDeletionLocks/A"), { jobId: "isolated-test" });
+  });
+  await assertFails(getDoc(ref));
+});
+
 test("revision must advance exactly once", async () => {
-  const userA = environment.authenticatedContext("A").firestore();
+  const userA = environment.authenticatedContext("A", { appAccess: true }).firestore();
   const reference = doc(userA, `users/A/collectionEntries/${id}`);
   await assertSucceeds(setDoc(reference, entry("A")));
   await assertFails(setDoc(reference, entry("A", 3)));
@@ -86,7 +109,7 @@ test("revision must advance exactly once", async () => {
 });
 
 test("tombstones cannot be physically deleted or resurrected", async () => {
-  const userA = environment.authenticatedContext("A").firestore();
+  const userA = environment.authenticatedContext("A", { appAccess: true }).firestore();
   const reference = doc(userA, `users/A/collectionEntries/${id}`);
   await assertSucceeds(setDoc(reference, entry("A", 1, true)));
   await assertFails(deleteDoc(reference));
@@ -94,7 +117,7 @@ test("tombstones cannot be physically deleted or resurrected", async () => {
 });
 
 test("source identity is optional but must be a valid complete pair", async () => {
-  const userA = environment.authenticatedContext("A").firestore();
+  const userA = environment.authenticatedContext("A", { appAccess: true }).firestore();
   const reference = doc(userA, `users/A/collectionEntries/${id}`);
   await assertSucceeds(setDoc(reference, {
     ...entry("A"), sourceSetId: "sv08", sourceCardId: "sv08-001-reverseholofoil",
@@ -111,8 +134,8 @@ test("source identity is optional but must be a valid complete pair", async () =
 
 test("private binders are owner-scoped, shape constrained and use tombstones", async () => {
   const binderId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-  const userA = environment.authenticatedContext("A").firestore();
-  const userB = environment.authenticatedContext("B").firestore();
+  const userA = environment.authenticatedContext("A", { appAccess: true }).firestore();
+  const userB = environment.authenticatedContext("B", { appAccess: true }).firestore();
   const reference = doc(userA, `users/A/privateBinders/${binderId}`);
   await assertSucceeds(setDoc(reference, privateBinder("A", binderId)));
   await assertFails(getDoc(doc(userB, `users/A/privateBinders/${binderId}`)));
@@ -128,7 +151,7 @@ test("private binders are owner-scoped, shape constrained and use tombstones", a
 test("private placements require the owner's live binder and exact collection entry", async () => {
   const binderId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   const placementId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-  const userA = environment.authenticatedContext("A").firestore();
+  const userA = environment.authenticatedContext("A", { appAccess: true }).firestore();
   await assertSucceeds(setDoc(doc(userA, `users/A/privateBinders/${binderId}`), privateBinder("A", binderId)));
   await assertSucceeds(setDoc(doc(userA, `users/A/collectionEntries/${id}`), entry("A")));
   const legacyPlacementId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
@@ -173,8 +196,8 @@ test("private placements require the owner's live binder and exact collection en
 });
 
 test("set-binder visibility remains owner-scoped and references a real owned entry", async () => {
-  const userA = environment.authenticatedContext("A").firestore();
-  const userB = environment.authenticatedContext("B").firestore();
+  const userA = environment.authenticatedContext("A", { appAccess: true }).firestore();
+  const userB = environment.authenticatedContext("B", { appAccess: true }).firestore();
   const reference = doc(userA, `users/A/collectionLayouts/${id}`);
   await assertFails(setDoc(reference, collectionLayout("A", id)));
   await assertSucceeds(setDoc(doc(userA, `users/A/collectionEntries/${id}`), entry("A")));
@@ -187,8 +210,8 @@ test("set-binder visibility remains owner-scoped and references a real owned ent
 
 test("scan evidence is private, idempotent and shape constrained", async () => {
   const fingerprint = "a".repeat(64);
-  const userA = environment.authenticatedContext("A").firestore();
-  const userB = environment.authenticatedContext("B").firestore();
+  const userA = environment.authenticatedContext("A", { appAccess: true }).firestore();
+  const userB = environment.authenticatedContext("B", { appAccess: true }).firestore();
   const reference = doc(userA, `users/A/scanEvidence/${fingerprint}`);
   await assertSucceeds(setDoc(reference, evidence(fingerprint)));
   await assertSucceeds(setDoc(reference, { ...evidence(fingerprint), originalConfidence: 90 }));
@@ -204,7 +227,7 @@ test("clients can read but never publish shared stable knowledge", async () => {
       fingerprint, cardId: "source:sv1:sv1-001|normal|standard", status: "STABLE",
     });
   });
-  const userA = environment.authenticatedContext("A").firestore();
+  const userA = environment.authenticatedContext("A", { appAccess: true }).firestore();
   await assertSucceeds(getDoc(doc(userA, `scanKnowledge/${fingerprint}`)));
   await assertFails(setDoc(doc(userA, `scanKnowledge/${fingerprint}`), {
     fingerprint, cardId: "forged", status: "STABLE",

@@ -102,7 +102,7 @@ class CardVaultDatabaseTest {
         val dao = database.cardVaultDao(); val now = System.currentTimeMillis()
         dao.insertCatalogCard(CatalogCardEntity("guest-source", "POKEMON", "sv1", "Set", "Mew", "001", "GERMAN", "Holo", "Standard", now))
         dao.insertCollectionEntry(CollectionEntryEntity(cardId = "guest-source", quantity = 1, condition = "Gut", acquisitionPriceMinor = null, acquisitionCurrency = null, acquisitionDateEpochDay = null, notes = "legacy", frontPhotoUri = null, backPhotoUri = null, createdAtEpochMillis = now, updatedAtEpochMillis = now, syncId = "legacy-source", sourceSetId = "sv1", sourceCardId = "sv1-001"))
-        val repository = RoomCollectionRepository(database, MutableStateFlow("A"))
+        val repository = RoomCollectionRepository(database, MutableStateFlow("A"), verifyGuestClaimOwner = { "A" })
 
         assertEquals(1, repository.claimGuestCollectionForCurrentUser())
         val expected = deterministicSourceSyncId("A", SourceCardIdentity("sv1", "sv1-001"), "Gut", "Holo", "Standard")

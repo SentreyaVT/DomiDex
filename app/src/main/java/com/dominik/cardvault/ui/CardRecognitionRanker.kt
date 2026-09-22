@@ -1,8 +1,14 @@
 package com.dominik.cardvault.ui
 
 import com.dominik.cardvault.data.catalog.collectorIdentityForSourceLookup
+import com.dominik.cardvault.data.catalog.classic30thLocalIdForPrintedCollector
 import com.dominik.cardvault.model.CatalogSearchResult
 import java.text.Normalizer
+
+internal fun historicClassicPrintedNumberMatches(collectorNumber: String?, sourceSetId: String?): Boolean =
+    sourceSetId.equals("30th-c", ignoreCase = true) &&
+        !collectorNumber.isNullOrBlank() &&
+        classic30thLocalIdForPrintedCollector(collectorNumber) != null
 
 /** Explainable ranking for candidates that already passed the set + printed-number gate. */
 internal object CardRecognitionRanker {
@@ -13,7 +19,9 @@ internal object CardRecognitionRanker {
         val catalogNumber = candidate.collectorNumber?.let { collectorIdentityForSourceLookup(it, numberSourceSetId) }
         val numberMatch = readNumber != null && readNumber == catalogNumber
         val readPrintedTotal = analysis.collectorNumber?.substringAfter('/', "")?.filter(Char::isDigit)?.toIntOrNull()
-        val printedTotalMatch = readPrintedTotal != null && candidate.mainSetSize == readPrintedTotal
+        val printedTotalMatch = readPrintedTotal != null &&
+            (candidate.mainSetSize == readPrintedTotal ||
+                historicClassicPrintedNumberMatches(analysis.collectorNumber, candidate.sourceSetId))
         val name = normalize(candidate.name)
         val localizedNameComparable = candidate.language != SOURCE_FALLBACK_LANGUAGE
         val nameEvidence = if (localizedNameComparable) {

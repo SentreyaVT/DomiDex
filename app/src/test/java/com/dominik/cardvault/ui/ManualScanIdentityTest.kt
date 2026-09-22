@@ -63,6 +63,28 @@ class ManualScanIdentityTest {
         assertEquals("068/131", manualCollectorNumber("68", 131, "sv08.5", "PRE"))
     }
 
+    @Test fun classicManualSelectionAcceptsHistoricNumberOrOfficialSubsetPosition() {
+        assertEquals("89/149", manualCollectorNumber("089/149", 30, "30th-c", "30C"))
+        assertEquals("017", manualCollectorNumber("17", 30, "30th-c", "30C"))
+        assertEquals(null, manualCollectorNumber("89/128", 30, "30th-c", "30C"))
+        assertEquals(
+            "89/149",
+            withManualScanIdentity(null, "30th-c", "30C", "089/149").collectorNumber,
+        )
+    }
+
+    @Test fun sharedAnniversaryCodeUsesDenominatorInsteadOfSilentlySelectingMainSet() {
+        val choices = listOf(
+            ScannerSetChoice("30th", "30 Jahre", "30C", 128),
+            ScannerSetChoice("30th-c", "30 Jahre: Klassische Sammlung", "30C", 30),
+        )
+
+        assertEquals("30th-c", resolveScannerSetChoice(choices, "30C", "089/149")?.id)
+        assertEquals("30th", resolveScannerSetChoice(choices, "30C", "065/128")?.id)
+        assertEquals(null, resolveScannerSetChoice(choices, "30C", "089")?.id)
+        assertEquals("30th-c", resolveScannerSetChoice(choices, "30th-c", "017")?.id)
+    }
+
     @Test fun explicitSetNeverFallsBackToAnotherSetWhenNoExactCardExists() = runBlocking {
         val manual = withManualScanIdentity(null, "sv08.5", "PRE", "068/131")
         var fallbackInvocations = 0
@@ -110,6 +132,32 @@ class ManualScanIdentityTest {
         )
         assertEquals(listOf(expected), matches)
         assertEquals(1, fallbackInvocations)
+    }
+
+    @Test fun anniversaryClassicAliasKeepsHistoricDenominatorInsideTheSubset() = runBlocking {
+        val automatic = CardTextAnalysis(
+            lines = listOf("Solgaleo GX", "30C 089/149"),
+            collectorNumber = "089/149",
+            setIdentifier = "30C",
+            likelyScript = CardScript.LATIN,
+            searchQueries = listOf("Solgaleo GX"),
+        )
+        val classic = visualCard(setId = "30th-c", number = "89/149", printedTotal = 0).copy(
+            set = PokemonSet("30th-c", "30 Jahre: Klassische Sammlung", "Mega-Entwicklung", 0, 30, "", null, "30C"),
+            sourceLocalId = "017",
+        )
+        var fallbackInvocations = 0
+
+        val matches = lookupScannerVisualMatches(
+            automatic,
+            findExact = { _, _ -> listOf(classic) },
+            findByPrintedTotal = { fallbackInvocations++; emptyList() },
+        )
+
+        assertEquals(listOf(classic), matches)
+        assertEquals(0, fallbackInvocations)
+        val candidate = scannerCatalogResult(classic, classic.printVariants.first(), null)
+        assertTrue(CardRecognitionRanker.score(automatic, candidate) >= ScannerDecisionPolicy.MIN_CANDIDATE_SCORE)
     }
 
     @Test fun manualPromoUsesSourceIdentityEvenWhenTheCatalogueHasNoPrintedTotal() = runBlocking {

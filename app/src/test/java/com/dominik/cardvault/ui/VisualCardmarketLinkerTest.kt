@@ -8,9 +8,18 @@ import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionCard
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class VisualCardmarketLinkerTest {
+    @Test fun missingZeroNegativeAndNonFinitePricesStayUnavailable() {
+        listOf(null, 0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY).forEach { value ->
+            val row = product(41, "Exact", "900", value).copy(holoTrendPriceEur = value)
+            assertNull(row.realTrendFor("Normal"))
+            assertNull(row.realTrendFor("Holo"))
+            assertNull(row.realTrendFor("Reverse Holo"))
+        }
+    }
     private val set = PokemonSet(
         id = "source-set",
         name = "Deutsches Set",
@@ -24,7 +33,9 @@ class VisualCardmarketLinkerTest {
 
     @Test
     fun resolvesCardmarketProductWithoutInventingCollectorNumberOrFinish() {
-        val card = visual("source-set-001", "001", "Bisasam")
+        val card = visual("source-set-001", "001", "Bisasam").copy(
+            printVariants = listOf(PokemonPrintVariant("normal", "Normal", "Standard", 41)),
+        )
         val product = product(41, "Bulbasaur [Tackle]", "900", 2.35)
 
         val resolved = visualCardmarketProducts(
@@ -36,12 +47,12 @@ class VisualCardmarketLinkerTest {
 
         assertEquals(listOf(41L), resolved.map { it.productId })
         assertEquals("001", resolved.single().collectorNumber)
-        assertEquals("UNKNOWN", resolved.single().finish)
+        assertEquals("Normal", resolved.single().finish)
         assertEquals(2.35, resolved.single().trendPriceEur!!, 0.0)
     }
 
     @Test
-    fun sameNameReprintUsesStablePrintedOrderInsideVerifiedExpansion() {
+    fun sameNameAndProductOrderCannotProveACollectorIdentity() {
         val first = visual("source-set-001", "001", "Bisasam")
         val second = visual("source-set-002", "002", "Bisasam")
         val products = listOf(
@@ -49,8 +60,10 @@ class VisualCardmarketLinkerTest {
             product(30, "Bulbasaur [Move B]", "900", 3.0),
         )
 
-        assertEquals(20L, visualCardmarketProducts(first, listOf(second, first), products, "900").single().productId)
-        assertEquals(30L, visualCardmarketProducts(second, listOf(second, first), products, "900").single().productId)
+        assertTrue(visualCardmarketProducts(first, listOf(second, first), products, "900").isEmpty())
+        assertTrue(visualCardmarketProducts(second, listOf(second, first), products, "900").isEmpty())
+        val verified = first.copy(printVariants = listOf(PokemonPrintVariant("normal", "Normal", "Standard", 30)))
+        assertEquals(30L, visualCardmarketProducts(verified, listOf(second, first), products, "900").single().productId)
     }
 
     @Test
@@ -79,7 +92,9 @@ class VisualCardmarketLinkerTest {
 
     @Test
     fun greyHoloBinderSlotUsesExactSourceIdentityAndItsRegularProductTrend() {
-        val card = visual("source-set-001", "001", "Bisasam")
+        val card = visual("source-set-001", "001", "Bisasam").copy(
+            printVariants = listOf(PokemonPrintVariant("holo", "Holo", "Holo", 41)),
+        )
         val reference = binderReference(card, finish = "Holo", variant = "Holo")
         val product = product(41, "Bulbasaur [Tackle]", "900", 2.35).copy(holoTrendPriceEur = 4.75)
 

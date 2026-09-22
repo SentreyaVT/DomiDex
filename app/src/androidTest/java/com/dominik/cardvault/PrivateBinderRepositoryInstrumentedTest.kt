@@ -206,7 +206,7 @@ class PrivateBinderRepositoryInstrumentedTest {
     @Test fun guestPrivateBinderClaimCopiesCompositeKeysBeforeRemovingGuestRows() = runBlocking {
         seedCardmarketProduct(44L, "Evoli", 450L)
         val owner = MutableStateFlow(GUEST_OWNER_UID)
-        val guestRepository = RoomCollectionRepository(database, owner)
+        val guestRepository = RoomCollectionRepository(database, owner, verifyGuestClaimOwner = { owner.value })
         val binderId = guestRepository.createPrivateBinder("Gastbinder")
         val added = guestRepository.addManualCard(
             cardInput(44L, "Evoli", "003", "sv-test-003"),

@@ -15,14 +15,15 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.CancellationException
 import org.opencv.android.Utils
 import org.opencv.core.Mat
 import org.opencv.imgproc.Imgproc
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.coroutines.resume
 
 internal enum class CardScript { LATIN, JAPANESE, CHINESE }
 
@@ -133,7 +134,7 @@ internal object CardNumberParser {
     // This repair is deliberately confined to two numeric groups inside an identity ROI.
     private val pair = Regex("(?i)(?<![A-Z0-9])([0-9OIlSBZg]{1,4})\\s*[/|VY]\\s*([0-9OIlSBZg]{1,4})(?![A-Z0-9])")
     private val prefixedPair = Regex("(?i)(?<![A-Z0-9])([A-Z]{1,3})[-_ ]*([0-9OIlSBZg]{1,3})\\s*[/|]\\s*\\1[-_ ]*([0-9OIlSBZg]{1,3})(?![A-Z0-9])")
-    private val setBoundSingle = Regex("(?i)(?:^|\\s)([A-Z]{3})(?:[-_ ]+DE)?[-_ ]+([0-9OIlSBZg]{1,4})(?:\\s|$)")
+    private val setBoundSingle = Regex("(?i)(?:^|\\s)([A-Z0-9]{2,6})(?:[-_ ]+DE)?[-_ ]+([0-9OIlSBZg]{1,4})(?:\\s|$)")
     // German promo borders have no /total: ML Kit can split MEP / DE / 071 into
     // separate lines or join the boxed regulation mark to MEP. Keep the registered
     // promo prefix bound to its number; never infer it from a name or bare digits.
@@ -238,7 +239,7 @@ internal fun selectIdentityNumberText(readings: List<IdentityNumberReading>): St
 }
 
 internal object CardTextParser {
-    private val collectorNumberPattern = Regex("(?i)(?<![A-Z0-9])(?:[A-Z]{3}\\s+)?(\\d{1,4})\\s*/\\s*(\\d{1,4})")
+    private val collectorNumberPattern = Regex("(?i)(?<![A-Z0-9])(?:[A-Z0-9]{2,6}\\s+)?(\\d{1,4})\\s*/\\s*(\\d{1,4})")
     private val noisePattern = Regex("(?i)^(?:hp|kp|stage|basic|basis|trainer|energy|energie|pokemon)\\s*\\d*$")
     private val rulesOrAttackPattern = Regex("(?i)^(?:ability|fähigkeit|attacke|schwäche|resistenz|rückzug|retreat|illus\\.?|regel|damage|schaden|draw|discard|heal|switch|search|choose|once during).*")
     private val setIdentifierPattern = Regex("(?i)(?<![A-Z0-9])(?:SV|SWSH|SM|XY|BW|DP|HS|EX|ME)\\s*[- ]?\\d{1,3}(?![A-Z0-9])")
@@ -251,6 +252,15 @@ internal object CardTextParser {
     // title or attack text can never become a set marker.
     private val compactThreeLetterBorderSetCodePattern = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})(?![A-Z0-9])[-_]?\\s*(?=[0-9OIlSBZg]{1,4}\\s*[/|])")
     private val threeLetterSetCodeBeforeSingleNumber = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})(?![A-Z0-9])[-_ ]+(?=[0-9OIlSBZg]{1,4}(?:\\s|$))")
+    // Source-declared anniversary and legacy markers can be alpha-numeric
+    // (for example 30C). They remain bound to the collector number and must
+    // contain both a letter and a digit; registry verification is still final.
+    private val alphaNumericBorderSetCodePattern = Regex(
+        "(?i)(?<![A-Z0-9])(?=[A-Z0-9]{2,6}(?![A-Z0-9]))(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*[0-9])([A-Z0-9]{2,6})(?![A-Z0-9])[-_ ]*(?=[0-9OIlSBZg]{1,4}\\s*[/|])",
+    )
+    private val alphaNumericSetCodeBeforeSingleNumber = Regex(
+        "(?i)(?<![A-Z0-9])(?=[A-Z0-9]{2,6}(?![A-Z0-9]))(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*[0-9])([A-Z0-9]{2,6})(?![A-Z0-9])[-_ ]+(?=[0-9OIlSBZg]{1,4}(?:\\s|$))",
+    )
     // Foil glare can attach one stray OCR letter to the printed code (e.g. CRIm). Only a
     // source-verified three-letter prefix directly followed by the collector number is usable.
     private val noisyFourLetterSetPrefixBeforeNumber = Regex("(?i)(?<![A-Z0-9])([A-Z]{3})[A-Z](?![A-Z0-9])[-_ ]+(?=[0-9OIlSBZg]{1,4}(?:\\s*[/|oO]\\s*[0-9OIlSBZg]{1,4})?)")
@@ -310,6 +320,8 @@ internal object CardTextParser {
                 .replace(Regex("\\s+"), " ")
                 .trim()
             val printedCandidates = listOfNotNull(
+                alphaNumericBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1),
+                alphaNumericSetCodeBeforeSingleNumber.find(lowerBorder)?.groupValues?.get(1),
                 threeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1),
                 compactThreeLetterBorderSetCodePattern.find(lowerBorder)?.groupValues?.get(1),
                 threeLetterSetCodeBeforeSingleNumber.find(lowerBorder)?.groupValues?.get(1),
@@ -379,63 +391,117 @@ internal object CardTextParser {
         val numberIndex = tokens.indexOfFirst { Regex("\\d{1,4}/\\d{1,4}").matches(it) }
         if (numberIndex < 0) return null
         return tokens.take(numberIndex).takeLast(5).asReversed()
-            .firstOrNull { token -> token.length == 3 && token.all(Char::isLetter) && token != "DE" }
+            .firstOrNull { token ->
+                token.length in 2..6 && token.any(Char::isLetter) &&
+                    token != "DE" && PokemonSetRegistry.isVerifiedPrintedCode(token)
+            }
     }
 }
 
-internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) : AutoCloseable {
+internal class CardTextAnalyzer(
+    @Suppress("UNUSED_PARAMETER") context: Context,
+    private val analysisTimeoutMillis: Long = 18_000L,
+    private val normalize: (File, Boolean) -> NormalizedCardCapture = CardImageNormalizer::normalize,
+) : AutoCloseable {
     // The live beta path is deliberately bounded to the on-device Latin recognizer.
     // Waiting for optional CJK modules could leave a captured card in an endless
     // "analysis running" state on offline/emulator devices. A German/English card
     // therefore always reaches its truthful candidate/manual continuation promptly.
-    private val recognizers: Map<CardScript, TextRecognizer> = mapOf(
-        CardScript.LATIN to TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS),
-    )
     // Module 1 uses OpenCV and must never run in the camera callback or Compose main dispatcher.
     // One slot matches the scanner queue's bounded worker count, keeping memory and native work
     // predictable even when a collector captures a series quickly.
     private val preprocessingExecutor = Executors.newFixedThreadPool(ScanQueuePolicy.MAX_PARALLEL_WORKERS)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val sessions = java.util.concurrent.ConcurrentHashMap.newKeySet<AnalysisSession>()
+    private val closed = AtomicBoolean(false)
+
+    private inner class AnalysisSession(val callback: (Result<CardTextAnalysis>) -> Unit) : AutoCloseable {
+        val resources = ScanTaskResources<Bitmap> { if (!it.isRecycled) it.recycle() }
+        val readings = mutableMapOf<OcrReadKey, String>()
+        // A timed-out recognizer must not retain an unbounded queue ahead of the next scan.
+        val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+        private var recognizerCreated = false
+        private val timeout = Runnable { finish(Result.failure(TimeoutException("Die Kartenanalyse hat zu lange gedauert. Bitte erneut versuchen."))) }
+        private val completion = ScanTaskCompletion<Result<CardTextAnalysis>> { result ->
+            mainHandler.removeCallbacks(timeout)
+            // Cleanup is ordered after any currently running native preprocessing operation.
+            // Active OCR inputs remain leased until ML Kit's actual completion callback.
+            val cleanup = Runnable {
+                resources.close(result.getOrNull()?.normalizedCard)
+                if (recognizerCreated) recognizer.close()
+                sessions.remove(this)
+            }
+            try { preprocessingExecutor.execute(cleanup) } catch (_: RejectedExecutionException) { cleanup.run() }
+            mainHandler.post { callback(result) }
+        }
+        val isFinished get() = completion.isFinished
+        fun start() { mainHandler.postDelayed(timeout, analysisTimeoutMillis) }
+        fun finish(result: Result<CardTextAnalysis>) { completion.complete(result) }
+        fun execute(block: () -> Unit) {
+            if (isFinished) return
+            try {
+                preprocessingExecutor.execute {
+                    if (!isFinished) try { block() } catch (error: Throwable) { finish(Result.failure(error)) }
+                }
+            } catch (error: RejectedExecutionException) { finish(Result.failure(error)) }
+        }
+        fun recognizer(): TextRecognizer { recognizerCreated = true; return recognizer }
+        override fun close() { finish(Result.failure(CancellationException("Kartenanalyse abgebrochen."))) }
+    }
 
     fun analyze(
         file: File,
         allowManualWholeImageFallback: Boolean = false,
         onComplete: (Result<CardTextAnalysis>) -> Unit,
-    ) {
-        preprocessingExecutor.execute { analyzeNormalized(file, allowManualWholeImageFallback, onComplete) }
+    ): AutoCloseable {
+        val session = AnalysisSession(onComplete)
+        sessions += session
+        if (closed.get()) session.close() else {
+            session.start()
+            session.execute { analyzeNormalized(file, allowManualWholeImageFallback, session) }
+        }
+        return session
     }
 
     suspend fun analyzeAwait(file: File, allowManualWholeImageFallback: Boolean = false): Result<CardTextAnalysis> = suspendCancellableCoroutine { continuation ->
-        analyze(file, allowManualWholeImageFallback) { result ->
-            if (continuation.isActive) continuation.resume(result)
+        val session = analyze(file, allowManualWholeImageFallback) { result ->
+            if (continuation.isActive) continuation.resume(result) { _, value, _ ->
+                value.getOrNull()?.normalizedCard?.let { if (!it.isRecycled) it.recycle() }
+            }
             else result.getOrNull()?.normalizedCard?.let { bitmap ->
                 if (!bitmap.isRecycled) bitmap.recycle()
             }
         }
+        continuation.invokeOnCancellation { session.close() }
     }
 
     private fun analyzeNormalized(
         file: File,
         allowManualWholeImageFallback: Boolean,
-        onComplete: (Result<CardTextAnalysis>) -> Unit,
+        session: AnalysisSession,
     ) {
-        val normalized = CardImageNormalizer.normalize(file, allowManualWholeImageFallback)
+        val normalized = normalize(file, allowManualWholeImageFallback)
+        (normalized.analysisVariants.map(CanonicalCardAnalysisVariant::bitmap) +
+            listOfNotNull(normalized.bitmap, normalized.recognitionBitmap, normalized.originalCrop))
+            .forEach(session.resources::own)
+        if (session.isFinished) return
         val initialDisplay = normalized.bitmap
         if (initialDisplay == null) {
             // Module 1 is a hard safety gate. A sleeve, binder pocket or arbitrary background
             // must not flow into identity OCR and accidentally become a Binder card.
-            onComplete(Result.success(CardTextAnalysis(emptyList(), null, null, null, emptyList(), imageQuality = normalized.quality)))
+            session.finish(Result.success(CardTextAnalysis(emptyList(), null, null, null, emptyList(), imageQuality = normalized.quality)))
             return
         }
-        normalized.recognitionBitmap?.let { if (!it.isRecycled) it.recycle() }
-        normalized.originalCrop?.let { if (!it.isRecycled) it.recycle() }
         val variants = normalized.analysisVariants.ifEmpty {
             listOf(CanonicalCardAnalysisVariant(AnalysisOrientation.DEG_0, initialDisplay))
         }
+        listOfNotNull(normalized.recognitionBitmap, normalized.originalCrop)
+            .filter { extra -> extra !== initialDisplay && variants.none { it.bitmap === extra } }
+            .forEach(session.resources::release)
         val ocrStarted = SystemClock.elapsedRealtime()
-        val mainHandler = Handler(Looper.getMainLooper())
-        fun finish(result: Result<CardTextAnalysis>) = mainHandler.post { onComplete(result) }
+        fun finish(result: Result<CardTextAnalysis>) = session.finish(result)
         fun recycleVariants(keep: Bitmap? = null) = variants.map(CanonicalCardAnalysisVariant::bitmap).distinct().forEach {
-            if (it !== keep && !it.isRecycled) it.recycle()
+            if (it !== keep) session.resources.release(it)
         }
         fun safeManualResult(reason: String, best: AnalysisOrientationEvidence? = null, margin: Int = 0) {
             val descriptorStarted = SystemClock.elapsedRealtime()
@@ -456,8 +522,8 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
             )))
         }
 
-        val probeInputs = variants.flatMap(::buildOrientationProbeInputs)
-        recognizeBatch(probeInputs, ORIENTATION_TIMEOUT_MILLIS) { probeBatch ->
+        val probeInputs = variants.flatMap { buildOrientationProbeInputs(it, session.resources::own) }
+        recognizeBatch(session, probeInputs, ORIENTATION_TIMEOUT_MILLIS) { probeBatch ->
             try {
                 if (probeBatch.readings.isEmpty()) {
                     safeManualResult("orientation_evidence_insufficient")
@@ -500,18 +566,18 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
                 // already created initialDisplay. Reuse it instead of performing an identical
                 // second 1200x1680 -> 900x1260 filtered scale for the normal upright path.
                 val selectedDisplay = if (selected === variants.first()) initialDisplay else {
-                    Bitmap.createScaledBitmap(
+                    session.resources.own(Bitmap.createScaledBitmap(
                         selected.bitmap,
                         CardScanConfiguration.NORMALIZED_WIDTH,
                         CardScanConfiguration.NORMALIZED_HEIGHT,
                         true,
-                    )
+                    ))
                 }
-                if (initialDisplay !== selectedDisplay && !initialDisplay.isRecycled) initialDisplay.recycle()
+                if (initialDisplay !== selectedDisplay) session.resources.release(initialDisplay)
                 val raritySymbolEvidence = CardRaritySymbolAnalyzer.analyze(selectedDisplay)
-                val inputs = buildOcrInputs(selected.bitmap, null, selected.orientation)
+                val inputs = buildOcrInputs(selected.bitmap, null, selected.orientation, session.resources::own)
                 recycleVariants(selectedDisplay)
-                recognizeBatch(inputs, FULL_OCR_TIMEOUT_MILLIS) { fullBatch ->
+                recognizeBatch(session, inputs, FULL_OCR_TIMEOUT_MILLIS) { fullBatch ->
                     try {
                         if (fullBatch.readings.isEmpty()) {
                             finish(Result.success(CardTextAnalysis(
@@ -555,78 +621,104 @@ internal class CardTextAnalyzer(@Suppress("UNUSED_PARAMETER") context: Context) 
                             descriptorDurationMillis = SystemClock.elapsedRealtime() - descriptorStarted,
                         )))
                     } catch (error: Throwable) {
-                        if (!selectedDisplay.isRecycled) selectedDisplay.recycle()
                         finish(Result.failure(error))
                     }
                 }
             } catch (error: Throwable) {
-                recycleVariants()
-                if (!initialDisplay.isRecycled) initialDisplay.recycle()
                 finish(Result.failure(error))
             }
         }
     }
 
     private fun recognizeBatch(
+        session: AnalysisSession,
         inputs: List<OcrInput>,
         timeoutMillis: Long,
         onComplete: (OcrBatchResult) -> Unit,
     ) {
         if (inputs.isEmpty()) {
-            preprocessingExecutor.execute { onComplete(OcrBatchResult(emptyMap(), IllegalStateException("Keine OCR-ROIs vorhanden."))) }
+            onComplete(OcrBatchResult(emptyMap(), IllegalStateException("Keine OCR-ROIs vorhanden.")))
             return
         }
-        val results = mutableMapOf<CardScript, MutableMap<Int, String>>()
+        if (session.isFinished) return
+        val results = mutableMapOf<Int, String>()
         val failures = mutableListOf<Throwable>()
-        val lock = Any()
-        val gate = SingleAnalysisDeliveryGate()
-        val handler = Handler(Looper.getMainLooper())
-        val inputsReleased = AtomicBoolean(false)
-        var remaining = recognizers.size * inputs.size
-        fun releaseInputs() {
-            if (inputsReleased.compareAndSet(false, true)) {
-                inputs.map(OcrInput::bitmap).distinct().forEach { if (!it.isRecycled) it.recycle() }
+        var delivered = false
+        var next = 0
+        var running = 0
+        // Keys include the exact ROI, preprocessing, dimensions and orientation. Preserve every
+        // original evidence slot, but do not run ML Kit again on pixels already read by probes.
+        val pending = inputs.withIndex().groupBy { it.value.key }.values.filter { group ->
+            val cached = session.readings[group.first().value.key]
+            if (cached != null) {
+                group.forEach { results[it.index] = cached; session.resources.release(it.value.bitmap) }
+                false
+            } else {
+                group.drop(1).forEach { session.resources.release(it.value.bitmap) }
+                true
             }
         }
-        fun deliver(readings: Map<CardScript, Map<Int, String>>, failure: Throwable?) {
-            gate.claim {
-                handler.removeCallbacksAndMessages(null)
-                preprocessingExecutor.execute { onComplete(OcrBatchResult(readings, failure)) }
+        lateinit var timeout: Runnable
+        fun deliver(failure: Throwable? = null) {
+            if (delivered || session.isFinished) return
+            delivered = true
+            mainHandler.removeCallbacks(timeout)
+            pending.drop(next).forEach { session.resources.release(it.first().value.bitmap) }
+            val snapshot = if (results.isEmpty()) emptyMap() else mapOf(CardScript.LATIN to results.toMap())
+            onComplete(OcrBatchResult(snapshot, failure))
+        }
+        timeout = Runnable {
+            session.execute {
+                deliver(if (results.isEmpty()) TimeoutException("Lokale Texterkennung hat kein Ergebnis geliefert.") else null)
             }
         }
-        handler.postDelayed({
-            val partial = synchronized(lock) { results.mapValues { it.value.toMap() } }
-            deliver(partial, if (partial.isEmpty()) TimeoutException("Lokale Texterkennung hat kein Ergebnis geliefert.") else null)
-        }, timeoutMillis)
-        recognizers.forEach { (script, recognizer) ->
-            inputs.forEachIndexed { imageIndex, input ->
-                recognizer.process(input.image)
-                    .addOnSuccessListener { text ->
-                        synchronized(lock) { results.getOrPut(script, ::mutableMapOf)[imageIndex] = text.text }
-                    }
-                    .addOnFailureListener { error -> synchronized(lock) { failures += error } }
-                    .addOnCompleteListener {
-                        val terminal = synchronized(lock) {
-                            remaining -= 1
-                            if (remaining == 0) results.mapValues { it.value.toMap() } else null
+        mainHandler.postDelayed(timeout, timeoutMillis)
+        fun launchNext() {
+            while (!delivered && !session.isFinished && running < MAX_IN_FLIGHT_OCR && next < pending.size) {
+                val group = pending[next++]
+                val input = group.first().value
+                if (!session.resources.lease(input.bitmap)) break
+                running += 1
+                try {
+                    session.recognizer().process(input.image).addOnCompleteListener(DIRECT_EXECUTOR) { task ->
+                        session.resources.releaseLease(input.bitmap)
+                        session.execute {
+                            session.resources.release(input.bitmap)
+                            running -= 1
+                            if (!delivered) {
+                                if (task.isSuccessful) {
+                                    val reading = task.result.text
+                                    session.readings[input.key] = reading
+                                    group.forEach { results[it.index] = reading }
+                                } else task.exception?.let(failures::add)
+                                launchNext()
+                            }
                         }
-                        if (terminal != null) {
-                            releaseInputs()
-                            deliver(terminal, if (terminal.isEmpty()) failures.firstOrNull() else null)
-                        }
                     }
+                } catch (error: Throwable) {
+                    session.resources.releaseLease(input.bitmap)
+                    session.resources.release(input.bitmap)
+                    running -= 1
+                    failures += error
+                }
             }
+            if (running == 0 && next == pending.size) deliver(if (results.isEmpty()) failures.firstOrNull() else null)
         }
+        launchNext()
     }
 
     override fun close() {
-        preprocessingExecutor.shutdownNow()
-        recognizers.values.forEach(TextRecognizer::close)
+        if (!closed.compareAndSet(false, true)) return
+        sessions.toList().forEach(AnalysisSession::close)
+        // Let queued cleanup follow native preprocessing; shutdownNow could discard it.
+        preprocessingExecutor.shutdown()
     }
 
     private companion object {
         const val ORIENTATION_TIMEOUT_MILLIS = 5_000L
         const val FULL_OCR_TIMEOUT_MILLIS = 9_000L
+        const val MAX_IN_FLIGHT_OCR = 2
+        val DIRECT_EXECUTOR = java.util.concurrent.Executor { it.run() }
     }
 }
 
@@ -650,6 +742,16 @@ private data class OcrInput(
     val variantId: String,
     val isTightIdentityStrip: Boolean,
     val orientation: AnalysisOrientation? = null,
+    val key: OcrReadKey,
+)
+
+/** Deliberately excludes profile/region labels: those may describe the same exact pixels. */
+internal data class OcrReadKey(
+    val roi: CardRoi,
+    val variant: String,
+    val orientation: AnalysisOrientation?,
+    val sourceWidth: Int,
+    val sourceHeight: Int,
 )
 
 private fun parseOcrSnapshot(
@@ -705,11 +807,11 @@ private fun parseOcrSnapshot(
     return ParsedOcrSnapshot(parsed, evidence, dynamicEvidenceUsed)
 }
 
-private fun cropAtReadableScale(source: Bitmap, roi: CardRoi): Bitmap {
-    val crop = roi.crop(source)
+private fun cropAtReadableScale(source: Bitmap, roi: CardRoi, own: (Bitmap) -> Bitmap): Bitmap {
+    val crop = own(roi.crop(source))
     if (roi.bottom - roi.top > .12f) return crop
     val scale = if (roi.bottom - roi.top <= .10f) 3 else 2
-    return Bitmap.createScaledBitmap(crop, crop.width * scale, crop.height * scale, true).also { crop.recycle() }
+    return own(Bitmap.createScaledBitmap(crop, crop.width * scale, crop.height * scale, true)).also { crop.recycle() }
 }
 
 // These are the bounded top/lower crops used by the last pre-ROI recognition path. They remain
@@ -718,14 +820,14 @@ private fun cropAtReadableScale(source: Bitmap, roi: CardRoi): Bitmap {
 internal val historicalNameFallbackRoi = CardRoi(0f, 0f, 1f, .34f)
 internal val historicalIdentityFallbackRoi = CardRoi(0f, .58f, 1f, 1f)
 
-private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant): List<OcrInput> {
+private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant, own: (Bitmap) -> Bitmap): List<OcrInput> {
     val modern = CardOcrRois.profiles.first { it.id == "modern" }
     val identityStrip = CardOcrRois.profiles.first { it.id == "full_art_left" }.number
     val extendedBorder = CardOcrRois.profiles.first { it.id == "extended_lower_border" }.set.union(
         CardOcrRois.profiles.first { it.id == "extended_lower_border" }.number,
     )
     fun original(regions: Set<CardOcrRegion>, roi: CardRoi, profile: String, tight: Boolean = false): OcrInput {
-        val crop = cropAtReadableScale(variant.bitmap, roi)
+        val crop = cropAtReadableScale(variant.bitmap, roi, own)
         return OcrInput(
             regions,
             InputImage.fromBitmap(crop, 0),
@@ -735,11 +837,12 @@ private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant): 
             variantId = "original",
             isTightIdentityStrip = tight,
             orientation = variant.orientation,
+            key = OcrReadKey(roi, "original", variant.orientation, variant.bitmap.width, variant.bitmap.height),
         )
     }
     fun enhanced(regions: Set<CardOcrRegion>, roi: CardRoi, profile: String, tight: Boolean = false): OcrInput {
-        val crop = cropAtReadableScale(variant.bitmap, roi)
-        val enhanced = enhanceForOcr(crop)
+        val crop = cropAtReadableScale(variant.bitmap, roi, own)
+        val enhanced = own(enhanceForOcr(crop))
         crop.recycle()
         return OcrInput(
             regions,
@@ -750,14 +853,15 @@ private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant): 
             variantId = "enhanced",
             isTightIdentityStrip = tight,
             orientation = variant.orientation,
+            key = OcrReadKey(roi, "enhanced", variant.orientation, variant.bitmap.width, variant.bitmap.height),
         )
     }
     fun rc3Variants(region: CardOcrRegion, roi: CardRoi, profile: String, inverted: Boolean = false): List<OcrInput> {
         // All variants use the same pixels. Crop once and derive enhanced/inverted views from
         // that crop; this preserves the exact OCR evidence while avoiding duplicate bitmap work.
         val regions = setOf(region)
-        val crop = cropAtReadableScale(variant.bitmap, roi)
-        val enhancedBitmap = enhanceForOcr(crop)
+        val crop = cropAtReadableScale(variant.bitmap, roi, own)
+        val enhancedBitmap = own(enhanceForOcr(crop))
         val result = mutableListOf(
             OcrInput(
                 regions,
@@ -768,6 +872,7 @@ private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant): 
                 variantId = "original",
                 isTightIdentityStrip = false,
                 orientation = variant.orientation,
+                key = OcrReadKey(roi, "original", variant.orientation, variant.bitmap.width, variant.bitmap.height),
             ),
             OcrInput(
                 regions,
@@ -778,10 +883,11 @@ private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant): 
                 variantId = "enhanced",
                 isTightIdentityStrip = false,
                 orientation = variant.orientation,
+                key = OcrReadKey(roi, "enhanced", variant.orientation, variant.bitmap.width, variant.bitmap.height),
             ),
         )
         if (inverted) {
-            val invertedBitmap = invertForOcr(enhancedBitmap)
+            val invertedBitmap = own(invertForOcr(enhancedBitmap))
             result += OcrInput(
                 regions,
                 InputImage.fromBitmap(invertedBitmap, 0),
@@ -791,6 +897,7 @@ private fun buildOrientationProbeInputs(variant: CanonicalCardAnalysisVariant): 
                 variantId = "inverted",
                 isTightIdentityStrip = false,
                 orientation = variant.orientation,
+                key = OcrReadKey(roi, "inverted", variant.orientation, variant.bitmap.width, variant.bitmap.height),
             )
         }
         return result
@@ -819,6 +926,7 @@ private fun buildOcrInputs(
     bitmap: Bitmap,
     recognitionBitmap: Bitmap?,
     orientation: AnalysisOrientation? = null,
+    own: (Bitmap) -> Bitmap,
 ): List<OcrInput> {
     fun variants(
         regions: Set<CardOcrRegion>,
@@ -827,18 +935,22 @@ private fun buildOcrInputs(
         profileId: String,
         inverted: Boolean = false,
     ): List<OcrInput> {
-        val crop = cropAtReadableScale(bitmap, roi)
-        val enhanced = recognitionBitmap?.let { cropAtReadableScale(it, roi) } ?: enhanceForOcr(crop)
+        val crop = cropAtReadableScale(bitmap, roi, own)
+        val enhanced = recognitionBitmap?.let { cropAtReadableScale(it, roi, own) } ?: own(enhanceForOcr(crop))
         val tightIdentity = CardOcrRegion.NUMBER in regions && roi.bottom - roi.top <= .10f
-        val result = mutableListOf(OcrInput(regions, InputImage.fromBitmap(crop, 0), dynamic, crop, profileId, "original", tightIdentity, orientation))
-        if (enhanced !== crop) result += OcrInput(regions, InputImage.fromBitmap(enhanced, 0), dynamic, enhanced, profileId, "enhanced", tightIdentity, orientation)
+        fun input(pixels: Bitmap, preprocessing: String) = OcrInput(
+            regions, InputImage.fromBitmap(pixels, 0), dynamic, pixels, profileId, preprocessing, tightIdentity, orientation,
+            OcrReadKey(roi, preprocessing, orientation, bitmap.width, bitmap.height),
+        )
+        val result = mutableListOf(input(crop, "original"))
+        if (enhanced !== crop) result += input(enhanced, "enhanced")
         if (roi.bottom - roi.top <= .12f) {
-            val thresholded = thresholdForOcr(enhanced)
-            result += OcrInput(regions, InputImage.fromBitmap(thresholded, 0), dynamic, thresholded, profileId, "threshold", tightIdentity, orientation)
+            val thresholded = own(thresholdForOcr(enhanced))
+            result += input(thresholded, "threshold")
         }
         if (inverted) {
-            val invertedBitmap = invertForOcr(enhanced)
-            result += OcrInput(regions, InputImage.fromBitmap(invertedBitmap, 0), dynamic, invertedBitmap, profileId, "inverted", tightIdentity, orientation)
+            val invertedBitmap = own(invertForOcr(enhanced))
+            result += input(invertedBitmap, "inverted")
         }
         return result
     }

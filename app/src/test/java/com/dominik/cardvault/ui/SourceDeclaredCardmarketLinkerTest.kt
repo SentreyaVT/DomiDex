@@ -6,10 +6,14 @@ import com.dominik.cardvault.data.catalog.PokemonVisualCard
 import com.dominik.cardvault.model.CardLanguage
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionCard
+import com.dominik.cardvault.model.CollectionRepository
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.lang.reflect.Proxy
+import kotlinx.coroutines.runBlocking
 
 /** All prices and auxiliary product ids are deterministic local fixtures, never live quotes. */
 class SourceDeclaredCardmarketLinkerTest {
@@ -123,6 +127,30 @@ class SourceDeclaredCardmarketLinkerTest {
 
         assertTrue(binderReferenceCardmarketProducts(slot.copy(sourceSetId = "other-set"), paldea, listOf(paldea), candidates).isEmpty())
         assertTrue(binderReferenceCardmarketProducts(slot.copy(sourceCardId = "sv08.5-001"), paldea, listOf(paldea), candidates).isEmpty())
+    }
+
+    @Test fun oneCharacterCardNameLoadsItsDeclaredProductWithoutNameSearch() = runBlocking {
+        val n = paldea.copy(
+            id = "30th-c-021", name = "N", marketSearchName = "N",
+            set = PokemonSet("30th-c", "30 Jahre: Klassische Sammlung", "Mega-Entwicklung", 0, 30, "", null, "30C"),
+            printVariants = listOf(PokemonPrintVariant("normal", "Normal", "Standard", 907956L)),
+        )
+        var nameSearchCalled = false
+        val repository = Proxy.newProxyInstance(
+            CollectionRepository::class.java.classLoader,
+            arrayOf(CollectionRepository::class.java),
+        ) { _, method, _ ->
+            when (method.name) {
+                "catalogProducts" -> listOf(product(907956L, "N", "6601", 14.56))
+                "searchCatalog" -> { nameSearchCalled = true; emptyList<CatalogSearchResult>() }
+                else -> error("Unexpected repository call: ${method.name}")
+            }
+        } as CollectionRepository
+
+        val loaded = loadVisualCardmarketCandidates(n, repository)
+
+        assertEquals(listOf(907956L), loaded.map { it.productId })
+        assertFalse(nameSearchCalled)
     }
 
     private fun product(id: Long, name: String, expansion: String, trend: Double?, reverse: Double? = null) =

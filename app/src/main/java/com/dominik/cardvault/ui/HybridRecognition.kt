@@ -69,9 +69,13 @@ internal object HybridCandidateFusion {
         val readSet = canonicalMetadata(analysis.setIdentifier.orEmpty())
         val candidateSet = canonicalMetadata(candidate.setCode.orEmpty())
         val readPrintedTotal = analysis.collectorNumber?.let(::printedCollectorDenominator)
-        val printedTotalMatches = readPrintedTotal != null && candidate.mainSetSize == readPrintedTotal
+        val historicClassicNumber = readPrintedTotal != null && candidate.mainSetSize == 0 &&
+            historicClassicPrintedNumberMatches(analysis.collectorNumber, candidate.sourceSetId)
+        val printedTotalMatches = readPrintedTotal != null &&
+            (candidate.mainSetSize == readPrintedTotal || historicClassicNumber)
         val printedTotalContradicts = readPrintedTotal != null &&
             candidate.mainSetSize != null &&
+            !historicClassicNumber &&
             candidate.mainSetSize != readPrintedTotal
         val manualSourceMatches = manualSourceSet.isNotBlank() && candidateSourceSet == manualSourceSet
         val manualSourceContradicts = manualSourceSet.isNotBlank() &&

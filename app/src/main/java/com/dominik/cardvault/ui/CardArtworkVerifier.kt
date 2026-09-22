@@ -3,15 +3,56 @@ package com.dominik.cardvault.ui
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
-import java.net.HttpURLConnection
 import java.util.LinkedHashMap
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.resume
 import kotlin.math.sqrt
 
 internal const val MAX_REFERENCE_ARTWORK_BYTES = 8 * 1024 * 1024
 internal const val MAX_REFERENCE_ARTWORK_EDGE = 1_400
+internal const val ARTWORK_BATCH_TIMEOUT_MILLIS = 7_000L
+
+/** Deduplicate variants sharing artwork, bound network concurrency, preserve every candidate key. */
+internal suspend fun verifyArtworkCandidates(
+    captured: List<ArtworkDescriptor>,
+    references: Map<String, String?>,
+    loadReference: suspend (String) -> ArtworkDescriptor?,
+): Map<String, ArtworkVerification> {
+    val limiter = Semaphore(2)
+    val results = java.util.concurrent.ConcurrentHashMap<String, ArtworkVerification>()
+    withTimeoutOrNull(ARTWORK_BATCH_TIMEOUT_MILLIS) {
+        coroutineScope {
+            references.values.filterNotNull().filter(String::isNotBlank).distinct().map { url ->
+                async {
+                    limiter.withPermit {
+                        val reference = loadReference(url)
+                        results[url] = if (reference == null) ArtworkVerification(ArtworkMatch.UNAVAILABLE)
+                        else CardArtworkVerifier.combineTemporal(captured.map { CardArtworkVerifier.compare(it, reference) })
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+    return references.mapValues { (_, url) -> url?.let(results::get) ?: ArtworkVerification(ArtworkMatch.UNAVAILABLE) }
+}
 
 internal fun referenceArtworkDecodeSample(width: Int, height: Int): Int =
     decodeSampleForLargestEdge(maxOf(width, height).coerceAtLeast(1), MAX_REFERENCE_ARTWORK_EDGE)
@@ -78,18 +119,44 @@ internal object CardArtworkVerifier {
     private val referenceCache = object : LinkedHashMap<String, ArtworkDescriptor>(MAX_REFERENCE_CACHE, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ArtworkDescriptor>?) = size > MAX_REFERENCE_CACHE
     }
+    private val downloads = Semaphore(2)
+    private val artworkClient = OkHttpClient.Builder()
+        .connectTimeout(1_500, TimeUnit.MILLISECONDS)
+        .readTimeout(2_000, TimeUnit.MILLISECONDS)
+        .callTimeout(3_000, TimeUnit.MILLISECONDS)
+        .build()
 
     suspend fun verify(captured: Bitmap, referenceUrl: String?): ArtworkVerification = verify(describe(captured), referenceUrl)
 
-    suspend fun verify(captured: ArtworkDescriptor, referenceUrl: String?): ArtworkVerification = withContext(Dispatchers.IO) {
-        if (referenceUrl.isNullOrBlank()) return@withContext ArtworkVerification(ArtworkMatch.UNAVAILABLE)
-        val reference = synchronized(referenceCache) { referenceCache[referenceUrl] } ?: run {
-            val downloaded = download(referenceUrl) ?: return@withContext ArtworkVerification(ArtworkMatch.UNAVAILABLE)
-            val descriptor = try { describe(downloaded) } finally { downloaded.recycle() }
-            synchronized(referenceCache) { referenceCache[referenceUrl] = descriptor }
-            descriptor
+    suspend fun verify(captured: ArtworkDescriptor, referenceUrl: String?): ArtworkVerification {
+        if (referenceUrl.isNullOrBlank()) return ArtworkVerification(ArtworkMatch.UNAVAILABLE)
+        val reference = referenceDescriptor(referenceUrl) ?: return ArtworkVerification(ArtworkMatch.UNAVAILABLE)
+        return compare(captured, reference)
+    }
+
+    suspend fun verifyCandidates(captured: List<ArtworkDescriptor>, references: Map<String, String?>): Map<String, ArtworkVerification> =
+        verifyArtworkCandidates(captured, references, ::referenceDescriptor)
+
+    private suspend fun referenceDescriptor(url: String): ArtworkDescriptor? {
+        synchronized(referenceCache) { referenceCache[url] }?.let { return it }
+        return downloads.withPermit {
+            synchronized(referenceCache) { referenceCache[url] }?.let { return@withPermit it }
+            val encoded = download(url) ?: return@withPermit null
+            withContext(Dispatchers.Default) {
+                coroutineContext.ensureActive()
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(encoded, 0, encoded.size, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+                val bitmap = BitmapFactory.decodeByteArray(encoded, 0, encoded.size, BitmapFactory.Options().apply {
+                    inSampleSize = referenceArtworkDecodeSample(bounds.outWidth, bounds.outHeight)
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }) ?: return@withContext null
+                try {
+                    coroutineContext.ensureActive()
+                    describe(bitmap).also { descriptor -> synchronized(referenceCache) { referenceCache[url] = descriptor } }
+                } finally { bitmap.recycle() }
+            }
         }
-        compare(captured, reference)
     }
 
     internal fun compare(captured: Bitmap, reference: Bitmap): ArtworkVerification = compare(describe(captured), describe(reference))
@@ -248,31 +315,27 @@ internal object CardArtworkVerifier {
         return bitmap.getPixel(x, y)
     }
 
-    private fun download(url: String): Bitmap? = runCatching {
-        val connection = (java.net.URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 4_000
-            readTimeout = 6_000
-            useCaches = true
-            setRequestProperty("User-Agent", "DomiDex/1.0 scanner artwork verification")
-        }
-        try {
-            if (connection.responseCode !in 200..299 || connection.contentLengthLong > MAX_REFERENCE_ARTWORK_BYTES) {
-                null
-            } else {
-                val encoded = connection.inputStream.use(::readBoundedReferenceArtwork) ?: return@runCatching null
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(encoded, 0, encoded.size, bounds)
-                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
-                BitmapFactory.decodeByteArray(
-                    encoded,
-                    0,
-                    encoded.size,
-                    BitmapFactory.Options().apply {
-                        inSampleSize = referenceArtworkDecodeSample(bounds.outWidth, bounds.outHeight)
-                        inPreferredConfig = Bitmap.Config.ARGB_8888
-                    },
-                )
+    private suspend fun download(url: String): ByteArray? = suspendCancellableCoroutine { continuation ->
+        val request = runCatching {
+            Request.Builder().url(url).header("User-Agent", "DomiDex scanner artwork verification").build()
+        }.getOrNull()
+        if (request == null) { continuation.resume(null); return@suspendCancellableCoroutine }
+        val call = artworkClient.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) continuation.resume(null)
             }
-        } finally { connection.disconnect() }
-    }.getOrNull()
+
+            override fun onResponse(call: Call, response: Response) {
+                val encoded = response.use {
+                    val body = response.body
+                    if (!continuation.isActive || !response.isSuccessful || body == null ||
+                        body.contentLength() > MAX_REFERENCE_ARTWORK_BYTES) null
+                    else runCatching { body.byteStream().use(::readBoundedReferenceArtwork) }.getOrNull()
+                }
+                if (continuation.isActive) continuation.resume(encoded)
+            }
+        })
+    }
 }

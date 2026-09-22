@@ -213,6 +213,7 @@ internal object CardImageNormalizer {
         val adaptive = Mat()
         val luminance = Mat()
         val hierarchy = Mat()
+        val bitmapResources = ScanTaskResources<Bitmap> { if (!it.isRecycled) it.recycle() }
         try {
             Utils.bitmapToMat(source, sourceMat)
             Imgproc.cvtColor(sourceMat, gray, Imgproc.COLOR_RGBA2GRAY)
@@ -298,18 +299,18 @@ internal object CardImageNormalizer {
             } else {
                 AnalysisOrientation.DEG_90
             }
-            val preferredRecognition = warp(
+            val preferredRecognition = bitmapResources.own(warp(
                 sourceMat,
                 cornersForAnalysisOrientation(candidate.corners, preferredOrientation),
                 CardScanConfiguration.RECOGNITION_WIDTH,
                 CardScanConfiguration.RECOGNITION_HEIGHT,
-            )
-            val output = Bitmap.createScaledBitmap(
+            ))
+            val output = bitmapResources.own(Bitmap.createScaledBitmap(
                 preferredRecognition,
                 CardScanConfiguration.NORMALIZED_WIDTH,
                 CardScanConfiguration.NORMALIZED_HEIGHT,
                 true,
-            )
+            ))
             val perspectiveDuration = SystemClock.elapsedRealtime() - perspectiveStarted
             val quality = evaluate(output, candidate).copy(
                 geometryDurationMillis = geometryFinished - geometryStarted,
@@ -323,8 +324,8 @@ internal object CardImageNormalizer {
                 quality.exposure >= CardScanConfiguration.MIN_EXPOSURE &&
                 quality.glare <= CardScanConfiguration.MAX_RECOGNITION_GLARE
             if (quality.reason.isNotBlank() && !softCardReview) {
-                output.recycle()
-                preferredRecognition.recycle()
+                bitmapResources.release(output)
+                bitmapResources.release(preferredRecognition)
                 return NormalizedCardCapture(null, quality, normalizedCorners)
             }
             // A 63:88 quadrilateral has only two aspect-correct canonical mappings. Cyclic shifts
@@ -348,23 +349,27 @@ internal object CardImageNormalizer {
             val variants = aspectCorrectOrientations.map { orientation ->
                 CanonicalCardAnalysisVariant(
                     orientation = orientation,
-                    bitmap = if (orientation == preferredOrientation && !softCardReview) preferredRecognition else warp(
+                    bitmap = if (orientation == preferredOrientation && !softCardReview) preferredRecognition else bitmapResources.own(warp(
                         sourceMat,
                         cornersForAnalysisOrientation(recognitionCorners, orientation),
                         CardScanConfiguration.RECOGNITION_WIDTH,
                         CardScanConfiguration.RECOGNITION_HEIGHT,
-                    ),
+                    )),
                 )
             }
-            if (softCardReview) preferredRecognition.recycle()
+            if (softCardReview) bitmapResources.release(preferredRecognition)
             return NormalizedCardCapture(
                 bitmap = output,
                 quality = if (softCardReview) quality.copy(reason = MANUAL_SOFT_CARD_FALLBACK_REASON) else quality,
                 corners = normalizedCorners,
-                originalCrop = boundingCrop(source, candidate.corners),
+                originalCrop = boundingCrop(source, candidate.corners)?.let(bitmapResources::own),
                 analysisVariants = variants,
-            )
+            ).also { result ->
+                (result.analysisVariants.map(CanonicalCardAnalysisVariant::bitmap) +
+                    listOfNotNull(result.bitmap, result.originalCrop)).forEach(bitmapResources::transfer)
+            }
         } finally {
+            bitmapResources.close()
             sourceMat.release(); gray.release(); normalized.release(); rawBlurred.release(); normalizedBlurred.release()
             edges.release(); contrastEdges.release(); boundaryEdges.release(); structureDensity.release(); foregroundMask.release(); adaptive.release(); luminance.release(); hierarchy.release()
         }
@@ -546,7 +551,7 @@ internal object CardImageNormalizer {
         val output = Mat(outputHeight, outputWidth, source.type())
         try {
             Imgproc.warpPerspective(source, output, transform, output.size(), Imgproc.INTER_CUBIC)
-            return Bitmap.createBitmap(output.cols(), output.rows(), Bitmap.Config.ARGB_8888).also { Utils.matToBitmap(output, it) }
+            return bitmapFromMat(output)
         } finally { sourcePoints.release(); targetPoints.release(); transform.release(); output.release() }
     }
 
@@ -622,8 +627,14 @@ internal object CardImageNormalizer {
             // OCR-only derivative and never replaces the original artwork image or invents data.
             Imgproc.GaussianBlur(enhanced, blurred, Size(0.0, 0.0), 1.05)
             Core.addWeighted(enhanced, 1.48, blurred, -.48, 0.0, sharpened)
-            Bitmap.createBitmap(sharpened.cols(), sharpened.rows(), Bitmap.Config.ARGB_8888).also { Utils.matToBitmap(sharpened, it) }
+            bitmapFromMat(sharpened)
         } finally { rgba.release(); gray.release(); enhanced.release(); blurred.release(); sharpened.release() }
+    }
+
+    private fun bitmapFromMat(mat: Mat): Bitmap {
+        val bitmap = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888)
+        return try { Utils.matToBitmap(mat, bitmap); bitmap }
+        catch (error: Throwable) { bitmap.recycle(); throw error }
     }
 
     private fun boundingCrop(source: Bitmap, corners: List<Point>): Bitmap? = runCatching {

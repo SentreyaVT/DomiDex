@@ -5,6 +5,8 @@ import com.dominik.cardvault.data.catalog.PokemonCatalogMetadataCache
 import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
 import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
+import com.dominik.cardvault.data.catalog.PokemonSetRegistry
+import com.dominik.cardvault.data.catalog.verifiedCardmarketProductId
 import com.dominik.cardvault.data.sync.CardmarketParsers
 import com.dominik.cardvault.model.CardLanguage
 import com.dominik.cardvault.model.CatalogSearchResult
@@ -33,6 +35,8 @@ class AllBinderPriceAuditTest {
     private val root = File(System.getProperty("domidex.audit.dir")
         ?: System.getenv("DOMIDEX_AUDIT_DIR")
         ?: "C:/Users/Dominik/AppData/Local/Temp/domidex-all-binder-audit-20260906")
+    private val output = File(System.getenv("DOMIDEX_AUDIT_OUTPUT") ?: root.absolutePath)
+    private val physicalOnly = System.getenv("DOMIDEX_AUDIT_PHYSICAL_ONLY") == "true"
 
     private data class CardAudit(
         val card: PokemonVisualCard,
@@ -44,12 +48,19 @@ class AllBinderPriceAuditTest {
 
     @Test fun auditEverySourceCardAndActualBinderSlotWithoutChangingACollection() = runBlocking {
         assumeTrue("Optional dated public snapshot is absent: $root", root.isDirectory)
+        output.mkdirs()
         val started = Instant.now().toString()
         val required = listOf("sets-de.json", "cards-de.json", "cards-en.json", "products.json", "prices.json")
         required.forEach { assertTrue("Snapshot input missing: $it", File(root, it).isFile) }
         val catalog = PokemonVisualCatalog(PokemonCatalogMetadataCache()) { url ->
             val file = when {
                 url.endsWith("/de/sets") -> File(root, "sets-de.json")
+                url.endsWith("/en/sets") -> File(root, "sets-en.json")
+                url.contains("/de/sets/") || url.contains("/en/sets/") -> {
+                    val language = if (url.contains("/de/sets/")) "de" else "en"
+                    val setId = URLDecoder.decode(url.substringAfterLast('/'), StandardCharsets.UTF_8.name())
+                    File(root, "sets/$language/$setId.json")
+                }
                 url.contains("/de/cards/") || url.contains("/en/cards/") -> {
                     val cardId = URLDecoder.decode(url.substringAfterLast('/'), StandardCharsets.UTF_8.name())
                     File(root, "cards/$cardId.json")
@@ -59,11 +70,13 @@ class AllBinderPriceAuditTest {
             }
             file.source().buffer()
         }
-        val sets = catalog.sets()
-        assertTrue("No valid German source sets", sets.isNotEmpty())
+        val listedSets = catalog.sets()
+        assertTrue("No valid German source sets", listedSets.isNotEmpty())
         val pocketFile = File(root, "series-tcgp.json")
         val pocketSetIds = if (pocketFile.isFile) rows(objectRow(readJson(pocketFile))["sets"])
             .map { it.text("id") }.toSet() else emptySet()
+        if (physicalOnly) assertTrue("Physical audit needs explicit Pocket classification", pocketFile.isFile)
+        val sets = listedSets.filterNot { physicalOnly && it.id in pocketSetIds }
         val orderedSetIds = sets.map { it.id }.sortedByDescending(String::length)
         val setsById = sets.associateBy { it.id }
         val germanRows = rows(readJson(File(root, "cards-de.json")))
@@ -88,6 +101,15 @@ class AllBinderPriceAuditTest {
             )
             cardsBySet.getOrPut(setId) { mutableListOf() } += card
         }
+        // A complete modern snapshot also exercises production set-card parsing,
+        // including historic collector numbers in Classic Collections and image fallbacks.
+        for (set in sets) {
+            if (File(root, "sets/de/${set.id}.json").isFile || File(root, "sets/en/${set.id}.json").isFile) {
+                val parsed = catalog.cards(set)
+                val parsedIds = parsed.map(PokemonVisualCard::id).toSet()
+                cardsBySet[set.id] = (parsed + cardsBySet[set.id].orEmpty().filterNot { it.id in parsedIds }).toMutableList()
+            }
+        }
         val productsDownload = File(root, "products.json").source().buffer().use(CardmarketParsers::products)
         val pricesDownload = File(root, "prices.json").source().buffer().use(CardmarketParsers::prices)
         val prices = pricesDownload.records.associateBy { it.productId }
@@ -103,6 +125,7 @@ class AllBinderPriceAuditTest {
         }
         val productsByExpansion = products.values.groupBy { it.expansionId }
         val setReports = mutableListOf<Map<String, Any?>>()
+        val printingReports = mutableListOf<Map<String, Any?>>()
         val allSlotStatuses = linkedMapOf<String, Int>()
         val allCardIssues = linkedMapOf<String, Int>()
         var visitedCards = 0
@@ -111,8 +134,8 @@ class AllBinderPriceAuditTest {
         var binderPrintingCount = 0
         var detailSuccesses = 0
         var independentlyVerifiedPricedSlots = 0
-        val slotFile = File(root, "binder-price-audit-slots.csv")
-        val cardFile = File(root, "binder-price-audit-cards.csv")
+        val slotFile = File(output, "binder-price-audit-slots.csv")
+        val cardFile = File(output, "binder-price-audit-cards.csv")
 
         slotFile.bufferedWriter(Charsets.UTF_8).use { slotWriter ->
             cardFile.bufferedWriter(Charsets.UTF_8).use { cardWriter ->
@@ -142,7 +165,7 @@ class AllBinderPriceAuditTest {
                             if (raw.text("id") != source.id) issues += "DETAIL_CARD_ID_MISMATCH"
                             val rawSet = objectRow(raw["set"])
                             if (rawSet.isNotEmpty() && rawSet.text("id") != source.set.id) issues += "DETAIL_SET_ID_MISMATCH"
-                            if (raw.text("localId").isNotBlank() && raw.text("localId") != source.number) issues += "DETAIL_NUMBER_MISMATCH"
+                            if (raw.text("localId").isNotBlank() && raw.text("localId") != (source.sourceLocalId ?: source.number)) issues += "DETAIL_NUMBER_MISMATCH"
                             rawVariants = rows(raw["variants_detailed"]).size
                             if (rawVariants == 0) issues += "SOURCE_VARIANTS_MISSING"
                             catalog.withDeclaredPrintVariants(source).also { detailSuccesses++ }
@@ -177,6 +200,27 @@ class AllBinderPriceAuditTest {
                         (issues + manualIssues).distinct().forEach { increment(setCardIssues, it); increment(allCardIssues, it) }
                         sourcePrintingCount += detailed.printVariants.size
                         binderPrintingCount += printings.size
+                        detailed.printVariants.forEach { printing ->
+                            val exact = linked.filter { it.finish == printing.finish && it.variant == printing.variant }
+                            printingReports += linkedMapOf(
+                                "setId" to detailed.set.id, "sourceCardId" to detailed.id,
+                                "nameDe" to detailed.name.takeIf { detailed.hasGermanLocalizedName },
+                                "displayName" to detailed.name, "hasGermanName" to detailed.hasGermanLocalizedName,
+                                "collectorNumber" to detailed.number, "sourceLocalId" to (detailed.sourceLocalId ?: source.number),
+                                "sourcePrintingId" to printing.id, "finish" to printing.finish, "variant" to printing.variant,
+                                "rarity" to detailed.rarity, "image" to detailed.largeImageUrl,
+                                "scannerCatalogIdentity" to mapOf("setId" to detailed.set.id, "cardId" to detailed.id,
+                                    "collectorNumber" to detailed.number, "setCode" to PokemonSetRegistry.metadata(detailed.set).setCode),
+                                "canonicalBinderPrinting" to (printing in printings),
+                                "declaredOrVerifiedProductId" to printing.cardmarketProductId,
+                                "localVerifiedProductId" to verifiedCardmarketProductId(detailed.id)
+                                    ?.takeIf { it == printing.cardmarketProductId },
+                                "actualProductIds" to exact.map { it.productId }.distinct(),
+                                "actualPrices" to exact.map { it.trendPriceEur },
+                                "priceField" to if (printing.finish.contains("reverse", true)) "trend-holo" else "trend",
+                                "detailStatus" to status, "issues" to (issues + manualIssues).distinct(),
+                            )
+                        }
                         cardWriter.write(csv(listOf(set.id, detailed.id, detailed.name, detailed.number,
                             detailed.hasGermanLocalizedName, status, rawVariants, detailed.printVariants.size, printings.size,
                             ids.joinToString("|"), manualIssues.distinct().joinToString("|"), issues.distinct().joinToString("|"))))
@@ -186,7 +230,7 @@ class AllBinderPriceAuditTest {
                     val detailedCards = audits.map { it.card }
                     val references = detailedCards.flatMap { card -> card.binderPrintVariants().map { reference(card, it) } }
                     // The actual special binder branch can replace all canonical references with source-less rows.
-                    // cardCapacityFor uses the fixed 194-slot master for this source set, even if details failed.
+                    // cardCapacityFor uses the maintained master for this source set, even if details failed.
                     val capacity = if (set.id == "me04") WachsendesChaosMasterSet.cards.size else maxOf(set.total, references.size)
                     val arranged = arrangeBinderCards(set.name, emptyList(), capacity, references)
                     val slotStatuses = linkedMapOf<String, Int>()
@@ -269,7 +313,7 @@ class AllBinderPriceAuditTest {
                             matches.joinToString("|") { "${it.productId}:${it.trendPriceEur}" }, verified, issues.distinct().joinToString("|"))))
                     }
                     setReports += linkedMapOf(
-                        "setId" to set.id, "setName" to set.name, "isPocketSourceSet" to (set.id in pocketSetIds),
+                        "setId" to set.id, "setName" to set.name, "logoUrl" to set.logoUrl, "isPocketSourceSet" to (set.id in pocketSetIds),
                         "declaredPrintedTotal" to set.printedTotal,
                         "declaredTotal" to set.total, "scopedCards" to audits.size,
                         "englishFallbackCards" to audits.count { !it.card.hasGermanLocalizedName },
@@ -296,9 +340,10 @@ class AllBinderPriceAuditTest {
                 "Source-less fallback mappings are never counted as independently verified",
                 "Without a declared product ID only maintained expansion candidates are supplied; Room search and inferred expansion fallback are not exercised",
                 "Missing or invalid detail files remain explicit gaps, including during a partial download",
-                "Brief-union inventory does not separately verify each live set-detail endpoint",
+                "Source set payloads are used when present, otherwise the older brief-only snapshot is explicit",
                 "A successful JUnit run certifies report iteration and output only"),
             "setCount" to sets.size, "rawGermanBriefCount" to germanRows.size, "rawEnglishBriefCount" to englishRows.size,
+            "physicalOnly" to physicalOnly, "listedSets" to listedSets.size,
             "pocketClassificationLoaded" to pocketFile.isFile,
             "includedPocketSetIds" to sets.map { it.id }.filter { it in pocketSetIds },
             "scopedUniqueCards" to cardsBySet.values.sumOf { it.size }, "visitedCards" to visitedCards,
@@ -314,8 +359,12 @@ class AllBinderPriceAuditTest {
             "downloadSummaryAtAuditEnd" to downloadSummary, "sets" to setReports,
             "slotCsv" to slotFile.absolutePath, "cardCsv" to cardFile.absolutePath,
         )
-        val reportFile = File(root, "binder-price-audit-report.json")
+        val reportFile = File(output, "binder-price-audit-report.json")
         reportFile.writeText(Moshi.Builder().build().adapter(Any::class.java).indent("  ").toJson(report), Charsets.UTF_8)
+        val jsonAdapter = Moshi.Builder().build().adapter(Any::class.java)
+        File(output, "production-printings.jsonl").bufferedWriter(Charsets.UTF_8).use { writer ->
+            printingReports.forEach { row -> writer.append(jsonAdapter.toJson(row)).append('\n') }
+        }
         assertEquals("Every scoped card must be visited", cardsBySet.values.sumOf { it.size }, visitedCards)
         assertEquals("Every actual printing must have one CSV row", visitedSlots + 1, slotFile.useLines { it.count() })
         assertEquals("Every source card must have one CSV row", visitedCards + 1, cardFile.useLines { it.count() })

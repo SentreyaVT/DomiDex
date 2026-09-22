@@ -9,9 +9,10 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import com.dominik.cardvault.auth.canUseFirebaseAppBackend
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
-import com.dominik.cardvault.auth.currentFirebaseEntitlementAccount
+import com.dominik.cardvault.auth.currentVerifiedFirebaseEntitlementAccount
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
@@ -21,6 +22,12 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /** Exact-document reads only; Collection sync uses a completely separate session and namespace. */
 internal class FirebaseScanKnowledge(
@@ -30,14 +37,34 @@ internal class FirebaseScanKnowledge(
 ) {
     private val applicationContext = context.applicationContext
     private val store = ScanKnowledgeStore(applicationContext)
+    private val consent = ScanKnowledgeConsent(applicationContext)
 
     fun cached(fingerprint: String): ScanKnowledgeRecord? = store.get(fingerprint)
 
     fun observeRelevant(fingerprint: String, onUpdate: (ScanKnowledgeRecord?) -> Unit): AutoCloseable {
         onUpdate(store.get(fingerprint))
-        if (auth.currentUser == null || !fingerprint.matches(Regex("[a-f0-9]{64}"))) return AutoCloseable { }
-        val listener: ListenerRegistration = firestore.collection("scanKnowledge").document(fingerprint)
+        val uid = canonicalCollectionOwnerUid(auth.currentUser)
+        if (uid == null || !fingerprint.matches(Regex("[a-f0-9]{64}"))) return AutoCloseable { }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val lock = Any()
+        var closed = false
+        var listener: ListenerRegistration? = null
+        val accountListener = FirebaseAuth.AuthStateListener {
+            if (canonicalCollectionOwnerUid(it.currentUser) != uid) synchronized(lock) {
+                closed = true; listener?.remove(); scope.cancel()
+            }
+        }
+        auth.addAuthStateListener(accountListener)
+        scope.launch {
+            val account = try { auth.currentVerifiedFirebaseEntitlementAccount(firestore) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { return@launch }
+            if (account == null || !canUseFirebaseAppBackend(uid, canonicalCollectionOwnerUid(auth.currentUser), account.entitlements)) return@launch
+            synchronized(lock) {
+                if (closed) return@synchronized
+                listener = firestore.collection("scanKnowledge").document(fingerprint)
             .addSnapshotListener { snapshot, error ->
+                if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return@addSnapshotListener
                 if (error != null) {
                     Log.d(LOG_TAG, "ScanKnowledge nicht erreichbar (${error.code}).")
                     return@addSnapshotListener
@@ -46,46 +73,65 @@ internal class FirebaseScanKnowledge(
                 store.put(record)
                 onUpdate(record)
             }
-        return AutoCloseable(listener::remove)
+            }
+        }
+        return AutoCloseable {
+            synchronized(lock) { closed = true; listener?.remove(); scope.cancel() }
+            auth.removeAuthStateListener(accountListener)
+        }
     }
 
     suspend fun enqueue(evidence: ScanKnowledgeEvidence) {
-        val account = runCatching { auth.currentFirebaseEntitlementAccount(forceRefresh = false) }
-            .getOrNull() ?: return
+        val uid = canonicalCollectionOwnerUid(auth.currentUser) ?: return
+        if (!consent.isEnabled(uid)) return
+        val account = try { auth.currentVerifiedFirebaseEntitlementAccount(firestore) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { return }
+            ?: return
         val canonicalUid = canonicalCollectionOwnerUid(auth.currentUser)
-        if (!canUseFirebaseAppBackend(account.uid, canonicalUid, account.entitlements)) return
-        if (store.enqueue(evidence)) ScanKnowledgeScheduler.schedule(applicationContext)
+        if (account.uid != uid || !canUseFirebaseAppBackend(uid, canonicalUid, account.entitlements)) return
+        val queued = consent.ifEnabled(uid) {
+            canonicalCollectionOwnerUid(auth.currentUser) == uid && store.enqueue(uid, evidence)
+        } == true
+        if (queued) ScanKnowledgeScheduler.schedule(applicationContext, uid)
     }
 
     private companion object { const val LOG_TAG = "DomiDexKnowledge" }
 }
 
 internal object ScanKnowledgeScheduler {
-    private const val WORK_NAME = "domidex-scan-knowledge-sync"
+    internal const val INPUT_OWNER_UID = "ownerUid"
     internal val existingWorkPolicy = ExistingWorkPolicy.APPEND_OR_REPLACE
 
-    fun schedule(context: Context) {
+    fun schedule(context: Context, ownerUid: String? = canonicalCollectionOwnerUid(FirebaseAuth.getInstance().currentUser)) {
+        if (ownerUid.isNullOrBlank() || !ScanKnowledgeConsent(context).isEnabled(ownerUid)) return
         val request = OneTimeWorkRequestBuilder<ScanKnowledgeSyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setInputData(workDataOf(INPUT_OWNER_UID to ownerUid))
             .build()
         // Never lose a wake-up that arrives while the current outbox worker is finishing.
-        WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, existingWorkPolicy, request)
+        WorkManager.getInstance(context).enqueueUniqueWork("domidex-scan-knowledge-${scanKnowledgeOwnerKey(ownerUid)}", existingWorkPolicy, request)
     }
 }
 
 internal class ScanKnowledgeSyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
         val auth = FirebaseAuth.getInstance()
+        val consent = ScanKnowledgeConsent(applicationContext)
+        val expectedUid = inputData.getString(ScanKnowledgeScheduler.INPUT_OWNER_UID) ?: return Result.success()
+        if (!consent.isEnabled(expectedUid) || canonicalCollectionOwnerUid(auth.currentUser) != expectedUid) return Result.success()
         suspend fun entitledUid(): String? {
-            val account = auth.currentFirebaseEntitlementAccount(forceRefresh = false) ?: return null
+            if (!consent.isEnabled(expectedUid) || canonicalCollectionOwnerUid(auth.currentUser) != expectedUid) return null
+            val account = auth.currentVerifiedFirebaseEntitlementAccount() ?: return null
             val canonicalUid = canonicalCollectionOwnerUid(auth.currentUser)
             return account.uid.takeIf {
-                canUseFirebaseAppBackend(account.uid, canonicalUid, account.entitlements)
+                account.uid == expectedUid && canUseFirebaseAppBackend(account.uid, canonicalUid, account.entitlements)
             }
         }
         val uid = try {
             entitledUid()
-        } catch (error: Throwable) {
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (error: Exception) {
             Log.w("DomiDexKnowledge", "Entitlement konnte nicht geprüft werden (${error.javaClass.simpleName}).")
             return Result.retry()
         } ?: return Result.success()
@@ -95,13 +141,17 @@ internal class ScanKnowledgeSyncWorker(context: Context, parameters: WorkerParam
             while (true) {
                 val currentUid = try {
                     entitledUid()
-                } catch (error: Throwable) {
+                } catch (cancelled: CancellationException) { throw cancelled
+                } catch (error: Exception) {
                     return Result.retry()
                 }
                 if (currentUid != uid) return Result.success()
-                val pending = store.pending()
+                val pending = store.pending(uid)
                 if (pending.isEmpty()) break
                 pending.forEach { evidence ->
+                    if (entitledUid() != uid || !consent.isEnabled(uid) || canonicalCollectionOwnerUid(auth.currentUser) != uid) {
+                        return Result.success()
+                    }
                     val payload = hashMapOf<String, Any?>(
                     "fingerprint" to evidence.fingerprint,
                     "confirmedCardId" to evidence.confirmedCardId,
@@ -118,15 +168,20 @@ internal class ScanKnowledgeSyncWorker(context: Context, parameters: WorkerParam
                     "observedAtClient" to evidence.observedAtClient,
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
-                    firestore.collection("users").document(uid).collection("scanEvidence")
+                    // The consent lock prevents a queued send from beginning after opt-out.
+                    val task = consent.ifEnabled(uid) {
+                        if (canonicalCollectionOwnerUid(auth.currentUser) != uid) null else
+                        firestore.collection("users").document(uid).collection("scanEvidence")
                         .document(evidence.fingerprint)
                         .set(payload, SetOptions.merge())
-                        .awaitTask()
-                    store.markUploaded(evidence)
+                    } ?: return Result.success()
+                    task.awaitTask()
+                    store.markUploaded(uid, evidence)
                 }
             }
             Result.success()
-        } catch (error: Throwable) {
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (error: Exception) {
             Log.w("DomiDexKnowledge", "ScanKnowledge-Sync wird später wiederholt (${error.javaClass.simpleName}).")
             Result.retry()
         }

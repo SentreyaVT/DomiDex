@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.dominik.cardvault.model.CardLanguage
 import com.dominik.cardvault.model.CollectionCard
 import org.junit.Assert.assertEquals
@@ -286,14 +288,32 @@ class PrivateBinderVisualSelectorsInstrumentedTest {
         }
 
         compose.mainClock.advanceTimeByFrame()
-        val first = compose.onNodeWithTag("stationary-holo").captureToImage().toPixelMap()
+        val firstImage = compose.onNodeWithTag("stationary-holo").captureToImage()
+        val first = firstImage.toPixelMap()
         compose.mainClock.advanceTimeBy(1_250L)
-        val second = compose.onNodeWithTag("stationary-holo").captureToImage().toPixelMap()
+        val secondImage = compose.onNodeWithTag("stationary-holo").captureToImage()
+        val second = secondImage.toPixelMap()
         var changedPixels = 0
+        val changedPixelDetails = mutableListOf<String>()
         for (y in 0 until first.height) {
             for (x in 0 until first.width) {
-                if (rgbDistance(first[x, y], second[x, y]) >= .01f) changedPixels++
+                if (rgbDistance(first[x, y], second[x, y]) >= .01f) {
+                    changedPixels++
+                    if (changedPixelDetails.size < 20) changedPixelDetails +=
+                        "($x,$y): ${first[x, y]} -> ${second[x, y]}"
+                }
             }
+        }
+        if (changedPixels != 0) {
+            // Failure artifacts are synthetic test pixels only, never card photos or user data.
+            val directory = java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "holo-test-diagnostics")
+            directory.mkdirs()
+            listOf("before.png" to firstImage, "after.png" to secondImage).forEach { (name, image) ->
+                java.io.File(directory, name).outputStream().use {
+                    image.asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                }
+            }
+            android.util.Log.w("DomiDexHoloTest", "${first.width}x${first.height}; changed=$changedPixels; ${changedPixelDetails.joinToString("; ")}")
         }
         assertEquals("Holo animated although its card was stationary", 0, changedPixels)
         compose.mainClock.autoAdvance = true

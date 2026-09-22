@@ -216,7 +216,6 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     val confirmationSound = remember { SoftConfirmationSound() }
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     val captureTimeoutHandler = remember { Handler(Looper.getMainLooper()) }
-    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     var quality by remember { mutableStateOf(FrameQuality(QualityLevel.RED, QualityGuidance.HOLD_STILL, 0f, 0f, 0f, 0f, 0f)) }
     var captureMessage by remember { mutableStateOf<Int?>(null) }
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -238,6 +237,9 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         PortraitScannerCamera(context, previewView, selectBestScannerCamera(cameraManager))
     }
     DisposableEffect(camera, lifecycleOwner) {
+        // Lifecycle-owner changes dispose this binding. Its replacement needs a live executor,
+        // not the remembered instance that the previous binding has already shut down.
+        val analysisExecutor = Executors.newSingleThreadExecutor()
         val analyzer = FrameQualityAnalyzer { quality = it }
         camera.bindToLifecycle(lifecycleOwner, analysisExecutor, analyzer) {
             captureMessage = R.string.capture_failed
@@ -487,19 +489,29 @@ internal fun ScannerCaptureStatus(
 @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
 internal fun selectBestScannerCamera(cameraManager: CameraManager): CameraSelector =
     CameraSelector.Builder().addCameraFilter { cameras ->
-        cameras.sortedWith(compareByDescending<androidx.camera.core.CameraInfo> { info ->
-            val characteristics = runCatching { cameraManager.getCameraCharacteristics(Camera2CameraInfo.from(info).cameraId) }.getOrNull()
-            if (characteristics?.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) 1 else 0
-        }.thenByDescending { info ->
+        val capabilities = cameras.associateWith { info ->
             val characteristics = runCatching { cameraManager.getCameraCharacteristics(Camera2CameraInfo.from(info).cameraId) }.getOrNull()
             val map = characteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             val jpeg = map?.getOutputSizes(ImageFormat.JPEG).orEmpty().maxOfOrNull { it.width.toLong() * it.height } ?: 0L
             val yuv = map?.getOutputSizes(ImageFormat.YUV_420_888).orEmpty().maxOfOrNull { it.width.toLong() * it.height } ?: 0L
-            maxOf(jpeg, yuv)
-        }.thenByDescending { info ->
-            val characteristics = runCatching { cameraManager.getCameraCharacteristics(Camera2CameraInfo.from(info).cameraId) }.getOrNull()
-            characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.any { it != CameraCharacteristics.CONTROL_AF_MODE_OFF } == true
-        })
+            val sensorSize = characteristics?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val autofocusModes = characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+            val minimumFocusDistance = characteristics?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+            ScannerCameraCapabilities(
+                isRear = characteristics?.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK,
+                supportsAutoFocus = minimumFocusDistance != 0f && autofocusModes.any {
+                    it == CameraCharacteristics.CONTROL_AF_MODE_AUTO ||
+                        it == CameraCharacteristics.CONTROL_AF_MODE_CONTINUOUS_PICTURE ||
+                        it == CameraCharacteristics.CONTROL_AF_MODE_CONTINUOUS_VIDEO ||
+                        it == CameraCharacteristics.CONTROL_AF_MODE_MACRO
+                },
+                focalLengthMm = characteristics?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull(),
+                sensorWidthMm = sensorSize?.width,
+                sensorHeightMm = sensorSize?.height,
+                maxOutputPixels = maxOf(jpeg, yuv),
+            )
+        }
+        cameras.sortedWith { left, right -> scannerCameraPreference.compare(capabilities.getValue(left), capabilities.getValue(right)) }
     }.build()
 
 internal fun cardFingerprintDifference(first: IntArray, second: IntArray): Float {

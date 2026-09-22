@@ -1,8 +1,22 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function signedIn() { return request.auth != null; }
+    function signedIn() {
+      return request.auth != null
+        && !firestore.exists(/databases/(default)/documents/accountDeletionLocks/$(request.auth.uid))
+        && (!firestore.exists(/databases/(default)/documents/accountAccess/$(request.auth.uid))
+          || firestore.get(/databases/(default)/documents/accountAccess/$(request.auth.uid)).data.get('disabled', false) != true);
+    }
+    function roleAllowed(role) {
+      return !firestore.exists(/databases/(default)/documents/accountAccess/$(request.auth.uid))
+        || firestore.get(/databases/(default)/documents/accountAccess/$(request.auth.uid)).data.get(role, true) == true;
+    }
     function owns(uid) { return signedIn() && request.auth.uid == uid; }
+    function isAdmin() { return signedIn() && request.auth.token.get('admin', false) == true && roleAllowed('admin'); }
+    function hasAppAccess() { return isAdmin() || (signedIn() && request.auth.token.get('appAccess', false) == true && roleAllowed('appAccess')); }
+    function ownsApp(uid) { return owns(uid) && hasAppAccess(); }
+    function isPretester() { return isAdmin() || (signedIn() && request.auth.token.get('pretester', false) == true && roleAllowed('pretester')); }
+
     function validImage() {
       return request.resource != null
         && request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp']
@@ -10,17 +24,14 @@ service firebase.storage {
         && request.resource.size <= 10 * 1024 * 1024;
     }
 
-    // Private user-owned images. No other Firebase UID can read, list, overwrite or delete them.
     match /users/{uid}/{allPaths=**} {
-      allow read, delete: if owns(uid);
-      allow create, update: if owns(uid) && validImage();
+      allow read, delete: if ownsApp(uid);
+      allow create, update: if ownsApp(uid) && validImage();
     }
 
-    // Private intake only. A contribution is not an official/public catalogue image.
-    // The content hash makes retries idempotent; clients cannot overwrite an accepted object.
     match /catalog-contributions/{uid}/{contentHash}/{fileName} {
-      allow read, delete: if owns(uid);
-      allow create: if owns(uid)
+      allow read, delete: if ownsApp(uid);
+      allow create: if ownsApp(uid)
         && validImage()
         && contentHash.matches('[a-f0-9]{64}')
         && fileName.matches('card[.](jpg|png|webp)')
@@ -30,17 +41,28 @@ service firebase.storage {
       allow update: if false;
     }
 
-    // Kept for the existing metadata-backed submission contract.
     match /community-submissions/{uid}/{submissionId}/front.jpg {
-      allow create: if owns(uid) && validImage()
+      allow create: if ownsApp(uid) && validImage()
         && firestore.exists(/databases/(default)/documents/communitySubmissions/$(submissionId))
         && firestore.get(/databases/(default)/documents/communitySubmissions/$(submissionId)).data.submitterUid == uid
         && firestore.get(/databases/(default)/documents/communitySubmissions/$(submissionId)).data.status == 'PENDING_UPLOAD';
-      allow read: if owns(uid);
+      allow read: if ownsApp(uid);
       allow update, delete: if false;
     }
 
-    // Everything not listed above stays private and inaccessible.
-    match /{allPaths=**} { allow read, write: if false; }
+    match /scanner-reference/{allPaths=**} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /scanner-report-images/{reportId}/{fileName} {
+      // Admin included: Firebase metadata reads can mint public downloadtokens.
+      // All image bytes now pass through authenticated server routes using GCS IAM.
+      allow read, write: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
   }
 }

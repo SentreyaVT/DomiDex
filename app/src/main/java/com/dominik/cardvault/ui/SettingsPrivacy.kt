@@ -92,6 +92,7 @@ internal fun PrivacySettingsContent() {
         if (failed) SettingsActionStatus("Der Browser konnte nicht geöffnet werden. Du kannst die Adresse kopieren und selbst aufrufen.", isError = true)
         Text("Datenschutzkontakt: ${AppSupportConfig.displayName}", style = MaterialTheme.typography.bodySmall)
         SelectionContainer { Text(AppSupportConfig.email, style = MaterialTheme.typography.bodySmall) }
+        ScanKnowledgeConsentSettings()
     }
 }
 

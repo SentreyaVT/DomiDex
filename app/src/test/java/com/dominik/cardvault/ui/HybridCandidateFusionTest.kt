@@ -180,6 +180,74 @@ class HybridCandidateFusionTest {
         assertEquals(ScannerDecision.REJECTED, HybridCandidateFusion.decide(ranked).decision)
     }
 
+    @Test fun `classic virtual subset total does not contradict its historic printed denominator`() {
+        val classic = analysis.copy(
+            collectorNumber = "89/149",
+            setIdentifier = "30C",
+            searchQueries = listOf("Solgaleo GX"),
+        )
+        val sourceCard = candidate(1).copy(
+            name = "Solgaleo GX",
+            collectorNumber = "089/149",
+            setCode = "30C",
+            sourceSetId = "30th-c",
+            mainSetSize = 0,
+        )
+
+        val evidence = HybridCandidateFusion.score(classic, sourceCard, null)
+
+        assertTrue(evidence.numberScore > 0)
+        assertTrue(evidence.setScore >= 65)
+        assertTrue("printed_total" !in evidence.contradictions)
+    }
+
+    @Test fun `missing shared set code keeps historic original and classic candidates ambiguous`() {
+        val noSetCode = analysis.copy(
+            collectorNumber = "89/149",
+            setIdentifier = null,
+            searchQueries = listOf("Solgaleo GX"),
+            hasNameRoiEvidence = true,
+        )
+        val historicOriginal = candidate(1).copy(
+            name = "Solgaleo GX",
+            collectorNumber = "089",
+            sourceSetId = "historic",
+            mainSetSize = 149,
+            setCode = "HIS",
+        )
+        val anniversaryClassic = candidate(2).copy(
+            name = "Solgaleo GX",
+            collectorNumber = "89/149",
+            sourceSetId = "30th-c",
+            mainSetSize = 0,
+            setCode = "30C",
+        )
+
+        assertEquals(
+            CardRecognitionRanker.score(noSetCode, historicOriginal),
+            CardRecognitionRanker.score(noSetCode, anniversaryClassic),
+        )
+        val ranked = HybridCandidateFusion.rank(
+            noSetCode,
+            listOf(ScanCandidate(historicOriginal, 95), ScanCandidate(anniversaryClassic, 95)),
+            emptyMap(),
+        )
+        assertEquals(listOf(65, 65), ranked.map { it.evidence?.setScore })
+        assertEquals(ScannerDecision.AMBIGUOUS, HybridCandidateFusion.decide(ranked).decision)
+    }
+
+    @Test fun `unrelated zero-size catalogue cannot bypass a physical denominator contradiction`() {
+        val sourceCard = candidate(1).copy(
+            collectorNumber = "117",
+            sourceSetId = "another-virtual-set",
+            mainSetSize = 0,
+        )
+
+        val evidence = HybridCandidateFusion.score(analysis, sourceCard, null)
+
+        assertTrue("printed_total" in evidence.contradictions)
+    }
+
     @Test fun `verified set and collector cannot override contradictory physical denominator`() {
         val noisyPrintedTotal = analysis.copy(collectorNumber = "117/080")
         val canonicalSourceCard = candidate(1).copy(mainSetSize = 84, collectorNumber = "117")

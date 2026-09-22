@@ -13,9 +13,10 @@ import java.text.Normalizer
  * Shared TCGdex -> Cardmarket bridge used by both manual set selection and the scanner.
  *
  * Cardmarket's compact public catalogue deliberately has no collector number.  A product is
- * therefore linkable only after a source-backed expansion has been established and the English
- * TCGdex printing name plus stable print order agree.  No name-only cross-set fallback is used.
+ * therefore linkable only through an exact source/maintained product identity. Equal names,
+ * expansion membership and numeric product order do not prove a collector/printing identity.
  */
+@Suppress("UNUSED_PARAMETER") // Keep existing callers; these hints cannot prove product identity.
 internal fun visualCardmarketProducts(
     card: PokemonVisualCard,
     cardsInSet: List<PokemonVisualCard>,
@@ -43,31 +44,7 @@ internal fun visualCardmarketProducts(
             )
         }.distinctBy { "${it.productId}|${it.finish}|${it.variant}" }
     }
-    val expansionId = resolvedExpansionId ?: card.set.cardmarketExpansionId ?: return emptyList()
-    val searchName = card.marketSearchName ?: card.name
-    val samePrintingCandidates = candidates
-        .asSequence()
-        .filter { it.expansionId == expansionId && cardmarketNameMatches(it.name, searchName) }
-        .distinctBy { it.productId }
-        .sortedBy { it.productId }
-        .toList()
-    if (samePrintingCandidates.isEmpty()) return emptyList()
-
-    val sameNamePrintings = cardsInSet
-        .filter { canonicalCardName(it.marketSearchName ?: it.name) == canonicalCardName(searchName) }
-        .sortedWith(compareBy({ canonicalCollectorNumber(it.number).toIntOrNull() ?: Int.MAX_VALUE }, { it.number }))
-    val printedIndex = sameNamePrintings.indexOfFirst { it.id == card.id }
-    // An incomplete set list must not turn a missing secret printing into its
-    // first, usually main-set, namesake. Preserve the selected source identity.
-    if (printedIndex < 0 || samePrintingCandidates.size != sameNamePrintings.size) return emptyList()
-    return samePrintingCandidates.getOrNull(printedIndex)?.copy(
-        sourceSetId = card.set.id.lowercase(),
-        sourceCardId = card.id.lowercase(),
-        visualSetName = card.set.name,
-        collectorNumber = card.number,
-        imageUrl = card.largeImageUrl,
-        marketSearchName = card.marketSearchName,
-    )?.let(::listOf).orEmpty()
+    return emptyList()
 }
 
 /** Select one exact source printing without falling through to another special product. */
@@ -75,14 +52,12 @@ internal fun visualCardmarketProductForPrinting(
     printing: PokemonPrintVariant,
     products: List<CatalogSearchResult>,
 ): CatalogSearchResult? {
-    val exact = products.firstOrNull { product ->
-        (printing.cardmarketProductId == null || product.productId == printing.cardmarketProductId) &&
+    val productId = printing.cardmarketProductId ?: return null
+    return products.firstOrNull { product ->
+        product.productId == productId &&
             product.finish.equals(printing.finish, ignoreCase = true) &&
             product.variant.equals(printing.variant, ignoreCase = true)
     }
-    if (exact != null || printing.cardmarketProductId != null) return exact
-    // Undeclared legacy fallback produces exactly one verified product.
-    return products.singleOrNull()
 }
 
 /** The normal Binder printing is the default; a priced stamp never replaces it. */
@@ -130,12 +105,12 @@ internal suspend fun loadVisualCardmarketCandidates(
     if (card.set.isPokemonPocketSet()) return emptyList()
     val ids = card.printVariants.mapNotNull { it.cardmarketProductId }.distinct()
     return if (ids.isNotEmpty()) repository.catalogProducts(ids)
-    else repository.searchCatalog(card.marketSearchName ?: card.name, 500)
+    else emptyList()
 }
 
 /**
- * For sets without a maintained source bridge, accept an expansion only when several distinct
- * TCGdex printings independently agree and the best result clearly beats the runner-up.
+ * A maintained expansion bridge or one unambiguous expansion from exact declared product IDs.
+ * Name-voting cannot establish physical set membership and is deliberately excluded.
  */
 internal fun resolveCardmarketExpansionId(
     cards: List<PokemonVisualCard>,
@@ -143,17 +118,11 @@ internal fun resolveCardmarketExpansionId(
 ): String? {
     if (cards.any { it.set.isPokemonPocketSet() }) return null
     cards.firstOrNull()?.set?.cardmarketExpansionId?.let { return it }
-    val matches = cards.asSequence().flatMap { card ->
-        val name = card.marketSearchName ?: card.name
-        candidatesByMarketName[name].orEmpty().asSequence()
-            .filter { cardmarketNameMatches(it.name, name) }
-            .map { candidate -> card.id to candidate.expansionId }
-    }.groupBy({ it.second }, { it.first }).mapValues { (_, ids) -> ids.distinct().size }
-    val ranked = matches.entries.sortedByDescending { it.value }
-    val best = ranked.firstOrNull() ?: return null
-    val requiredEvidence = minOf(12, maxOf(3, cards.size / 10))
-    val second = ranked.getOrNull(1)?.value ?: 0
-    return best.key.takeIf { best.value >= requiredEvidence && best.value >= second + 2 }
+    val declaredIds = cards.flatMap { it.printVariants }.mapNotNull { it.cardmarketProductId }.toSet()
+    return candidatesByMarketName.values.asSequence().flatten()
+        .filter { it.hasMarketProduct && it.productId in declaredIds }
+        .map { it.expansionId }.filter { it.isNotBlank() && it != "unknown" }
+        .distinct().toList().singleOrNull()
 }
 
 /** Cardmarket may append attacks/printing information, but the actual base name must agree. */
@@ -218,15 +187,10 @@ internal fun scannerCatalogResult(
 
 /** Pokémon Holo is the regular product; only Reverse Holo uses the alternate price field. */
 internal fun CatalogSearchResult.realTrendFor(finish: String): Double? =
-    if (finish.contains("reverse", ignoreCase = true)) holoTrendPriceEur?.takeUnless { it == 0.0 } else trendPriceEur
+    (if (finish.contains("reverse", ignoreCase = true)) holoTrendPriceEur else trendPriceEur)
+        ?.takeIf { it.isFinite() && it > 0.0 }
 
 private fun canonicalCardName(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFD)
     .lowercase()
     .replace("ß", "ss")
     .filter(Char::isLetterOrDigit)
-
-private fun canonicalCollectorNumber(value: String): String = value
-    .substringBefore('/')
-    .filter(Char::isLetterOrDigit)
-    .trimStart('0')
-    .ifBlank { "0" }

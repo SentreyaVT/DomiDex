@@ -2,6 +2,7 @@ package com.dominik.cardvault.data
 
 import androidx.room.InvalidationTracker
 import androidx.room.withTransaction
+import com.dominik.cardvault.data.catalog.classic30thLocalIdForPrintedCollector
 import com.dominik.cardvault.data.local.*
 import com.dominik.cardvault.data.sync.PRIVATE_SYNC_BINDER
 import com.dominik.cardvault.data.sync.PRIVATE_SYNC_DELETE
@@ -33,11 +34,42 @@ class RoomCollectionRepository(
     private val activeOwnerUid: StateFlow<String> = MutableStateFlow(GUEST_OWNER_UID),
     private val onSyncNeeded: () -> Unit = {},
     private val onKeepCloudConflicts: suspend () -> Int = { 0 },
+    override val cloudState: Flow<com.dominik.cardvault.data.sync.CollectionCloudState> = kotlinx.coroutines.flow.flowOf(com.dominik.cardvault.data.sync.CollectionCloudState(com.dominik.cardvault.data.sync.CollectionCloudStatus.LOCAL_ONLY)),
+    private val verifyGuestClaimOwner: suspend () -> String = { com.dominik.cardvault.auth.requireVerifiedCollectionOwnerForClaim() },
 ) : CollectionRepository {
     private val dao = database.cardVaultDao()
     private val catalogQueries = CatalogQueryCache<CatalogSearchResult>()
     private val catalogObserverMutex = Mutex()
     private var catalogObserverRegistered = false
+
+    override suspend fun exportUserBackup(settingsJson: String): String = withContext(Dispatchers.IO) {
+        com.dominik.cardvault.data.backup.UserBackupStore(database, activeOwnerUid.value).exportJson(org.json.JSONObject(settingsJson))
+    }
+
+    override suspend fun restoreUserBackup(raw: String, journalKey: String?): com.dominik.cardvault.data.backup.UserBackupStore.Result = withContext(Dispatchers.IO) {
+        val owner = activeOwnerUid.value
+        com.dominik.cardvault.data.backup.UserBackupStore(database, owner).restore(raw, journalKey) { activeOwnerUid.value == owner }.also {
+            if (!it.alreadyImported && owner != GUEST_OWNER_UID) onSyncNeeded()
+        }
+    }
+
+    override suspend fun restoreLegacyBackup(raw: String, entries: List<ManualCardInput>, journalKey: String?): Int = withContext(Dispatchers.IO) {
+        require(journalKey == null || journalKey.matches(Regex("backup-file-commit:[a-f0-9-]{36}")))
+        val owner = activeOwnerUid.value
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }
+        database.withTransaction {
+            if (journalKey != null) dao.putMetadata(AppMetadataEntity(journalKey, "done"))
+            val key = "backup-v1:$owner:$hash"
+            if (dao.metadata(key) != null) return@withTransaction 0
+            entries.forEach {
+                check(activeOwnerUid.value == owner) { "Konto während des Imports gewechselt. Bitte erneut versuchen." }
+                addManualCard(it)
+            }
+            check(activeOwnerUid.value == owner) { "Konto während des Imports gewechselt. Bitte erneut versuchen." }
+            dao.putMetadata(AppMetadataEntity(key, "done"))
+            entries.size
+        }
+    }
 
     private suspend fun ensureCatalogObserver() = catalogObserverMutex.withLock {
         if (!catalogObserverRegistered) {
@@ -643,9 +675,11 @@ class RoomCollectionRepository(
     override suspend fun claimGuestCollectionForCurrentUser(): Int {
         val ownerUid = activeOwnerUid.value
         require(ownerUid != GUEST_OWNER_UID) { "Für die Übernahme ist eine Anmeldung erforderlich." }
+        require(verifyGuestClaimOwner() == ownerUid && activeOwnerUid.value == ownerUid) { "Die aktuelle Kontofreigabe konnte nicht bestätigt werden." }
         var claimed = 0
         var privateStateClaimed = false
         database.withTransaction {
+            check(activeOwnerUid.value == ownerUid) { "Konto während der Übernahme gewechselt." }
             val now = System.currentTimeMillis()
             dao.activeGuestEntries().forEach { guest ->
                 val projection = dao.collectionSyncProjection(GUEST_OWNER_UID, guest.syncId)
@@ -735,6 +769,7 @@ class RoomCollectionRepository(
             }
             dao.deleteGuestPrivateBinderPlacements()
             dao.deleteGuestPrivateBinders()
+            check(activeOwnerUid.value == ownerUid) { "Konto während der Übernahme gewechselt." }
         }
         if (claimed > 0 || privateStateClaimed) onSyncNeeded()
         return claimed
@@ -1279,9 +1314,12 @@ internal fun sourceCardIdFromCatalogReference(catalogCardId: String, sourceSetId
     // this changes no stored collection entry or source identity.
     val stem = Regex("^(${Regex.escape(sourceSetId)}-([a-z0-9]+))-.+$", RegexOption.IGNORE_CASE).matchEntire(encoded)
     fun numberKey(value: String) = value.substringBefore('/').filter(Char::isLetterOrDigit).trimStart('0').lowercase()
-    if (stem != null && !collectorNumber.isNullOrBlank() &&
-        stem.groupValues[2].any(Char::isDigit) && numberKey(stem.groupValues[2]) == numberKey(collectorNumber)) {
-        return stem.groupValues[1]
+    if (stem != null && !collectorNumber.isNullOrBlank() && stem.groupValues[2].any(Char::isDigit)) {
+        val sourceLocalId = numberKey(stem.groupValues[2])
+        val collectorConfirmsStem = sourceLocalId == numberKey(collectorNumber)
+        val classicAliasConfirmsStem = sourceSetId.equals("30th-c", ignoreCase = true) &&
+            classic30thLocalIdForPrintedCollector(collectorNumber) == sourceLocalId
+        if (collectorConfirmsStem || classicAliasConfirmsStem) return stem.groupValues[1]
     }
     val printingSuffixes = listOf(
         "-1steditionholofoil", "-unlimitedholofoil", "-reverseholofoil",

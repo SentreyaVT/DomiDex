@@ -52,6 +52,18 @@ class CardTextParserTest {
         assertEquals("198/197", result.collectorNumber)
     }
 
+    @Test fun recognizesVerifiedAlphaNumericAnniversaryCodeOnTheLowerBorder() {
+        val result = CardTextParser.parse(
+            mapOf(CardScript.LATIN to "Mew\nH 30C DE 065/128"),
+            preferredNameText = "Mew",
+            preferredSetText = "H 30C DE 065/128",
+            preferredNumberText = "30C DE 065/128",
+        )
+
+        assertEquals("30C", result.setIdentifier)
+        assertEquals("065/128", result.collectorNumber)
+    }
+
     @Test fun ignoresGermanLanguageMarkerAndKeepsSetCodeAndNumber() {
         val result = CardTextParser.parse(mapOf(CardScript.LATIN to "Raupy\nCRI DE 122/084"))
 

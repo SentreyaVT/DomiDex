@@ -102,6 +102,8 @@ import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
 import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
 import com.dominik.cardvault.data.catalog.PokemonSetRegistry
+import com.dominik.cardvault.data.catalog.classic30thLocalIdForPrintedCollector
+import com.dominik.cardvault.data.catalog.displayCardCount
 import com.dominik.cardvault.data.WachsendesChaosMasterSet
 import com.dominik.cardvault.data.content.ContentUpdateState
 import com.dominik.cardvault.data.feedback.ScanFeedback
@@ -402,6 +404,7 @@ private val relaxedTutorialSteps = listOf(
 }
 
 @Composable private fun AccountSettingsDialog(repository: CollectionRepository, onDismiss: () -> Unit) {
+    val cloudState by repository.cloudState.collectAsState(initial = com.dominik.cardvault.data.sync.CollectionCloudState(com.dominik.cardvault.data.sync.CollectionCloudStatus.CHECKING))
     val guestEntries by repository.guestEntryCount.collectAsState(initial = 0)
     val syncConflicts by repository.syncConflictCount.collectAsState(initial = 0)
     val syncErrors by repository.syncErrorCount.collectAsState(initial = 0)
@@ -443,6 +446,7 @@ private val relaxedTutorialSteps = listOf(
         text = { LazyColumn(modifier = Modifier.heightIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item { Text("Mit deinem Google-Konto erhält deine Sammlung einen eigenen, geschützten Synchronisationsbereich.", color = VaultTextMuted, fontSize = 12.sp) }
             item { GoogleAccountCard() }
+            item { CollectionCloudStatusContent(cloudState) }
             item { SettingsInfoBlock("Firebase / Sync-Status", when {
                 !signedIn -> "Nicht angemeldet · Gastbestand bleibt lokal. Keine Kontosynchronisierung."
                 syncErrors > 0 -> "$syncErrors lokale Syncfehler gemeldet. Änderungen bleiben auf diesem Gerät."
@@ -491,7 +495,7 @@ private val relaxedTutorialSteps = listOf(
                 item { SettingsInfoBlock("Lokaler Bestand gefunden", "$guestEntries lokale Einträge bleiben getrennt, bis du ihre Übernahme ausdrücklich bestätigst.") }
                 item { Button(
                     onClick = { confirmClaim = true },
-                    enabled = signedIn && !claiming,
+                    enabled = signedIn && cloudState.accessConfirmed && !claiming,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(if (signedIn) "Lokalen Bestand übernehmen" else "Zum Übernehmen zuerst anmelden") } }
             } else {
@@ -738,7 +742,8 @@ private fun parseCollectionBackup(raw: String): List<ManualCardInput> {
         for (index in 0 until entries.length()) {
             val item = entries.getJSONObject(index)
             val name = item.optString("name").trim(); val setName = item.optString("setName").trim()
-            if (name.isBlank() || setName.isBlank()) continue
+            require(name.isNotBlank() && setName.isNotBlank()) { "Ein Backup-Eintrag enthält keine eindeutige Kartenangabe." }
+            require(item.optInt("quantity", 1) in 1..999_999) { "Ungültige Kartenmenge im Backup." }
             add(ManualCardInput(
                 name = name, setName = setName, collectorNumber = item.optString("collectorNumber").trim(),
                 language = CardLanguage.fromStorage(item.optString("language", CardLanguage.GERMAN.name)),
@@ -756,37 +761,43 @@ private fun parseCollectionBackup(raw: String): List<ManualCardInput> {
     }
 }
 
-private data class BackupImportPayload(val entries: List<ManualCardInput>, val zipEntries: Map<String, ByteArray> = emptyMap())
+private data class BackupImportPayload(val raw: String, val version: Int, val entryCount: Int, val entries: List<ManualCardInput> = emptyList(), val zipEntries: Map<String, ByteArray> = emptyMap())
 
-private fun writeDomiDexBackup(output: OutputStream, cards: List<CollectionCard>, feedbackStore: ScanFeedbackStore): Int {
-    ZipOutputStream(output.buffered()).use { zip ->
+private fun writeDomiDexBackup(output: OutputStream, snapshot: com.dominik.cardvault.data.backup.BackupPhotos.Export, feedbackStore: ScanFeedbackStore): Int {
+    val bounded = object : java.io.FilterOutputStream(output) {
+        var written = 0L
+        override fun write(value: Int) { require(++written <= 28L * 1024 * 1024) { "Das Backup überschreitet das sichere Dateilimit (28 MB)." }; out.write(value) }
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            written += length
+            require(written <= 28L * 1024 * 1024) { "Das Backup überschreitet das sichere Dateilimit (28 MB)." }
+            out.write(bytes, offset, length)
+        }
+    }
+    ZipOutputStream(bounded.buffered()).use { zip ->
         zip.putNextEntry(java.util.zip.ZipEntry("collection.json"))
-        zip.write(collectionBackupJson(cards).toByteArray(Charsets.UTF_8))
+        zip.write(snapshot.raw.toByteArray(Charsets.UTF_8))
         zip.closeEntry()
+        snapshot.files.forEach { (path, bytes) -> zip.putNextEntry(java.util.zip.ZipEntry(path)); zip.write(bytes); zip.closeEntry() }
         return feedbackStore.exportTo(zip)
     }
 }
 
-private fun readDomiDexBackup(input: InputStream): BackupImportPayload {
-    val raw = input.readBytes()
-    require(raw.size <= 28 * 1024 * 1024) { "Die Backup-Datei ist zu groß." }
-    if (raw.size < 4 || raw[0] != 'P'.code.toByte() || raw[1] != 'K'.code.toByte()) {
-        return BackupImportPayload(parseCollectionBackup(raw.toString(Charsets.UTF_8)))
-    }
-    val files = linkedMapOf<String, ByteArray>()
-    ZipInputStream(ByteArrayInputStream(raw)).use { zip ->
-        var entry = zip.nextEntry
-        while (entry != null) {
-            require(!entry.isDirectory && entry.name.length <= 180 && !entry.name.contains("..")) { "Ungültiger Eintrag im Backup." }
-            val bytes = ByteArrayOutputStream().use { target -> zip.copyTo(target); target.toByteArray() }
-            require(bytes.size <= 14 * 1024 * 1024) { "Ein Backup-Eintrag ist zu groß." }
-            files.putIfAbsent(entry.name, bytes)
-            require(files.size <= 650) { "Das Backup enthält zu viele Dateien." }
-            zip.closeEntry(); entry = zip.nextEntry
-        }
-    }
+private fun readDomiDexBackup(input: InputStream, context: Context): BackupImportPayload {
+    val files = com.dominik.cardvault.data.backup.BoundedBackupReader.read(input)
     val collection = files["collection.json"] ?: error("Die Sammlung fehlt im Backup.")
-    return BackupImportPayload(parseCollectionBackup(collection.toString(Charsets.UTF_8)), files)
+    val raw = collection.toString(Charsets.UTF_8)
+    val root = JSONObject(raw)
+    val version = root.getInt("version")
+    ScanFeedbackStore(context).validateImport(files, requireAllImages = version >= 2)
+    com.dominik.cardvault.data.backup.BackupPhotos.validate(raw, files)
+    return when (version) {
+        1 -> parseCollectionBackup(raw).let { BackupImportPayload(raw, version, it.size, it, files) }
+        2 -> {
+            com.dominik.cardvault.data.backup.UserBackupStore(com.dominik.cardvault.data.local.CardVaultDatabase.get(context), com.dominik.cardvault.data.local.GUEST_OWNER_UID).validate(raw)
+            BackupImportPayload(raw, version, root.getJSONObject("tables").getJSONArray("collection_entries").length(), zipEntries = files)
+        }
+        else -> error("Dieses Backup benötigt eine neuere DomiDex-Version.")
+    }
 }
 
 @Composable private fun CollectionBackupDialog(repository: CollectionRepository, cards: List<CollectionCard>, onDismiss: () -> Unit) {
@@ -802,11 +813,19 @@ private fun readDomiDexBackup(input: InputStream): BackupImportPayload {
             working = true
             status = runCatching {
                 val feedbackCount = withContext(Dispatchers.IO) {
-                    context.contentResolver.openOutputStream(uri)?.use { writeDomiDexBackup(it, cards, feedbackStore) }
-                        ?: error("Datei konnte nicht geöffnet werden.")
+                    val snapshot = com.dominik.cardvault.data.backup.BackupPhotos.export(context,
+                        repository.exportUserBackup(com.dominik.cardvault.data.backup.BackupSettings.export(context).toString()))
+                    val verifiedArchive = File.createTempFile("domidex-export-", ".zip", context.cacheDir)
+                    try {
+                        val count = verifiedArchive.outputStream().use { writeDomiDexBackup(it, snapshot, feedbackStore) }
+                        verifiedArchive.inputStream().use { com.dominik.cardvault.data.backup.BoundedBackupReader.read(it) }
+                        context.contentResolver.openOutputStream(uri)?.use { target -> verifiedArchive.inputStream().use { it.copyTo(target) } }
+                            ?: error("Datei konnte nicht geöffnet werden.")
+                        count
+                    } finally { verifiedArchive.delete() }
                 }
                 "Backup gespeichert: ${cards.size} Sammlungseinträge · $feedbackCount lokale Scan-Feedbacks."
-            }.getOrElse { "Backup konnte nicht gespeichert werden." }
+            }.getOrElse { "Backup konnte nicht gespeichert werden. ${it.message.orEmpty()}" }
             working = false
         }
     }
@@ -814,7 +833,7 @@ private fun readDomiDexBackup(input: InputStream): BackupImportPayload {
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             working = true
-            val parsed = runCatching { withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use(::readDomiDexBackup) ?: error("Datei konnte nicht geöffnet werden.") } }
+            val parsed = runCatching { withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { readDomiDexBackup(it, context) } ?: error("Datei konnte nicht geöffnet werden.") } }
             parsed.onSuccess { pendingImport = it; status = null }.onFailure { status = it.message ?: "Backup konnte nicht gelesen werden." }
             working = false
         }
@@ -822,9 +841,9 @@ private fun readDomiDexBackup(input: InputStream): BackupImportPayload {
     AlertDialog(
         onDismissRequest = { if (!working) onDismiss() }, title = { Text("Sammlung & Backup") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            SettingsInfoBlock("Lokales DomiDex-Backup", "Exportiert werden Karten, Set, Nummer, Zustand, Anzahl, Notizen, Kaufdaten und vorhandene Cardmarket-Verknüpfungen. Zugestimmtes lokales Scan-Feedback wird mit Bild, Markierungen und OCR-Korrekturen in einer ZIP-Datei ergänzt. Preise, Login und Zugangsdaten bleiben außen vor.")
+            SettingsInfoBlock("Lokales DomiDex-Backup", "Backup V2 enthält deine Sammlung, Varianten, Kaufdaten, Notizen, private Binder, Cover, Seiten, Kartenplätze, Holo-Einstellungen und Darstellungseinstellungen. Lokales Scan-Feedback wird mit seinen Bildern ergänzt. Marktpreis-Caches, Login und Einwilligungen werden nicht übernommen.")
             SettingsInfoBlock("Sicher speichern", "Wähle beim Export selbst einen Speicherort, zum Beispiel Dateien, Downloads oder einen privaten Cloud-Ordner. DomiDex lädt die Datei nicht hoch.")
-            SettingsInfoBlock("Sicher importieren", "Ein Import ergänzt deine bestehende Sammlung und überschreibt nichts automatisch. Gleiche, exakt verknüpfte Einträge können als Menge zusammengeführt werden.")
+            SettingsInfoBlock("Sicher importieren", "Backup V2 ergänzt fehlende Einträge. Bereits vorhandene Identitäten, Mengen und Binder bleiben erhalten. Ein erneuter Import desselben Backups erhöht keine Mengen. Ältere Backups werden einmalig innerhalb einer gemeinsamen Transaktion übernommen.")
             Button(onClick = { exportLauncher.launch("DomiDex-Backup-${java.time.LocalDate.now()}.zip") }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("Sammlung & Scan-Feedback exportieren") }
             OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/zip", "application/json", "text/json", "text/plain")) }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("DomiDex-Backup importieren") }
             if (working) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -833,17 +852,24 @@ private fun readDomiDexBackup(input: InputStream): BackupImportPayload {
         confirmButton = { TextButton(onClick = onDismiss, enabled = !working) { Text("Fertig") } },
     )
     pendingImport?.let { payload -> AlertDialog(
-        onDismissRequest = { pendingImport = null }, title = { Text("${payload.entries.size} Einträge importieren?") },
+        onDismissRequest = { pendingImport = null }, title = { Text("${payload.entryCount} Einträge importieren?") },
         text = { Text("Die Einträge werden zu deiner aktuellen Sammlung hinzugefügt. Lokale Scan-Feedbacks werden nur ergänzt, wenn ihre ID noch nicht vorhanden ist. Es wird nichts gelöscht oder überschrieben.") },
         confirmButton = { TextButton(onClick = {
             pendingImport = null; scope.launch {
                 working = true
                 val outcome = runCatching { withContext(Dispatchers.IO) {
-                    payload.entries.forEach { repository.addManualCard(it) }
-                    val feedback = feedbackStore.importFromZip(payload.zipEntries)
-                    payload.entries.size to feedback
+                    val database = com.dominik.cardvault.data.local.CardVaultDatabase.get(context)
+                    com.dominik.cardvault.data.backup.BackupImportJournal(context, database).restore { beforeCreate, journalKey ->
+                        feedbackStore.withImportedFeedback(payload.zipEntries, beforeCreate) { feedback ->
+                            val count = if (payload.version == 2) com.dominik.cardvault.data.backup.BackupPhotos.withRestored(context, payload.raw, payload.zipEntries, beforeCreate) { prepared -> repository.restoreUserBackup(prepared, journalKey).addedCards }
+                                else repository.restoreLegacyBackup(payload.raw, payload.entries, journalKey)
+                            count to feedback
+                        }
+                    }.also {
+                        com.dominik.cardvault.data.backup.BackupSettings.applyPending(context, com.dominik.cardvault.data.local.CardVaultDatabase.get(context))
+                    }
                 } }
-                status = outcome.fold({ "${it.first} Einträge und ${it.second} Scan-Feedbacks wurden importiert." }, { "Import konnte nicht vollständig abgeschlossen werden." })
+                status = outcome.fold({ "${it.first} neue Einträge und ${it.second} Scan-Feedbacks wurden importiert. Binder und Einstellungen sind übernommen; bestehende Einträge bleiben erhalten." }, { "Import fehlgeschlagen. ${it.message.orEmpty()}" })
                 working = false
             }
         }) { Text("Jetzt importieren") } },
@@ -1034,7 +1060,7 @@ private fun isOnline(context: Context): Boolean {
         return null
     }
     fun cardCapacityFor(name: String, setCards: List<CollectionCard>): Int {
-        if (isWachsendesChaosSet(name)) return 194
+        if (isWachsendesChaosSet(name)) return WachsendesChaosMasterSet.cards.size
         localReferenceCounts[name]?.takeIf { it > 0 }?.let { return it }
         val catalogTotal = resolveBinderSourceSet(name, setCards, catalogSets)?.total ?: 0
         // A verified visual set defines its own binder size.  A mistyped or
@@ -1334,23 +1360,8 @@ private fun isOnline(context: Context): Boolean {
             // the background with only source-declared foil printings.  This
             // avoids inventing a Holo/Reverse slot for a card that has none.
             setReferences = downloadedCards.flatMap { reference -> reference.asBinderReferences() }
-            // Resolve an unmapped current set before the user can open a slot.
-            // These are local catalogue lookups, not additional network calls.
-            // That keeps Cardmarket pricing available from the first Binder
-            // preview instead of only after the full print-variant refresh.
-            val resolvedMarketExpansionId = withContext(Dispatchers.IO) {
-                set.cardmarketExpansionId ?: run {
-                    val names = downloadedCards.map { it.marketSearchName ?: it.name }.distinct()
-                    val candidatesByMarketName = buildMap {
-                        names.chunked(10).forEach { batch ->
-                            batch.map { name -> async { name to repository.searchCatalog(name, 500) } }
-                                .awaitAll()
-                                .forEach { (name, candidates) -> put(name, candidates) }
-                        }
-                    }
-                    resolveCardmarketExpansionId(downloadedCards, candidatesByMarketName)
-                }
-            }
+            // Set membership comes from the maintained registry, never card-title similarity.
+            val resolvedMarketExpansionId = set.cardmarketExpansionId
             if (resolvedMarketExpansionId != null) {
                 setReferences = downloadedCards.flatMap { reference ->
                     reference.asBinderReferences(resolvedMarketExpansionId)
@@ -1909,7 +1920,7 @@ internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, ca
         // can describe the same source printing. They are one target slot, not two.
         // Coalesce references before claiming owned entries; never alter collection rows.
         val orderedReferences = references.distinctBy(::masterReferenceIdentity).sortedWith(compareBy<CollectionCard>(
-            { collectorNumberOf(it.number) ?: Int.MAX_VALUE },
+            { masterBinderCollectorOrder(it) },
             { masterFinishOrder(it) },
             { it.variant.lowercase(Locale.ROOT) },
         ))
@@ -1922,7 +1933,7 @@ internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, ca
                 ?: reference
         }
         val extraOrder = compareBy<CollectionCard>(
-            { collectorNumberOf(it.number) ?: Int.MAX_VALUE }, { masterFinishOrder(it) }, { it.variant },
+            { masterBinderCollectorOrder(it) }, { masterFinishOrder(it) }, { it.variant },
         )
         val insertBefore = mutableMapOf<Int, MutableList<CollectionCard>>()
         val overflow = mutableListOf<CollectionCard>()
@@ -1957,6 +1968,15 @@ internal fun arrangeBinderCards(setName: String, cards: List<CollectionCard>, ca
     }
     // Unknown numbers and variants must not silently take an early set slot.
     return slots + overflow
+}
+
+/** Classic Collection displays historic numbers but keeps its official 001-030 binder order. */
+private fun masterBinderCollectorOrder(card: CollectionCard): Int {
+    if (card.sourceSetId.equals("30th-c", ignoreCase = true)) {
+        Regex("(?i)^30th-c-(\\d{1,3})$").matchEntire(card.sourceCardId.orEmpty())
+            ?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+    }
+    return collectorNumberOf(card.number) ?: Int.MAX_VALUE
 }
 
 /** Enrich only the displayed, already matched slot; the saved collection entry is unchanged. */
@@ -2019,7 +2039,8 @@ internal fun completedBinderSlotCount(cards: List<CollectionCard>): Int = cards.
     val sourceIdentity = if (!card.sourceSetId.isNullOrBlank() && !card.sourceCardId.isNullOrBlank()) {
         listOf("source", card.sourceSetId.lowercase(Locale.ROOT), card.sourceCardId.lowercase(Locale.ROOT))
     } else {
-        val printedNumber = normalizedCollectorNumber(card.number)
+        val printedNumber = classic30thSourceLocalId(card)?.let { "classic:$it" }
+            ?: normalizedCollectorNumber(card.number)
         if (printedNumber.isNotBlank()) {
             listOf("printed", normalizeBinderMetadata(card.set), printedNumber)
         } else {
@@ -2055,6 +2076,11 @@ private fun isSameMasterCard(reference: CollectionCard, owned: CollectionCard): 
     if (!reference.sourceCardId.isNullOrBlank() && !owned.sourceCardId.isNullOrBlank() &&
         !reference.sourceCardId.equals(owned.sourceCardId, ignoreCase = true)) return false
     if (normalizeBinderMetadata(reference.set) != normalizeBinderMetadata(owned.set)) return false
+    if (isClassic30thCollection(reference) || isClassic30thCollection(owned)) {
+        val referenceLocalId = classic30thSourceLocalId(reference) ?: return false
+        val ownedLocalId = classic30thSourceLocalId(owned) ?: return false
+        return referenceLocalId == ownedLocalId
+    }
     if (reference.number.any(Char::isDigit) && owned.number.any(Char::isDigit)) {
         return normalizedCollectorNumber(reference.number).equals(normalizedCollectorNumber(owned.number), ignoreCase = true)
     }
@@ -2405,7 +2431,7 @@ private fun openDiscordCommunity(context: Context) {
                     Text("Gesamtportfolio · alle Binder", color = VaultTextMuted, fontSize = 13.sp)
                     Text(if (portfolio.hasPricedCards) euro(portfolio.totalValue) else "Kein Trendpreis verfügbar", fontSize = if (portfolio.hasPricedCards) 30.sp else 18.sp, fontWeight = FontWeight.Black, color = VaultText, maxLines = 1)
                     Text(
-                        if (portfolio.history.size > 1) stringResource(R.string.portfolio_change, portfolio.changePercent) else "Noch nicht genügend echte Verlaufsdaten",
+                        if (portfolio.history.size > 1) "Preisänderung des heutigen Bestands: ${String.format(Locale.GERMANY, "%+.1f", portfolio.changePercent)} %" else "Noch nicht genügend echte Preisverlaufsdaten",
                         color = if (portfolio.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 12.sp,
@@ -2950,6 +2976,26 @@ private fun normalizedCollectorNumber(value: String): String = value
     .trimStart('0')
     .ifBlank { "0" }
 
+private fun isClassic30thCollection(card: CollectionCard): Boolean {
+    if (card.sourceSetId.equals("30th-c", ignoreCase = true)) return true
+    return normalizeBinderMetadata(card.set) in setOf(
+        "30jahreklassischesammlung",
+        "30yearsclassiccollection",
+        "30thclassiccollection",
+    )
+}
+
+private fun classic30thSourceLocalId(card: CollectionCard): String? {
+    if (!isClassic30thCollection(card)) return null
+    Regex("(?i)^30th-c-(\\d{1,3})$").matchEntire(card.sourceCardId.orEmpty())
+        ?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it in 1..30 }?.let { return it.toString() }
+    classic30thLocalIdForPrintedCollector(card.number)?.let { return it }
+    if ('/' !in card.number) {
+        card.number.filter(Char::isDigit).toIntOrNull()?.takeIf { it in 1..30 }?.let { return it.toString() }
+    }
+    return null
+}
+
 private fun normalizeBinderMetadata(value: String): String = value.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
 
 @Composable private fun PriceSourcesSection(card: CollectionCard, priceDate: String?, context: Context) = Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3036,9 +3082,7 @@ private fun openOfficialPage(context: Context, url: String) {
             catch (_: Exception) { card }
         if (selectedCard?.id != card.id) return@LaunchedEffect
         selectedCard = detailed
-        // Cardmarket stores the English card title plus attacks, but does not
-        // publish collector numbers in its compact catalogue. A source-verified
-        // expansion bridge plus the print order is therefore required here.
+        // Only a source-declared product/printing identity can supply the preview price.
         runCatching {
             val candidates = loadVisualCardmarketCandidates(detailed, repository)
             visualCardmarketProducts(detailed, cards, candidates, resolvedCardmarketExpansionId)
@@ -3051,23 +3095,14 @@ private fun openOfficialPage(context: Context, url: String) {
         // Resolve one source-verified Cardmarket printing per visual card. We never
         // use a similarly named product from another expansion as a fallback.
         val resolved = withContext(Dispatchers.IO) {
-            // Resolve candidate titles in small parallel batches. A whole set
-            // otherwise waited for hundreds of individual local SQL lookups
-            // before its first Cardmarket prices appeared.
-            val names = cards
-                .map { it.marketSearchName ?: it.name }
-                .distinct()
-            val candidatesByMarketName = buildMap {
-                names.chunked(10).forEach { batch ->
-                    batch.map { name -> async { name to repository.searchCatalog(name, 500) } }
-                        .awaitAll()
-                        .forEach { (name, candidates) -> put(name, candidates) }
-                }
-            }
-            val expansionId = resolveCardmarketExpansionId(cards, candidatesByMarketName)
+            // Batch exact product identities; no speculative per-name SQL probes.
+            val declaredProductIds = cards.flatMap { card ->
+                card.printVariants.mapNotNull(PokemonPrintVariant::cardmarketProductId)
+            }.distinct()
+            val declaredProducts = repository.catalogProducts(declaredProductIds)
+            val expansionId = selectedSet?.cardmarketExpansionId
             expansionId to cards.associate { card ->
-                val searchName = card.marketSearchName ?: card.name
-                val options = visualCardmarketProducts(card, cards, candidatesByMarketName[searchName].orEmpty(), expansionId)
+                val options = visualCardmarketProducts(card, cards, declaredProducts, expansionId)
                 val product = preferredVisualCardmarketProduct(card, options)
                 card.id to VisualCardMarketPrice(product?.trendPriceEur, product != null, product != null)
             }
@@ -3173,7 +3208,7 @@ private fun openOfficialPage(context: Context, url: String) {
                     if (!loading && visibleSets.isEmpty()) item { Text("Kein deutsches Set passend gefunden.", color = VaultTextMuted, fontSize = 12.sp) }
                     items(visibleSets, key = { it.id }) { set ->
                     OutlinedCard(onClick = { selectedSet = set }, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        CatalogSetIcon(set, Modifier.size(64.dp, 40.dp)); Column(Modifier.weight(1f).padding(start = 10.dp)) { Text(set.name, fontWeight = FontWeight.Bold); Text("${set.printedTotal} Karten${set.releaseDate.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()}", color = VaultTextMuted, fontSize = 11.sp) }
+                        CatalogSetIcon(set, Modifier.size(64.dp, 40.dp)); Column(Modifier.weight(1f).padding(start = 10.dp)) { Text(set.name, fontWeight = FontWeight.Bold); Text("${set.displayCardCount()} Karten${set.releaseDate.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()}", color = VaultTextMuted, fontSize = 11.sp) }
                     } }
                     }
                 }
@@ -3719,11 +3754,11 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             if (visualCandidates.isNotEmpty()) {
                 artworkLoading = true
                 scope.launch {
-                    val verified = withContext(Dispatchers.IO) {
-                        visualCandidates.associate { candidate -> candidate.scanIdentityKey() to CardArtworkVerifier.verify(captured, candidate.imageUrl) }
-                    }
+                    val verified = try {
+                        val descriptor = withContext(Dispatchers.Default) { CardArtworkVerifier.describe(captured) }
+                        CardArtworkVerifier.verifyCandidates(listOf(descriptor), visualCandidates.associate { it.scanIdentityKey() to it.imageUrl })
+                    } finally { artworkLoading = false }
                     artworkScores = verified
-                    artworkLoading = false
                     val bestArtwork = verified[ranked.first().first.scanIdentityKey()]
                     ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
                         artworkConfidence = bestArtwork?.confidence ?: 0f,
@@ -3849,6 +3884,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     identityKey: String? = null,
                     change: (QueuedCardScan) -> QueuedCardScan = { it },
                 ) {
+                    if (latestQueuedScans.value.firstOrNull { it.id == scan.id }?.stage?.isTerminal == true) return
                     stage(next, message)
                     val now = SystemClock.elapsedRealtime()
                     durations[next] = (durations[next] ?: 0L) + now - activeStageStarted
@@ -3888,7 +3924,9 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                         if (current?.stage?.isTerminal != true) {
                             terminal(
                                 ScanPipelineStage.FAILED,
-                                "Analyse fehlgeschlagen: ${failure.javaClass.simpleName.ifBlank { "Unbekannt" }}",
+                                if (failure is ScanPipelineTimeoutException || failure is java.util.concurrent.TimeoutException)
+                                    "Analyse dauert zu lange. Bitte erneut versuchen oder Set und Nummer wählen."
+                                else "Die Aufnahme konnte nicht analysiert werden. Bitte erneut versuchen oder Set und Nummer wählen.",
                             )
                         }
                         ScannerDiagnosticLog.event(
@@ -4004,13 +4042,9 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     val descriptors = currentAnalysis.visualDescriptors.ifEmpty {
                         listOf(withContext(Dispatchers.Default) { CardArtworkVerifier.describe(captured) })
                     }
-                    withContext(Dispatchers.IO) {
-                        resolution.candidates.take(ScanQueuePolicy.MAX_VISUAL_CANDIDATES).filter { !it.card.imageUrl.isNullOrBlank() }
-                            .associate { candidate ->
-                                val temporalResults = descriptors.map { descriptor -> CardArtworkVerifier.verify(descriptor, candidate.card.imageUrl) }
-                                candidate.card.scanIdentityKey() to CardArtworkVerifier.combineTemporal(temporalResults)
-                            }
-                    }
+                    CardArtworkVerifier.verifyCandidates(descriptors,
+                        resolution.candidates.take(ScanQueuePolicy.MAX_VISUAL_CANDIDATES)
+                            .associate { it.card.scanIdentityKey() to it.card.imageUrl })
                 }.orEmpty()
                 val fusionStarted = SystemClock.elapsedRealtime()
                 val fused = ScanKnowledgeCandidateRanker.apply(
@@ -4690,7 +4724,23 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
 }
 
 /** A set choice carries its official total, so manual entry never asks for the redundant suffix. */
-private data class ScannerSetChoice(val id: String, val name: String, val code: String, val printedTotal: Int)
+internal data class ScannerSetChoice(val id: String, val name: String, val code: String, val printedTotal: Int)
+
+internal fun resolveScannerSetChoice(
+    choices: List<ScannerSetChoice>,
+    selectedIdentity: String,
+    collectorNumber: String,
+): ScannerSetChoice? {
+    choices.firstOrNull { it.id.equals(selectedIdentity.trim(), true) }?.let { return it }
+    val codeMatches = choices.filter { it.code.equals(selectedIdentity.trim(), true) }
+    if (codeMatches.size <= 1) return codeMatches.singleOrNull()
+    if (classic30thLocalIdForPrintedCollector(collectorNumber) != null) {
+        return codeMatches.firstOrNull { it.id.equals("30th-c", true) }
+    }
+    val denominator = Regex("\\d{1,4}\\s*/\\s*(\\d{1,4})").find(collectorNumber)
+        ?.groupValues?.get(1)?.toIntOrNull()
+    return denominator?.let { total -> codeMatches.singleOrNull { it.printedTotal == total } }
+}
 
 private data class ScanFeedbackMark(
     val category: String = "Kartenname",
@@ -4962,8 +5012,8 @@ private fun persistScanFeedback(context: Context, imageFile: File, marks: List<S
 
 @Composable private fun ManualScanEvidenceDialog(initialSetCode: String, initialNumber: String, onDismiss: () -> Unit, onConfirm: (String, String, String) -> Unit) {
     var selectedSetIdentity by rememberSaveable { mutableStateOf(initialSetCode) }
-    // Only the printed card position is entered.  The set itself determines its total.
-    var number by rememberSaveable { mutableStateOf(initialNumber.substringBefore('/').filter(Char::isDigit).take(4)) }
+    // Classic Collection keeps historic denominators; regular sets derive theirs from metadata.
+    var number by rememberSaveable { mutableStateOf(initialNumber.filter { it.isDigit() || it == '/' }.take(9)) }
     var setMenuOpen by remember { mutableStateOf(false) }
     var setSearch by rememberSaveable { mutableStateOf("") }
     var catalogSets by remember { mutableStateOf<List<PokemonSet>>(emptyList()) }
@@ -4996,11 +5046,10 @@ private fun persistScanFeedback(context: Context, imageFile: File, marks: List<S
             setSearch.isBlank() || choice.name.contains(setSearch, true) || choice.code.contains(setSearch, true) || choice.id.contains(setSearch, true)
         }.take(120)
     }
-    val selectedSet = remember(setChoices, selectedSetIdentity) {
-        setChoices.firstOrNull { choice ->
-            choice.id.equals(selectedSetIdentity.trim(), true) || choice.code.equals(selectedSetIdentity.trim(), true)
-        }
+    val selectedSet = remember(setChoices, selectedSetIdentity, number) {
+        resolveScannerSetChoice(setChoices, selectedSetIdentity, number)
     }
+    val selectedClassicCollection = selectedSet?.id.equals("30th-c", ignoreCase = true)
     val totalLabel = selectedSet?.printedTotal?.takeIf { it > 0 }?.toString()?.padStart(3, '0')
     val canonicalNumber = selectedSet?.let { manualCollectorNumber(number, it.printedTotal, it.id, it.code) }
     val valid = selectedSet != null && canonicalNumber != null
@@ -5020,7 +5069,14 @@ private fun persistScanFeedback(context: Context, imageFile: File, marks: List<S
                     else filteredChoices.forEach { choice -> DropdownMenuItem(text = { Column { Text(choice.name, fontWeight = FontWeight.SemiBold); Text("${choice.code} · ${choice.printedTotal} Karten", color = MewIce, fontSize = 11.sp) } }, onClick = { selectedSetIdentity = choice.id; setSearch = ""; setMenuOpen = false }) }
                 }
             }
-            OutlinedTextField(number, { number = it.filter(Char::isDigit).take(4) }, enabled = selectedSet != null, label = { Text("Kartennummer, z. B. 122") }, supportingText = { Text(canonicalNumber?.let { "Gesucht wird: ${selectedSet?.name} · $it" } ?: totalLabel?.let { "Set hat insgesamt $it Karten." } ?: "Zuerst ein Set auswählen.") }, singleLine = true)
+            OutlinedTextField(
+                number,
+                { value -> number = value.filter { it.isDigit() || (selectedClassicCollection && it == '/') }.take(if (selectedClassicCollection) 9 else 4) },
+                enabled = selectedSet != null,
+                label = { Text(if (selectedClassicCollection) "Historische Nummer oder Subset-Platz" else "Kartennummer, z. B. 122") },
+                supportingText = { Text(canonicalNumber?.let { "Gesucht wird: ${selectedSet?.name} · $it" } ?: if (selectedClassicCollection) "Zum Beispiel 89/149 oder Subset-Platz 17." else totalLabel?.let { "Set hat insgesamt $it Karten." } ?: "Zuerst ein Set auswählen.") },
+                singleLine = true,
+            )
         } },
         confirmButton = { TextButton(enabled = valid, onClick = { selectedSet?.let { onConfirm(it.id, it.code, canonicalNumber!!) } }) { Text("Karte suchen") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },

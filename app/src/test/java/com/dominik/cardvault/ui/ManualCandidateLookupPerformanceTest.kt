@@ -13,11 +13,12 @@ import org.junit.Test
 import java.lang.reflect.Proxy
 
 class ManualCandidateLookupPerformanceTest {
-    @Test fun emptyPriceCatalogueSearchesOnlyTheExactCandidateName() = runBlocking {
+    @Test fun absentProductIdentityNeverSearchesNamesOrInventsPrices() = runBlocking {
         val fixture = Fixture(emptyMap())
         val result = fixture.resolve()
         assertEquals(fixture.referenceResult(), result)
-        assertEquals(listOf("Alpha"), fixture.queries)
+        assertTrue(fixture.queries.isEmpty())
+        assertTrue(fixture.catalogProductQueries.isEmpty())
         assertEquals(2, result.candidates.size)
         assertTrue(result.candidates.all { !it.card.hasMarketProduct })
         assertEquals(ScannerDecision.AMBIGUOUS, result.decision.decision)
@@ -29,27 +30,24 @@ class ManualCandidateLookupPerformanceTest {
         val fixture = Fixture(products)
         val result = fixture.resolve()
         assertEquals(fixture.referenceResult(), result)
-        assertEquals(listOf("Alpha"), fixture.queries)
+        assertTrue(fixture.queries.isEmpty())
         assertTrue(result.candidates.all { !it.card.hasMarketProduct })
     }
 
-    @Test fun compatibleCandidateRetainsFullExpansionEvidenceAndExactPrices() = runBlocking {
+    @Test fun exactSameNamesInAnExpansionStillCannotProvePhysicalProductIdentity() = runBlocking {
         val fixture = Fixture(names.associateWith { name -> listOf(product(name, "44")) })
         val result = fixture.resolve()
         assertEquals(fixture.referenceResult(), result)
-        assertEquals(names.toSet(), fixture.queries.toSet())
-        assertEquals(names.size, fixture.queries.size)
-        assertTrue(result.candidates.all { it.card.hasMarketProduct })
-        // This fixture declares Normal + Holo, not Reverse Holo. Both use the
-        // regular product trend under the physically confirmed price fix.
-        assertEquals(listOf(1.25, 1.25), result.candidates.map { it.card.trendPriceEur })
+        assertTrue(fixture.queries.isEmpty())
+        assertTrue(result.candidates.none { it.card.hasMarketProduct })
+        assertTrue(result.candidates.all { it.card.trendPriceEur == null })
     }
 
     @Test fun runnerUpExpansionEvidenceStillPreventsAmbiguousPriceLinking() = runBlocking {
         val fixture = Fixture(names.associateWith { name -> listOf(product(name, "44"), product(name, "45")) })
         val result = fixture.resolve()
         assertEquals(fixture.referenceResult(), result)
-        assertEquals(names.size, fixture.queries.size)
+        assertTrue(fixture.queries.isEmpty())
         assertFalse(result.candidates.any { it.card.hasMarketProduct })
     }
 
@@ -63,7 +61,8 @@ class ManualCandidateLookupPerformanceTest {
         val result = fixture.resolve()
 
         assertEquals(fixture.referenceResult(), result)
-        assertEquals(listOf("Alpha"), fixture.queries)
+        assertTrue(fixture.queries.isEmpty())
+        assertEquals(listOf(900_001L, 900_002L), fixture.catalogProductQueries.single())
         assertEquals(setOf(900_001L, 900_002L), result.candidates.map { it.card.productId }.toSet())
         assertTrue(result.candidates.all { it.card.hasMarketProduct })
     }
@@ -73,6 +72,7 @@ class ManualCandidateLookupPerformanceTest {
         private val sourceDeclaredProductIds: Boolean = false,
     ) {
         val queries = mutableListOf<String>()
+        val catalogProductQueries = mutableListOf<List<Long>>()
         private val analysis = withManualScanIdentity(null, "sv08.5", "PRE", "001/004")
         private val catalog = PokemonVisualCatalog(PokemonCatalogMetadataCache()) { url ->
             Buffer().writeUtf8(when {
@@ -101,11 +101,22 @@ class ManualCandidateLookupPerformanceTest {
             CollectionRepository::class.java.classLoader,
             arrayOf(CollectionRepository::class.java),
         ) { _, method, arguments ->
-            check(method.name == "searchCatalog") { "Unexpected repository operation: ${method.name}" }
-            val query = arguments!![0] as String
-            assertEquals(500, arguments[1])
-            queries += query
-            products[query].orEmpty()
+            when (method.name) {
+                "searchCatalog" -> {
+                    val query = arguments!![0] as String
+                    assertEquals(500, arguments[1])
+                    queries += query
+                    products[query].orEmpty()
+                }
+                "catalogProducts" -> {
+                    val productIds = arguments!![0] as List<Long>
+                    catalogProductQueries += productIds
+                    products.values.flatten()
+                        .distinctBy(CatalogSearchResult::productId)
+                        .filter { it.productId in productIds }
+                }
+                else -> error("Unexpected repository operation: ${method.name}")
+            }
         } as CollectionRepository
 
         suspend fun resolve(): ScanCandidateResolution = CardScanCandidateResolver.resolve(analysis, repository, catalog)

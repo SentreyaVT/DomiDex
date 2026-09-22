@@ -31,7 +31,8 @@ internal object TemporalRecognitionEvidence {
         }
         // Only the chosen visual bitmap survives. Other temporary normalized frames are released
         // before the queue continues to network candidate verification.
-        pool.asSequence().filter { it !== visualBest }.mapNotNull(CardTextAnalysis::normalizedCard).forEach { bitmap ->
+        analyses.asSequence().mapNotNull(CardTextAnalysis::normalizedCard).distinct()
+            .filter { it !== visualBest.normalizedCard }.forEach { bitmap ->
             if (!bitmap.isRecycled) bitmap.recycle()
         }
         return visualBest.copy(

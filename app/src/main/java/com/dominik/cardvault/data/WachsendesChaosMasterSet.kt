@@ -13,7 +13,7 @@ internal data class MasterSetCard(
 
 /**
  * Complete German ME04 test binder: 122 numbered cards from the official
- * Pokemon checklist plus the 72 source-confirmed reverse-holo variants (194 slots).
+ * Pokemon checklist plus the 76 source-confirmed reverse-holo variants (198 slots).
  */
 internal object WachsendesChaosMasterSet {
     private val names = """
@@ -147,6 +147,10 @@ Mega-Quajutsu-ex
         43, 44, 45, 46, 47, 49, 50, 52, 53, 54, 56, 57, 58, 59, 60, 61, 62,
         63, 66, 67, 69, 70, 71, 72, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
         84, 85, 86,
+        // Exact source details, 2026-09-22: Fennexis 886405, Ampharos 886421,
+        // Iksbat 886443, Viscogon 886460. Ordinary reverse printings remain
+        // available even when separate promotional Normal products also exist.
+        13, 29, 51, 68,
     )
 
     /**

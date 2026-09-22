@@ -34,6 +34,12 @@ class BinderIdentityTest {
     }
 
     @Test
+    fun `anniversary main and classic stay in separate binders despite sharing Cardmarket expansion`() {
+        assertEquals("tcgdex-30th", binderSetKey("6601", "30 Jahre", "30th"))
+        assertEquals("tcgdex-30th-c", binderSetKey("6601", "30 Jahre: Klassische Sammlung", "30th-c"))
+    }
+
+    @Test
     fun `sync successor is stable across client timestamps and never reuses tombstone id`() {
         val first = occupied(updatedAt = 100, deletedAt = 90)
         val second = occupied(updatedAt = 999, deletedAt = 800)
@@ -50,6 +56,9 @@ class BinderIdentityTest {
             ))
         }
         assertEquals("svp-173", sourceCardIdFromCatalogReference("tcgdex-svp-svp-173-holo", "svp", "173"))
+        assertEquals("30th-c-017", sourceCardIdFromCatalogReference(
+            "tcgdex-30th-c-30th-c-017-generated", "30th-c", "89/149",
+        ))
     }
 
     @Test
