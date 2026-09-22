@@ -994,7 +994,7 @@ private fun PrivateBinderSlot(
         label = "private-binder-slot",
     )
     val outline = when {
-        selectedForMove -> VaultPositive
+        selectedForMove -> MewRose
         moveTargetActive -> MewRose.copy(alpha = .64f)
         placement != null -> Color.Transparent
         else -> VaultOutlineSoft
@@ -1082,8 +1082,13 @@ private fun PrivateBinderSlot(
             DomiLineIcon(DomiIconKind.ADD, if (moveTargetActive) MewRose else VaultTextFaint, Modifier.size(19.dp))
             Text(if (moveTargetActive) "Hier ablegen" else "Freier Platz", color = if (moveTargetActive) MewRose else VaultTextFaint, fontSize = 8.sp, textAlign = TextAlign.Center)
         }
-        if (selectedForMove) Surface(Modifier.align(Alignment.TopEnd).padding(4.dp), color = VaultPositive, shape = RoundedCornerShape(99.dp)) {
-            Text("Verschieben", color = Color.Black, fontSize = 8.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+        if (selectedForMove) Surface(
+            Modifier.align(Alignment.TopEnd).padding(4.dp),
+            color = MewPlumDeep.copy(alpha = .94f),
+            border = BorderStroke(1.dp, MewRose.copy(alpha = .5f)),
+            shape = RoundedCornerShape(8.dp),
+        ) {
+            Text("Verschieben", color = VaultText, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp))
         }
     }
 }

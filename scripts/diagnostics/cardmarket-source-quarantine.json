@@ -1,0 +1,25 @@
+[
+  {
+    "sourceCardId": "swsh11-201",
+    "rejectedProductId": 670816,
+    "reason": "Giratina VSTAR 201 cannot use the Giratina V 130 product.",
+    "reviewedAt": "2026-09-22",
+    "evidence": [
+      "https://api.tcgdex.net/v2/en/cards/swsh11-201",
+      "https://api.tcgdex.net/v2/en/cards/swsh11-130",
+      "https://downloads.s3.cardmarket.com/productCatalog/productList/products_singles_6.json",
+      "https://www.cardmarket.com/en/Pokemon/Products/Singles/Lost-Origin/Giratina-VSTAR-V2-LOR201"
+    ]
+  },
+  {
+    "sourceCardId": "sv03-062",
+    "rejectedProductId": 781858,
+    "reason": "Palafin 062 Cosmos cannot use the Frogadier 057 Cosmos product. Frogadier's exact source/product pair remains valid.",
+    "reviewedAt": "2026-09-22",
+    "evidence": [
+      "https://api.tcgdex.net/v2/en/cards/sv03-062",
+      "https://api.tcgdex.net/v2/en/cards/sv03-057",
+      "https://downloads.s3.cardmarket.com/productCatalog/productList/products_singles_6.json"
+    ]
+  }
+]

@@ -16,6 +16,10 @@ import com.dominik.cardvault.data.content.ContentUpdateCoordinator
 import com.dominik.cardvault.data.content.PlayUpdateGateway
 import com.dominik.cardvault.ui.CardVaultApp
 import com.dominik.cardvault.ui.LocalDataStartupContent
+import com.dominik.cardvault.ui.DomiDexWelcome
+import com.dominik.cardvault.ui.WelcomePreferences
+import com.dominik.cardvault.ui.launchSettingsIntent
+import com.dominik.cardvault.ui.privacyPolicyIntent
 import com.dominik.cardvault.data.backup.LocalDataStartupState
 import com.dominik.cardvault.data.backup.prepareLocalDataStartup
 import com.dominik.cardvault.ui.theme.CardVaultTheme
@@ -45,6 +49,10 @@ class MainActivity : ComponentActivity() {
         val syncScheduler = CardmarketSyncScheduler(applicationContext)
         val contentUpdates = ContentUpdateCoordinator(applicationContext)
         val startup = mutableStateOf<LocalDataStartupState>(LocalDataStartupState.Loading)
+        val welcomePreferences = WelcomePreferences(applicationContext)
+        val showWelcome = mutableStateOf(false)
+        val savingWelcome = mutableStateOf(false)
+        val welcomeSaveFailed = mutableStateOf(false)
         var startupJob: Job? = null
         fun prepareLocalData() {
             if (startupJob?.isActive == true) return
@@ -55,8 +63,13 @@ class MainActivity : ComponentActivity() {
                         com.dominik.cardvault.data.backup.BackupImportJournal(applicationContext, database).recover()
                         com.dominik.cardvault.data.backup.BackupSettings.applyPending(applicationContext, database)
                     } },
-                    seed = { repository.seedIfNeeded() },
+                    seed = {
+                        repository.seedIfNeeded()
+                        // Read after backup presentation settings have been safely recovered.
+                        showWelcome.value = withContext(Dispatchers.IO) { welcomePreferences.shouldShow() }
+                    },
                     startCollectionSync = { withContext(Dispatchers.IO) { session.start() } },
+                    onPhaseChanged = { startup.value = LocalDataStartupState.Preparing(it) },
                 )
                 startup.value = result
                 if (result is LocalDataStartupState.Failed) {
@@ -80,9 +93,37 @@ class MainActivity : ComponentActivity() {
         setContent {
             CardVaultTheme {
                 if (startup.value == LocalDataStartupState.Ready) {
-                    CardVaultApp(repository, syncScheduler::refresh, contentUpdates.state, true)
+                    if (showWelcome.value) DomiDexWelcome(
+                        saving = savingWelcome.value,
+                        saveFailed = welcomeSaveFailed.value,
+                        onContinue = {
+                            if (!savingWelcome.value) {
+                                savingWelcome.value = true
+                                welcomeSaveFailed.value = false
+                                lifecycleScope.launch {
+                                    try {
+                                        if (withContext(Dispatchers.IO) { welcomePreferences.complete() }) showWelcome.value = false
+                                        else welcomeSaveFailed.value = true
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: Exception) {
+                                        welcomeSaveFailed.value = true
+                                    } finally {
+                                        savingWelcome.value = false
+                                    }
+                                }
+                            }
+                        },
+                        onPrivacy = {
+                            if (!launchSettingsIntent(this@MainActivity, privacyPolicyIntent())) {
+                                android.widget.Toast.makeText(this@MainActivity,
+                                    "Datenschutz öffnen nicht möglich: https://domidex.web.app/datenschutz",
+                                    android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        },
+                    ) else CardVaultApp(repository, syncScheduler::refresh, contentUpdates.state, true, startupPresentationHandled = true)
                 } else {
-                    LocalDataStartupContent(startup.value, ::prepareLocalData)
+                    LocalDataStartupContent(startup.value, retry = ::prepareLocalData)
                 }
             }
         }

@@ -4,6 +4,7 @@ import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
 import com.dominik.cardvault.data.catalog.isPokemonPocketSet
+import com.dominik.cardvault.data.catalog.isQuarantinedCardmarketIdentity
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionCard
 import com.dominik.cardvault.model.CollectionRepository
@@ -33,6 +34,7 @@ internal fun visualCardmarketProducts(
         // one product id, while stamps/foils may have separate product ids.
         return card.printVariants.mapNotNull { printing ->
             val productId = printing.cardmarketProductId ?: return@mapNotNull null
+            if (isQuarantinedCardmarketIdentity(card.id, productId)) return@mapNotNull null
             val product = candidates.firstOrNull { it.hasMarketProduct && it.productId == productId }
                 ?: return@mapNotNull null
             product.copy(
@@ -103,7 +105,8 @@ internal suspend fun loadVisualCardmarketCandidates(
     card: PokemonVisualCard, repository: CollectionRepository,
 ): List<CatalogSearchResult> {
     if (card.set.isPokemonPocketSet()) return emptyList()
-    val ids = card.printVariants.mapNotNull { it.cardmarketProductId }.distinct()
+    val ids = card.printVariants.mapNotNull { it.cardmarketProductId }
+        .filterNot { isQuarantinedCardmarketIdentity(card.id, it) }.distinct()
     return if (ids.isNotEmpty()) repository.catalogProducts(ids)
     else emptyList()
 }

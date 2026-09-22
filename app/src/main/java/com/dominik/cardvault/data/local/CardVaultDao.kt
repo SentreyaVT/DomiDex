@@ -8,6 +8,7 @@ import androidx.room.Transaction
 import androidx.room.Update
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
+import com.dominik.cardvault.data.catalog.SAFE_COLLECTION_PRICE_LINK_SQL
 
 @Dao
 interface CardVaultDao {
@@ -26,7 +27,8 @@ interface CardVaultDao {
                               ELSE p.trendValueMinor END IS NULL
                     THEN NULL ELSE p.effectiveAtEpochMillis END AS priceUpdatedAtEpochMillis,
                e.externalProductSource, e.externalProductId,
-               COALESCE(linked.id, c.id) AS priceCardId, c.imageUrl, COALESCE(e.effectOverride, c.effectOverride) AS effectOverride
+               CASE WHEN """ + SAFE_COLLECTION_PRICE_LINK_SQL + """ THEN COALESCE(linked.id, c.id) ELSE '' END AS priceCardId,
+               c.imageUrl, COALESCE(e.effectOverride, c.effectOverride) AS effectOverride
                , e.binderId, e.sourceSetId, e.sourceCardId
         FROM collection_entries e
         JOIN catalog_cards c ON c.id = e.cardId
@@ -35,6 +37,7 @@ interface CardVaultDao {
         LEFT JOIN raw_price_snapshots p ON p.id = (
             SELECT p2.id FROM raw_price_snapshots p2
             WHERE p2.cardId = COALESCE(linked.id, c.id) AND p2.source = 'CARDMARKET_PUBLIC_DOWNLOAD'
+            AND """ + SAFE_COLLECTION_PRICE_LINK_SQL + """
             ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1
         )
         WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
@@ -51,7 +54,7 @@ interface CardVaultDao {
         FROM collection_entries e
         JOIN catalog_cards c ON c.id = e.cardId
         LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource AND linked.externalProductId = e.externalProductId
-        LEFT JOIN raw_price_snapshots p ON p.id = (SELECT p2.id FROM raw_price_snapshots p2 WHERE p2.cardId = COALESCE(linked.id, c.id) AND p2.source = 'CARDMARKET_PUBLIC_DOWNLOAD' ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1)
+        LEFT JOIN raw_price_snapshots p ON p.id = (SELECT p2.id FROM raw_price_snapshots p2 WHERE p2.cardId = COALESCE(linked.id, c.id) AND p2.source = 'CARDMARKET_PUBLIC_DOWNLOAD' AND """ + SAFE_COLLECTION_PRICE_LINK_SQL + """ ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1)
         WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
         GROUP BY e.binderId
         ORDER BY MAX(e.updatedAtEpochMillis) DESC, MAX(c.setName) COLLATE NOCASE
@@ -226,6 +229,7 @@ interface CardVaultDao {
             LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource
                  AND linked.externalProductId = e.externalProductId
             WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
+              AND """ + SAFE_COLLECTION_PRICE_LINK_SQL + """
         )
         ORDER BY p.effectiveAtEpochMillis
     """)
@@ -253,6 +257,11 @@ interface CardVaultDao {
             :fallbackCardId
         )
           AND p.source = :source
+          AND NOT EXISTS (
+            SELECT 1 FROM collection_entries e JOIN catalog_cards c ON c.id = e.cardId
+            WHERE e.id = :entryId AND e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
+              AND NOT (""" + SAFE_COLLECTION_PRICE_LINK_SQL + """)
+          )
           AND (CASE WHEN :useHoloPrice THEN NULLIF(p.holoTrendValueMinor, 0)
                     ELSE p.trendValueMinor END) IS NOT NULL
         ORDER BY p.effectiveAtEpochMillis ASC, p.id ASC

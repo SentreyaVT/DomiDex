@@ -47,6 +47,18 @@ class BinderOverviewPolicyTest {
         assertEquals(listOf("set-b", "set-a", "private-c"), orderBinderOverview(all, BinderSortOption.LAST_OPENED, BinderFilterOption.ALL).map { it.id })
     }
 
+    @Test fun `unknown slot counts are neither complete nor incomplete and have no percentage`() {
+        val unknown = BinderOverviewRecord("unknown", "Unloaded", BinderOverviewKind.SET, 500)
+        val all = listOf(unknown, setComplete, setSparse)
+        assertNull(unknown.progress)
+        assertFalse(unknown.isComplete)
+        assertFalse(unknown.isIncomplete)
+        assertEquals(listOf("set-a"), orderBinderOverview(all, BinderSortOption.MOST_CARDS, BinderFilterOption.COMPLETE).map { it.id })
+        assertEquals(listOf("set-b"), orderBinderOverview(all, BinderSortOption.MOST_CARDS, BinderFilterOption.INCOMPLETE).map { it.id })
+        assertEquals("set-b", orderBinderOverview(all, BinderSortOption.INCOMPLETE_FIRST, BinderFilterOption.ALL).first().id)
+        assertEquals(3, orderBinderOverview(all, BinderSortOption.MOST_CARDS, BinderFilterOption.ALL).size)
+    }
+
     @Test fun `private binder tab contains only private binders`() {
         val all = listOf(setComplete, privateLarge, setSparse)
 

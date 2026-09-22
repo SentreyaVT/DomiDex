@@ -6,6 +6,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LocalDataStartupTest {
+    @Test fun statusTracksOnlyTheOperationThatIsActuallyAboutToRun() = runBlocking {
+        val events = mutableListOf<String>()
+        assertEquals(LocalDataStartupState.Ready, prepareLocalDataStartup(
+            recover = { events += "recover" },
+            seed = { events += "seed" },
+            startCollectionSync = { events += "sync" },
+            onPhaseChanged = { events += it.name },
+        ))
+        assertEquals(listOf("LOCAL_RECOVERY", "recover", "COLLECTION", "seed", "SYNC_SESSION", "sync"), events)
+    }
+    @Test fun failedRecoveryNeverReportsCollectionOrSyncPreparation() = runBlocking {
+        val phases = mutableListOf<LocalDataStartupPhase>()
+        assertTrue(prepareLocalDataStartup({ error("Broken journal") }, {}, {}, phases::add) is LocalDataStartupState.Failed)
+        assertEquals(listOf(LocalDataStartupPhase.LOCAL_RECOVERY), phases)
+    }
     @Test fun recoveryPrecedesSeedAndCollectionSync() = runBlocking {
         val calls = mutableListOf<String>()
         assertEquals(LocalDataStartupState.Ready, prepareLocalDataStartup(

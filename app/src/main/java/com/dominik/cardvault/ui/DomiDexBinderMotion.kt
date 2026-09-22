@@ -91,7 +91,7 @@ internal fun binderPresentationBeats(motionEnabled: Boolean): List<BinderPresent
 internal fun DomiBinderShelfCard(
     title: String,
     owned: Int,
-    total: Int,
+    total: Int?,
     cardCount: Int,
     marketValue: String,
     logoUrl: String?,
@@ -99,6 +99,7 @@ internal fun DomiBinderShelfCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val knownTotal = total?.takeIf { it > 0 }
     DomiGlassCard(modifier.fillMaxWidth(), highlighted = selected, onClick = onClick) {
         Row(
             Modifier.fillMaxWidth().padding(14.dp),
@@ -114,19 +115,22 @@ internal fun DomiBinderShelfCard(
                 Text(title, color = VaultText, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (logoUrl != null) AsyncImage(logoUrl, "$title Set-Logo", Modifier.size(76.dp, 28.dp))
                 Text("$cardCount Karten im Binder", color = VaultTextMuted, fontSize = 11.sp)
-                Text("$owned / $total Sammelplätze", color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (knownTotal != null) "$owned / $knownTotal Sammelplätze" else "Slotzahl nach Laden des Sets verfügbar",
+                    color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                )
                 Text(marketValue, color = VaultText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                Box(Modifier.fillMaxWidth().height(4.dp).background(VaultOutlineSoft, RoundedCornerShape(99.dp))) {
+                if (knownTotal != null) Box(Modifier.fillMaxWidth().height(4.dp).background(VaultOutlineSoft, RoundedCornerShape(99.dp))) {
                     Box(
                         Modifier
-                            .fillMaxWidth(if (total > 0) (owned.toFloat() / total).coerceIn(0f, 1f) else 0f)
+                            .fillMaxWidth((owned.toFloat() / knownTotal).coerceIn(0f, 1f))
                             .height(4.dp)
                             .background(Brush.horizontalGradient(listOf(MewPlum, MewRose, MewIce)), RoundedCornerShape(99.dp)),
                     )
                 }
                 Text("Binder öffnen", color = MewRose, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
             }
-            MasterSetProgressRing(owned, total)
+            if (knownTotal != null) MasterSetProgressRing(owned, knownTotal)
         }
     }
 }

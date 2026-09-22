@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import quarantine from './cardmarket-source-quarantine.json' with { type: 'json' };
 import { compareAuditSummaries, evaluatePrinting } from './catalog-integrity-policy.mjs';
 import { safeSourceId } from './download-catalog-snapshot.mjs';
 
@@ -23,6 +25,32 @@ test('above-main card keeps exact set, variant and product with no denominator c
   assert.equal(result.status, 'VERIFIED_SOURCE_CHAIN');
   assert.equal(result.scannerCatalogIdentity, undefined);
   assert.equal(result.sourceCardId, 'sv08.5-137');
+});
+
+test('reviewed contradictions are unavailable even when a stale runtime reports a price', () => {
+  for (const { sourceCardId, rejectedProductId } of quarantine) {
+    const data = fixture();
+    data.runtime.sourceCardId = data.source.id = sourceCardId;
+    data.source.variants_detailed[0].thirdParty.cardmarket = rejectedProductId;
+    data.runtime.actualProductIds = [rejectedProductId];
+    data.products.set(rejectedProductId, { idProduct: rejectedProductId, name: 'Contradictory source product' });
+    data.prices.set(rejectedProductId, { trend: 1.38 });
+    const result = evaluatePrinting(data);
+    assert.equal(result.cardmarketProductId, null);
+    assert.equal(result.rejectedSourceProductId, rejectedProductId);
+    assert.equal(result.priceStatus, 'NOT_AVAILABLE');
+    assert.equal(result.priceEur, null);
+    assert.equal(result.mappingEvidence, 'REVIEWED_SOURCE_CONTRADICTION');
+    assert.ok(result.missingReasons.includes('SOURCE_PRODUCT_ID_QUARANTINED'));
+  }
+});
+
+test('maintained quarantine metadata stays represented in the Android exact guard', () => {
+  const android = readFileSync(new URL('../../app/src/main/java/com/dominik/cardvault/data/catalog/CardmarketIdentityGuard.kt', import.meta.url), 'utf8');
+  for (const { sourceCardId, rejectedProductId, evidence } of quarantine) {
+    assert.ok(android.includes(`${rejectedProductId}L -> "${sourceCardId}"`));
+    assert.ok(evidence.length >= 3);
+  }
 });
 test('normal and reverse use independent fields and do not borrow price', () => {
   const data = fixture();

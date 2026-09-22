@@ -91,11 +91,12 @@ private fun attachVerifiedCardmarketProduct(
     sourceCardId: String,
     variants: List<PokemonPrintVariant>,
 ): List<PokemonPrintVariant> {
-    val productId = verifiedCardmarketProductId(sourceCardId) ?: return variants
+    val productId = verifiedCardmarketProductId(sourceCardId)
     return variants.map { variant ->
         // A regular product bridge is not evidence for a stamp, foil or special edition.
         val ordinary = variant.variant in setOf("Standard", "Normal", "Holo", "Reverse Holo")
-        if (variant.cardmarketProductId == null && ordinary) variant.copy(cardmarketProductId = productId) else variant
+        val candidate = if (variant.cardmarketProductId == null && ordinary) productId else variant.cardmarketProductId
+        variant.copy(cardmarketProductId = candidate.takeUnless { isQuarantinedCardmarketIdentity(sourceCardId, it) })
     }
 }
 

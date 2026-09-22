@@ -168,13 +168,13 @@ private val relaxedTutorialSteps = listOf(
     TutorialStep("Alles bei dir", "Preise, Binder und Konto findest du in Settings. Deine Sammlung bleibt lokal nutzbar, auch ohne Anmeldung.", Destination.SETTINGS),
 )
 
-@Composable fun CardVaultApp(repository: CollectionRepository, refreshCatalog: () -> Unit = {}, contentUpdateState: StateFlow<ContentUpdateState>? = null, localDataReady: Boolean = true) {
+@Composable fun CardVaultApp(repository: CollectionRepository, refreshCatalog: () -> Unit = {}, contentUpdateState: StateFlow<ContentUpdateState>? = null, localDataReady: Boolean = true, startupPresentationHandled: Boolean = false) {
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences("cardvault_ui", Context.MODE_PRIVATE) }
     var focusChoice by rememberSaveable { mutableStateOf(preferences.getString("dashboard_focus", "auto") ?: "auto") }
     var destination by rememberSaveable { mutableStateOf(Destination.DASHBOARD) }
     // Only actual local initialization gates entry. Catalogue networking stays in the background.
-    var showArrival by rememberSaveable { mutableStateOf(true) }
+    var showArrival by rememberSaveable { mutableStateOf(!startupPresentationHandled) }
     var showTutorialPrompt by rememberSaveable { mutableStateOf(false) }
     var tutorialStep by rememberSaveable { mutableIntStateOf(-1) }
     val portfolio by repository.portfolio.collectAsState(initial = PortfolioSummary.Empty)
@@ -979,10 +979,10 @@ private fun isOnline(context: Context): Boolean {
     }
     val catalog = remember { PokemonVisualCatalog() }
     var catalogSets by remember { mutableStateOf<List<PokemonSet>>(emptyList()) }
-    var localReferenceCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     // Keep only the selected set name. Its cards must always be derived from the
     // live portfolio state so a just-added card immediately replaces its shadow slot.
     var selectedSetName by rememberSaveable { mutableStateOf<String?>(null) }
+    val localReferenceCounts by rememberBinderReferenceCounts(repository, grouped.keys.toList(), selectedSetName)
     var selectedPrivateBinderId by rememberSaveable { mutableStateOf<String?>(null) }
     var openingBinder by rememberSaveable { mutableStateOf<String?>(null) }
     var openingPrivateBinderId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1049,19 +1049,16 @@ private fun isOnline(context: Context): Boolean {
             .onSuccess { loaded -> Log.i("DomiDexMasterSets", "Loaded ${loaded.size} German master-set definitions"); catalogSets = loaded }
             .onFailure { error -> Log.w("DomiDexMasterSets", "German master-set index could not be loaded", error) }
     }
-    LaunchedEffect(grouped.keys.toList()) {
-        localReferenceCounts = grouped.keys.associateWith { setName ->
-            runCatching { repository.binderReferenceCount(setName) }.getOrDefault(0)
-        }
-    }
     fun coverFor(name: String): String? {
         resolveBinderSourceSet(name, grouped[name].orEmpty(), catalogSets)?.logoUrl?.takeIf(String::isNotBlank)?.let { return it }
         if (isWachsendesChaosSet(name)) return "https://www.pokemon.com/static-assets/content-assets/cms2-de-de/img/trading-card-game/series/me_series/me04/me04_logo_169_de.png"
         return null
     }
+    fun knownSlotCapacityFor(name: String): Int? =
+        if (isWachsendesChaosSet(name)) WachsendesChaosMasterSet.cards.size
+        else localReferenceCounts[name]?.takeIf { it > 0 }
     fun cardCapacityFor(name: String, setCards: List<CollectionCard>): Int {
-        if (isWachsendesChaosSet(name)) return WachsendesChaosMasterSet.cards.size
-        localReferenceCounts[name]?.takeIf { it > 0 }?.let { return it }
+        knownSlotCapacityFor(name)?.let { return it }
         val catalogTotal = resolveBinderSourceSet(name, setCards, catalogSets)?.total ?: 0
         // A verified visual set defines its own binder size.  A mistyped or
         // promotional collector number must be an overflow card, never inflate
@@ -1169,7 +1166,8 @@ private fun isOnline(context: Context): Boolean {
                 )
             }
             val setRecords = grouped.map { (setName, setCards) ->
-                val capacity = cardCapacityFor(setName, setCards)
+                // Catalogue totals count card motifs, not all German finish/variant slots.
+                val capacity = knownSlotCapacityFor(setName)
                 val progress = completedBinderSlotCount(setCards)
                 BinderOverviewRecord(
                     id = "set:$setName",
@@ -1225,7 +1223,7 @@ private fun isOnline(context: Context): Boolean {
                     if (record.kind == BinderOverviewKind.SET) {
                         val setName = record.name
                         val setCards = grouped[setName].orEmpty()
-                        val capacity = record.totalSlots ?: cardCapacityFor(setName, setCards)
+                        val capacity = record.totalSlots
                         val pricedCards = setCards.filter { it.priceUpdatedAtEpochMillis != null }
                         DomiBinderShelfCard(
                             title = setName,
@@ -2219,7 +2217,7 @@ private fun ArrivalMoment(ready: Boolean, onContinue: () -> Unit) {
 }
 
 /** Shows only locally available Cardmarket data; missing prices are never estimated. */
-@Composable private fun CurrentBinderValueCard(binders: List<BinderSummary>, openBinder: () -> Unit) {
+@Composable internal fun CurrentBinderValueCard(binders: List<BinderSummary>, openBinder: () -> Unit) {
     val bindersWithCards = binders.filter { it.ownedCards > 0 }
     val pricedBinders = bindersWithCards.filter { it.lastPriceUpdatedAtEpochMillis != null }
     val currentValue = pricedBinders.sumOf { it.marketValueEur }
@@ -2233,15 +2231,15 @@ private fun ArrivalMoment(ready: Boolean, onContinue: () -> Unit) {
                 Text("AKTUELLER BINDERWERT", color = MewRose, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
                 when {
                     bindersWithCards.isEmpty() -> Text("Noch keine Karten im Binder", color = VaultTextMuted, fontSize = 13.sp)
-                    pricedBinders.isEmpty() -> Text("Trendpreise werden noch synchronisiert", color = VaultTextMuted, fontSize = 13.sp)
+                    pricedBinders.isEmpty() -> Text("Preis nicht verfügbar", color = VaultTextMuted, fontSize = 13.sp)
                     else -> Text(euro(currentValue), color = VaultText, fontSize = 25.sp, fontWeight = FontWeight.Black)
                 }
                 if (bindersWithCards.isNotEmpty()) {
                     Text(
-                        if (pricedBinders.isEmpty()) "Sobald Cardmarket-Trendpreise vorliegen, erscheint hier der echte Gesamtwert."
-                        else "Cardmarket-Trendpreise: ${pricedBinders.size}/${bindersWithCards.size} Binder aktuell",
+                        if (pricedBinders.isEmpty()) "Für deine Binder liegen noch keine verlässlichen Cardmarket-Trendpreise vor."
+                        else "Wert verfügbarer Cardmarket-Preise · ${pricedBinders.size}/${bindersWithCards.size} Binder mit Preisdaten. Fehlende Preise sind nicht enthalten.",
                         color = VaultTextMuted,
-                        fontSize = 10.sp,
+                        fontSize = 12.sp,
                     )
                 }
             }

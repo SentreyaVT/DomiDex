@@ -1,4 +1,6 @@
 /** Pure reporting policy: never invents a product, printing, language or price. */
+import quarantinedLinks from './cardmarket-source-quarantine.json' with { type: 'json' };
+
 export function sourcePrintingMetadata(printing) {
   return {
     sourcePrintingId: printing?.variantId ?? null,
@@ -16,7 +18,10 @@ export function evaluatePrinting({ runtime, source, provenance, products, prices
   const print = source?.variants_detailed?.find(row => row.variantId === runtime.sourcePrintingId);
   const rawId = print?.thirdParty?.cardmarket;
   const sourceId = Number.isSafeInteger(rawId) && rawId > 0 ? rawId : null;
-  const productId = sourceId ?? runtime.localVerifiedProductId ?? null;
+  const declaredProductId = sourceId ?? runtime.localVerifiedProductId ?? null;
+  const quarantined = quarantinedLinks.some(row => row.sourceCardId === runtime.sourceCardId.toLowerCase() && row.rejectedProductId === declaredProductId);
+  const productId = quarantined ? null : declaredProductId;
+  if (quarantined) reasons.add('SOURCE_PRODUCT_ID_QUARANTINED');
   const product = productId === null ? null : products.get(productId);
   const priceRow = productId === null ? null : prices.get(productId);
   const field = runtime.finish.toLowerCase().includes('reverse') ? 'trend-holo' : 'trend';
@@ -75,9 +80,10 @@ export function evaluatePrinting({ runtime, source, provenance, products, prices
     binderSlot: matchedSlots.map(slot => ({ index: Number(slot.slotIndex), id: slot.slotId })),
     binderPlacementPolicy: runtime.canonicalBinderPrinting ? 'CANONICAL_SLOT' : 'ADDITIONAL_SOURCE_PRINT',
     cardmarketProductId: productId,
+    rejectedSourceProductId: quarantined ? declaredProductId : null,
     cardmarketProductName: product?.name ?? null,
     cardmarketExpansionId: product?.idExpansion ?? null,
-    mappingEvidence: sourceId ? 'SOURCE_DECLARED_PRODUCT_ID' : productId ? 'EXISTING_LOCAL_VERIFIED_REGISTRY' : 'NONE',
+    mappingEvidence: quarantined ? 'REVIEWED_SOURCE_CONTRADICTION' : sourceId ? 'SOURCE_DECLARED_PRODUCT_ID' : productId ? 'EXISTING_LOCAL_VERIFIED_REGISTRY' : 'NONE',
     priceField: field,
     priceEur: priceStatus === 'AVAILABLE' ? price : null,
     sourcePriceEur: price,

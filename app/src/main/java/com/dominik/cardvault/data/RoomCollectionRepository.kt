@@ -861,8 +861,8 @@ class RoomCollectionRepository(
             )
         }
     override suspend fun binderReferenceCount(setName: String): Int =
-        dao.germanMasterSetReferenceCount(setName).takeIf { it > 0 }
-            ?: dao.catalogReferenceCountForSet(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, setName)
+        // Market products are price references, not German finish/variant slots.
+        dao.germanMasterSetReferenceCount(setName)
 
     override suspend fun ensureGermanMasterSetBinders(sets: List<GermanMasterSetDefinition>) = database.withTransaction {
         val now = System.currentTimeMillis()
@@ -950,6 +950,9 @@ class RoomCollectionRepository(
     }
 
     override fun priceHistory(card: CollectionCard): Flow<List<CardPricePoint>> {
+        if (com.dominik.cardvault.data.catalog.isQuarantinedCardmarketIdentity(card.sourceCardId ?: card.id, card.externalProductId)) {
+            return kotlinx.coroutines.flow.flowOf(emptyList())
+        }
         val usesReverseHoloPrice = card.finish.contains("reverse", ignoreCase = true)
         return activeOwnerUid.flatMapLatest { ownerUid ->
             dao.observeCardPriceHistory(
@@ -978,6 +981,7 @@ class RoomCollectionRepository(
     ): List<PortfolioPoint> =
         prices.map { it.effectiveAtEpochMillis }.distinct().sorted().map { timestamp ->
             val total = rows.sumOf { row ->
+                if (com.dominik.cardvault.data.catalog.isQuarantinedCardmarketIdentity(row.sourceCardId ?: row.cardId, row.externalProductId)) return@sumOf 0L
                 latestPriceAtOrBefore(cardmarketPrices[row.priceCardId].orEmpty(), timestamp)
                     ?.trendValueFor(row.finish)
                     ?.times(row.quantity)

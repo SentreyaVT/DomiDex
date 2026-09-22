@@ -56,6 +56,9 @@ internal data class BinderOverviewRecord(
 
     val isComplete: Boolean
         get() = kind == BinderOverviewKind.SET && totalSlots != null && totalSlots > 0 && (completedSlots ?: ownedCards) >= totalSlots
+
+    val isIncomplete: Boolean
+        get() = kind == BinderOverviewKind.SET && totalSlots != null && totalSlots > 0 && !isComplete
 }
 
 internal fun binderOverviewRecordsForTab(
@@ -77,7 +80,7 @@ internal fun orderBinderOverview(
         when (filter) {
             BinderFilterOption.ALL -> true
             BinderFilterOption.COMPLETE -> record.isComplete
-            BinderFilterOption.INCOMPLETE -> record.kind == BinderOverviewKind.SET && !record.isComplete
+            BinderFilterOption.INCOMPLETE -> record.isIncomplete
             BinderFilterOption.SET_BINDERS -> record.kind == BinderOverviewKind.SET
             BinderFilterOption.PRIVATE_BINDERS -> record.kind == BinderOverviewKind.PRIVATE
         }
@@ -91,7 +94,7 @@ internal fun orderBinderOverview(
         BinderSortOption.LAST_OPENED -> compareByDescending<BinderOverviewRecord> { it.lastOpenedAtEpochMillis ?: Long.MIN_VALUE }
         BinderSortOption.COMPLETE_FIRST -> compareByDescending<BinderOverviewRecord> { it.isComplete }
             .thenByDescending { it.ownedCards }
-        BinderSortOption.INCOMPLETE_FIRST -> compareBy<BinderOverviewRecord> { it.isComplete }
+        BinderSortOption.INCOMPLETE_FIRST -> compareByDescending<BinderOverviewRecord> { it.isIncomplete }
             .thenByDescending { it.ownedCards }
     }
     return if (sort == BinderSortOption.A_TO_Z) filtered.sortedWith(primary)
