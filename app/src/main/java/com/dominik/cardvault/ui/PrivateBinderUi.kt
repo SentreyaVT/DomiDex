@@ -625,6 +625,7 @@ internal fun PrivateBinderReaderScreen(
             IconButton(onClick = { editorOpen = true }, enabled = !working, modifier = Modifier.semantics { contentDescription = "Privaten Binder bearbeiten" }) {
                 DomiLineIcon(DomiIconKind.MORE, MewIce, Modifier.size(19.dp))
             }
+            PrivateBinderSharingAction(binder, enabled = !working)
             TextButton(onClick = { operationError = null; deleteBinderConfirm = true }, enabled = !working) {
                 Text("Löschen", color = VaultError, fontSize = 10.sp)
             }

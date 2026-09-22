@@ -12,9 +12,16 @@ import com.dominik.cardvault.data.local.PrivateBinderEntity
 import com.dominik.cardvault.model.BinderTarget
 import com.dominik.cardvault.model.CardLanguage
 import com.dominik.cardvault.model.ManualCardInput
+import com.dominik.cardvault.model.PrivateBinderSummary
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -151,6 +158,31 @@ class PrivateBinderRepositoryInstrumentedTest {
         )
         assertEquals("A", database.cardVaultDao().privateBinder(id, "owner-a")?.name)
         assertEquals("B", database.cardVaultDao().privateBinder(id, "owner-b")?.name)
+
+        // Keep one real Room subscription through the switch; the binder ID is identical.
+        val owner = MutableStateFlow("owner-a")
+        val scopedRepository = RoomCollectionRepository(database, owner)
+        val summaries = Channel<PrivateBinderSummary>(Channel.UNLIMITED)
+        val observer = launch {
+            scopedRepository.privateBinders.collect { rows -> rows.forEach { summaries.send(it) } }
+        }
+        try {
+            val first = withTimeout(5_000) { summaries.receiveAsFlow().first { it.name == "A" } }
+            assertEquals(id, first.id)
+            assertEquals("owner-a", first.ownerUid)
+            owner.value = "owner-b"
+            val switched = withTimeout(5_000) { summaries.receiveAsFlow().first { it.name == "B" } }
+            assertEquals(id, switched.id)
+            assertEquals("owner-b", switched.ownerUid)
+            // An already open reader must retain the owner of its original summary.
+            assertEquals("owner-a", first.ownerUid)
+            owner.value = "owner-a"
+            val returned = withTimeout(5_000) { summaries.receiveAsFlow().first { it.name == "A" } }
+            assertEquals("owner-a", returned.ownerUid)
+        } finally {
+            observer.cancelAndJoin()
+            summaries.close()
+        }
     }
 
     @Test fun privateBinderAppearanceIsPlacementScopedDurableAndQueuedForSync() = runBlocking {

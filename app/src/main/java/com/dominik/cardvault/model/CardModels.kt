@@ -86,6 +86,8 @@ data class PrivateBinderSummary(
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
     val lastOpenedAtEpochMillis: Long?,
+    /** Owner of this exact summary emission; never use a later auth snapshot for sharing. */
+    val ownerUid: String? = null,
 )
 
 data class PrivateBinderCard(

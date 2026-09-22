@@ -161,6 +161,7 @@ class RoomCollectionRepository(
                     createdAtEpochMillis = binder.createdAtEpochMillis,
                     updatedAtEpochMillis = binder.updatedAtEpochMillis,
                     lastOpenedAtEpochMillis = binder.lastOpenedAtEpochMillis,
+                    ownerUid = binder.ownerUid,
                 )
             }
         }
