@@ -43,7 +43,8 @@ import java.util.concurrent.atomic.AtomicLong
  * Each database has a fresh test-only name and is removed in finally; reports stay in cacheDir.
  *
  * Instrumentation args:
- *   release27RoomScale=true                 (otherwise both tests SKIP)
+ *   release27RoomScale=true                 (otherwise opt-in tests SKIP)
+ *   release27RoomAnnualHistory=2-vs-365      (separate annual method; size1000/repeats3 only)
  *   release27RoomSizes=1000,5000,20000       (nonempty subset of these exact sizes)
  *   release27RoomRepeats=3                  (3..10, warm read samples / fresh migrations)
  *   release27RoomLabel=baseline             (safe report filename component)
@@ -161,6 +162,204 @@ class Release27RoomScaleInstrumentedTest {
             throw failure
         } finally { save(report, config) }
     }
+
+    @Test fun localRoomAnnualHistoryAtBoundedSyntheticScale() = runBlocking<Unit> {
+        val config = config() // Existing emulator-only guard, safe label and opt-in.
+        assumeTrue("Annual history proof not requested", InstrumentationRegistry.getArguments()
+            .getString("release27RoomAnnualHistory") == "2-vs-365")
+        require(config.sizes == listOf(1_000) && config.repeats == 3)
+        val size = 1_000
+        val report = report(config, "localRoomAnnualHistory")
+            .put("fixtureVersion", 2)
+            .put("fixture", "1000 owner-A products plus 3 owner-B sentinels; 50 A tombstones; separate 2/365 daily-date files")
+            .put("historyDays", JSONArray(listOf(2, 365)))
+            .put("cleanup", JSONArray())
+            .put("annualScope", "Retained synthetic SQLite history only; not 365 daily imports, peak memory, UI or whole-catalog capacity")
+        try {
+            for (days in listOf(2, 365)) {
+                val name = freshName("annual-$days")
+                val file = context.getDatabasePath(name).canonicalFile
+                check(file.name == name && file.parentFile == context.getDatabasePath("annual-proof-parent").canonicalFile.parentFile)
+                val files = listOf(file, File(file.path + "-wal"), File(file.path + "-shm"), File(file.path + "-journal"))
+                check(files.none(File::exists)) { "Annual proof requires an entirely fresh named test database" }
+                val counter = SqlCounter()
+                val db = Room.databaseBuilder(context, CardVaultDatabase::class.java, name)
+                    .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+                    .setQueryCallback(RoomDatabase.QueryCallback { sql, _ -> counter.record(sql) }, Executor { it.run() })
+                    .build()
+                try {
+                    val sql = db.openHelper.writableDatabase
+                    annualMeasured(report, "seed", days, -1, name, counter) { seedAnnualHistory(sql, days) }
+                    assertSeed(sql, size)
+                    assertEquals((size + OTHER_ROWS) * days.toLong(), scalar(sql, "SELECT COUNT(*) FROM raw_price_snapshots"))
+                    assertEquals(days.toLong(), scalar(sql, "SELECT COUNT(DISTINCT effectiveAtEpochMillis) FROM raw_price_snapshots"))
+                    assertEquals(AT + ANNUAL_DAY_MILLIS, scalar(sql, "SELECT MIN(effectiveAtEpochMillis) FROM raw_price_snapshots"))
+                    assertEquals(AT + days * ANNUAL_DAY_MILLIS, scalar(sql, "SELECT MAX(effectiveAtEpochMillis) FROM raw_price_snapshots"))
+                    val ownedRows = scalar(sql, """
+                        SELECT COUNT(*) FROM raw_price_snapshots p
+                        WHERE p.source = '$SOURCE' AND p.cardId IN (
+                            SELECT cardId FROM collection_entries
+                            WHERE ownerUid = '$OWNER' AND deletedAtEpochMillis IS NULL
+                        )
+                    """)
+                    assertEquals(950L * days, ownedRows)
+                    val before = hashes(sql)
+                    report.getJSONArray("integrity").put(JSONObject()
+                        .put("size", size).put("historyDays", days).put("ownedHistoryRows", ownedRows)
+                        .put("before", hashJson(before)))
+                    val owner = MutableStateFlow(OWNER)
+                    val repository = RoomCollectionRepository(db, owner)
+                    val dao = db.cardVaultDao()
+                    val live = (0 until size).filterNot(::deleted)
+                    val expectedIds = live.map { it + 1L }.toSet()
+                    val expectedQuantity = live.sumOf(::quantity)
+                    val expectedMinor = live.sumOf { annualValueMinor(it, days - 1) * quantity(it) }
+                    for (sample in 0..config.repeats) {
+                        val rows = annualMeasured(report, "collection.first", days, sample, name, counter) {
+                            dao.observeCollection(OWNER).first()
+                        }
+                        assertEquals(expectedIds, rows.map { it.entryId }.toSet())
+                        assertEquals(expectedIds.size, rows.size)
+                        assertEquals(expectedMinor, rows.sumOf { (it.marketValueMinor ?: 0L) * it.quantity })
+                        rows.forEach { row ->
+                            val index = (row.entryId - 1L).toInt()
+                            assertEquals(annualValueMinor(index, days - 1), row.marketValueMinor)
+                            assertEquals(AT + days * ANNUAL_DAY_MILLIS, row.priceUpdatedAtEpochMillis)
+                        }
+                        val sets = annualMeasured(report, "setBinderSummaries.first", days, sample, name, counter) {
+                            repository.binders.first()
+                        }
+                        assertEquals(size / SET_SIZE, sets.size)
+                        assertEquals(expectedQuantity, sets.sumOf { it.ownedCards })
+                        assertEquals(expectedMinor / 100.0, sets.sumOf { it.marketValueEur }, .00001)
+                        val binders = annualMeasured(report, "privateBinderSummaries.first", days, sample, name, counter) {
+                            repository.privateBinders.first()
+                        }
+                        assertEquals(listOf(BINDER), binders.map { it.id })
+                        assertEquals(expectedIds.size, binders.single().uniqueCards)
+                        assertEquals(expectedQuantity, binders.single().ownedCards)
+                        assertEquals(expectedMinor / 100.0, binders.single().marketValueEur, .00001)
+                        val portfolio = annualMeasured(report, "portfolio.first", days, sample, name, counter) {
+                            repository.portfolio.first()
+                        }
+                        assertEquals(expectedIds, portfolio.cards.map { it.entryId }.toSet())
+                        assertEquals(expectedIds.size, portfolio.cards.size)
+                        assertEquals(expectedQuantity, portfolio.totalCards)
+                        assertEquals(expectedMinor / 100.0, portfolio.totalValue, .00001)
+                        assertEquals(days, portfolio.history.size)
+                        portfolio.history.forEachIndexed { point, value ->
+                            val minor = live.sumOf { annualValueMinor(it, point) * quantity(it) }
+                            assertEquals("History value at $point/$days", minor / 100.0, value.value, .00001)
+                            val label = java.time.Instant.ofEpochMilli(AT + (point + 1) * ANNUAL_DAY_MILLIS)
+                                .atZone(java.time.ZoneOffset.UTC).toLocalDate()
+                                .format(java.time.format.DateTimeFormatter.ofPattern("MMM"))
+                            assertEquals("History label at $point/$days", label, value.label)
+                        }
+                        portfolio.cards.forEach { card ->
+                            val index = (card.entryId - 1L).toInt()
+                            val first = annualValueMinor(index, 0)
+                            val latest = annualValueMinor(index, days - 1)
+                            assertEquals(latest / 100.0, card.currentValueEur, .00001)
+                            assertEquals((latest - first) * 100.0 / first, card.changePercent, .00001)
+                            assertEquals(AT + days * ANNUAL_DAY_MILLIS, card.priceUpdatedAtEpochMillis)
+                        }
+                        val cards = annualMeasured(report, "privateBinderContents.first", days, sample, name, counter) {
+                            repository.privateBinderContents(BINDER).first()
+                        }
+                        assertEquals(expectedIds.size, cards.size)
+                        assertEquals(portfolio.cards.associateBy { it.entryId }, cards.associate { it.card.entryId to it.card })
+                        assertEquals(expectedIds.map { it - 1L }.toSet(), cards.map { it.position }.toSet())
+                        val pending = annualMeasured(report, "pendingCollectionOutbox.limit200", days, sample, name, counter) {
+                            dao.pendingSyncOutbox(OWNER, 200)
+                        }
+                        assertEquals((0 until size).count { state(it) == "PENDING" }.coerceAtMost(200), pending.size)
+                        assertTrue(pending.all { it.ownerUid == OWNER && it.state == "PENDING" })
+                        val privatePending = annualMeasured(report, "pendingPrivateOutbox.limit200", days, sample, name, counter) {
+                            dao.pendingPrivateBinderSyncOutbox(OWNER, 200)
+                        }
+                        assertEquals(200, privatePending.size)
+                        assertTrue(privatePending.all { it.ownerUid == OWNER })
+                    }
+                    owner.value = OTHER_OWNER
+                    val other = repository.portfolio.first()
+                    assertEquals((size until size + OTHER_ROWS).map { it + 1L }.toSet(), other.cards.map { it.entryId }.toSet())
+                    assertEquals(OTHER_ROWS, other.cards.size)
+                    assertEquals(days, other.history.size)
+                    other.history.forEachIndexed { point, value ->
+                        val minor = (size until size + OTHER_ROWS).sumOf { annualValueMinor(it, point) * quantity(it) }
+                        assertEquals(minor / 100.0, value.value, .00001)
+                    }
+                    owner.value = "fixture-owner-with-no-data"
+                    val empty = repository.portfolio.first()
+                    assertTrue(empty.cards.isEmpty() && empty.history.isEmpty())
+                    assertTrue(repository.privateBinders.first().isEmpty())
+                    assertTrue(repository.privateBinderContents(BINDER).first().isEmpty())
+                    owner.value = OWNER
+                    assertEquals(expectedIds, repository.portfolio.first().cards.map { it.entryId }.toSet())
+                    assertEquals("Every existing field must survive all reads", before, hashes(sql))
+                    assertNoForeignKeyErrors(sql)
+                    report.getJSONArray("integrity").put(JSONObject()
+                        .put("size", size).put("historyDays", days).put("afterReadHashMatch", true))
+                } finally {
+                    db.close()
+                    check(!db.isOpen)
+                    if (files.any(File::exists)) check(context.deleteDatabase(name))
+                    check(files.none(File::exists)) { "Annual proof's exact SQLite fixture remains" }
+                    report.getJSONArray("cleanup").put(JSONObject()
+                        .put("historyDays", days).put("databaseName", name)
+                        .put("closed", true).put("filesAbsent", true))
+                }
+                save(report, config)
+            }
+            report.put("status", "PASS")
+        } catch (failure: Throwable) {
+            report.put("status", "FAIL").put("failureType", failure.javaClass.simpleName)
+            throw failure
+        } finally { save(report, config) }
+    }
+
+    private suspend fun <T> annualMeasured(report: JSONObject, operation: String, days: Int, sample: Int,
+        name: String, counter: SqlCounter, block: suspend () -> T): T {
+        val result = measured(report, operation, 1_000, sample, name, counter, block)
+        val samples = report.getJSONArray("samples")
+        samples.getJSONObject(samples.length() - 1).put("historyDays", days)
+        return result
+    }
+
+    /** Existing complete relational fixture; only this fresh test database gains more dates. */
+    private fun seedAnnualHistory(db: SupportSQLiteDatabase, days: Int) {
+        require(days in setOf(2, 365))
+        seed(db, 1_000) // Existing two-point fixture remains unchanged for all existing callers.
+        db.beginTransaction()
+        try {
+            db.execSQL("""
+                UPDATE raw_price_snapshots SET
+                    effectiveAtEpochMillis = ? + ((effectiveAtEpochMillis - ?) / 1000) * ?,
+                    fetchedAtEpochMillis = ? + ((fetchedAtEpochMillis - ?) / 1000) * ?
+            """, arrayOf<Any>(AT, AT, ANNUAL_DAY_MILLIS, AT, AT, ANNUAL_DAY_MILLIS))
+            FixtureWriter(db).use { out ->
+                for (point in 2 until days) for (index in 0 until 1_000 + OTHER_ROWS) {
+                    val trend = 100L + index % 9_000 + point
+                    val at = AT + (point + 1) * ANNUAL_DAY_MILLIS
+                    val id = (1_000 + OTHER_ROWS) * 2L + (point - 2L) * (1_000 + OTHER_ROWS) + index + 1L
+                    out.insert("raw_price_snapshots", "id,cardId,source,currency,lowValueMinor,averageValueMinor,trendValueMinor,marketValueMinor,average1DayValueMinor,average7DayValueMinor,average30DayValueMinor,holoAverageValueMinor,holoLowValueMinor,holoTrendValueMinor,fetchedAtEpochMillis,effectiveAtEpochMillis",
+                        id, "fixture-card-$index", SOURCE, "EUR", trend - 20, trend - 10, trend, trend,
+                        trend - 1, trend - 2, trend - 3, trend + 45, trend + 40, trend + 50, at, at)
+                }
+            }
+            db.execSQL("UPDATE catalog_sync_state SET priceRecordCount = ? WHERE source = ?",
+                arrayOf<Any>((1_000 + OTHER_ROWS) * days, SOURCE))
+            db.execSQL("UPDATE app_metadata SET value = ? WHERE `key` = ?", arrayOf<Any>(
+                "version=2;size=1000;historyDays=$days", "synthetic-benchmark-fixture"))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    // Independent value oracle. Never invokes repository/DAO pricing helpers.
+    private fun annualValueMinor(index: Int, point: Int): Long =
+        100L + index % 9_000 + point + if (index % 7 == 0) 50L else 0L
+
+    private val ANNUAL_DAY_MILLIS: Long get() = 86_400_000L
 
     @Test fun localRoomMigration12To13PreservesEverySeededField() = runBlocking<Unit> {
         val config = config()

@@ -17,7 +17,56 @@ remain applicable. Historical delta experiments below are retained as evidence,
 not current rollout instructions. Overall NOT READY is not lifted solely by
 this scope adjustment. Release-signing/production/Xiaomi restrictions remain.
 
-### Latest local checkpoint: actual offline FULL-worker recovery (2026-10-02)
+### Latest local checkpoint: bounded annual-history scale (2026-10-02)
+
+The separate opt-in method `localRoomAnnualHistoryAtBoundedSyntheticScale`
+compares two fresh file-backed Room fixtures on the SAME unchanged product APK:
+1,000 owner-A products plus three foreign sentinels, 50 A tombstones, and 2 versus
+365 daily source dates. **1/1 actual case PASS, 58 exact samples, 240.700 s**.
+All 365 valuation points, Normal/Reverse prices, current timestamps, complete
+private-card equality, owner switches and all 15 table/per-column hashes pass.
+There are 2,006/366,095 raw rows and 1,900/346,750 eligible owner-history rows.
+Both owned UUID databases and their SQLite sidecars are closed/deleted and their
+absence asserted in Android finally; the Host verifies both explicit receipts.
+This is not an independent whole-device inventory or an importer performance test.
+
+Three warm resubscription medians (ms; first-after-seed measured separately):
+
+| Actual local flow | 2 daily dates | 365 daily dates |
+|---|---:|---:|
+| Collection | 18.55 | 20.28 |
+| Set binder summaries | 49.84 | 35.87 |
+| Private binder summaries | 53.79 | 37.21 |
+| Portfolio | 57.60 | 16,101.36 |
+| Private binder contents | 52.59 | 16,108.68 |
+
+**Open performance finding, not release approval:** large retained history makes
+the latter two flows slow in this controlled debug-emulator fixture. Both load
+all owned history projections and group them; `includePortfolioHistory=false`
+only skips chart construction, not that shared cost. The similar durations do
+not isolate SQL, cursor materialization, grouping or GC; no query-plan/peak-memory
+or physical-device claim is made. Main SQLite files are 2,207,744/74,616,832 bytes
+in the final sample. Summary variation is not an optimization/speedup claim.
+Keep all dates and price semantics; a separately proved first-positive-history
+projection for binder details is only a possible follow-up, not implemented.
+No schema, retention, data, sync, Rules or other product code changed.
+
+Evidence: `artifacts/release27-engineering-20261002/history-scale-review/`
+`room-scale-annual-20261001T224027Z-bc230904f2494440a736f2fe6340cb7e/`.
+Manifest exit0, 58 validated samples, exact installed hashes, offline/no reverse,
+idle and frozen inputs all pass. Build/debug APKs/release Kotlin/both lints PASS
+in 37 s (104 tasks, eight executed); unchanged JVM result reused, old Migration-
+Helper warnings remain. Separate pure Host controls: one positive, 23 negative
+reports and three malformed JSON cases PASS. Fresh installation and 11/11 Room
+controls: `collection-session-room-224000-a6fab4ed/manifest.json` in the same dated
+engineering directory. Product APK remains `64d40b75180873a339413460b5af1455a32c32ac24096577777d3a725ec822d3`;
+test APK `9426a66ee1cdd70906527804facc9f4b13ab2c7a8d687c7756fdf598efd5f078`,
+source snapshot `518ee15529cc477440690d95fa749c75a4bf216bc394dd78441843818e2db918`.
+Earlier 371/12 SDK cases below retain their exact pre-annual test APK identity;
+the annual addition changes no existing test body or product APK. No signing,
+release build, production or Xiaomi action. Gate12 and overall R27 remain open.
+
+### Previous local checkpoint: actual offline FULL-worker recovery (2026-10-02)
 
 Test-only extension: a valid pending private binder/outbox in a uniquely marked
 Room file survives two real worker retries with its SDK transport disabled,
@@ -1061,7 +1110,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 9 Community knowledge | IN PROGRESS (local safety/aggregation tests PASS) | confidence/freshness/lifecycle faults fixed; 48 focused JVM + 11 Android cases; counter/key hardening and 61 synthetic concurrency tests pass; actual trigger contention/live evidence remain |
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
-| 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
+| 12 Load/scale | PARTIAL; annual-history performance gap | 10/40/80 sharing concurrency and 1k/5k/20k two-date Room baselines. Fresh 1003-product 2/365-date file-Room test passes 58 samples and full integrity/owner checks, but portfolio/private contents reach ~16.1s warm medians at 346750 owned-history rows. No retention/read-architecture change made; targeted follow-up required. O(N) sharing reads/fan-out and production load remain unverified |
 | 13 Full regression | IN PROGRESS | Current product APK: 914 JVM PASS/1 existing optional SKIP reused, fresh 371/371 emulator cases, 12/12 actual SDK and 11/11 Room controls; three earlier analyzer cases share the same product APK. R8-only source 2dce825 PASS. Fresh broad Web product suite 1285 PASS; 103 public-cache cases and 33 local backend/Web-client SDK cases retain their separate dated scopes. Build/lint and historical failures remain documented; physical/live contracts remain untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
