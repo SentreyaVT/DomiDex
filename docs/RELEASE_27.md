@@ -164,10 +164,10 @@ An 18-test pass alone is not Gate 1 approval.
 | 7 Camera stability | NOT TESTED | synthetic/emulator regression; real hardware matrix separate |
 | 8 Recognition | NOT TESTED | multisignal, variant-aware false accepts, reproducible benchmark |
 | 9 Community knowledge | IN PROGRESS (client safety PASS locally) | confidence/freshness/lifecycle faults fixed; 48 focused JVM + 11 Android cases; canonical trigger/deploy ownership tested; aggregation scale/live evidence remain |
-| 10 Privacy/lifecycle | NOT TESTED | export/deletion/locks/storage/retention inventory |
-| 11 Observability/cost | NOT TESTED | low-cardinality safe metrics; simulation labelled, alerts prepared |
-| 12 Load/scale | NOT TESTED | 10/40/80 concurrency; 1k/5k/20k collections; no production load |
-| 13 Full regression | NOT TESTED | existing features and cross-platform contracts |
+| 10 Privacy/lifecycle | IN PROGRESS | local lifecycle audit and 102 focused Web tests; cross-account local feedback export finding under correction; no production deletion test |
+| 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
+| 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
+| 13 Full regression | IN PROGRESS | latest root checkpoint 800 JVM PASS/1 opt-in SKIP, 151 emulator, 1,013 Web; new session/backup fixes need final combined rerun; physical/live contracts untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
@@ -585,3 +585,23 @@ See Web `tests/sharing-concurrency/README.md` and local raw metrics under
 The independent Android review found a further pre-lease account-switch race in
 price-conflict resolution; it is under correction together with the older two-phase
 Collection cloud-resolution path. No whole-release readiness claim is made.
+
+### Reproducible local Web regression and cost inventory
+
+Web `npm run test:release-local` now reproduces the extended unit selection without
+depending on ignored engineering reports. It derives only whitelisted unit paths
+from the existing explicit package groups, adds four named suites, excludes emulator
+tests, strips inherited credentials, disables environment-file loading and guards
+Node/JSDOM network paths. It installs/builds/publishes nothing. The guards are not
+an OS sandbox. Twelve launcher-selection/transport tests and focused lint pass;
+the durable command independently passes **1,013/1,013**, 22.53 s. One earlier
+Windows-preload-path failure occurred before test discovery and was fixed, not
+counted as product RED. Details: Web `tests/release-local/README.md`.
+
+Web `docs/RELEASE_27_OBSERVABILITY_COST_AUDIT.md` maps actual local log/status paths,
+unknown production configuration and remaining privacy/retention risks. The pure
+`tests/cost-model` calculation has **6/6** independently rerun tests and explicit
+hypothetical Light/Average/Heavy inputs for 1k/5k/10k/50k users. It separates logical
+operations/new-upload bytes from billed reads/current storage, and leaves currency,
+compute and unknown production values null. No budget, monitoring backend or
+production telemetry was activated; the inventory is not Gate-11 completion.

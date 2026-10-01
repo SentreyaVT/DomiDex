@@ -1,5 +1,9 @@
 # Tests und Nachweisgrenzen
 
+Aktuelle Engineering-Fortschritte nach dem untenstehenden Dokumentationsaudit stehen
+im [Release-27-Gateledger](RELEASE_27.md). Die datierten Baseline-Zahlen hier bleiben
+historische Nachweise; sie sind nicht die neueste Testzahl oder eine Releasefreigabe.
+
 Stand: 2026-10-01. Die folgenden aktuellen Tests beziehen sich auf den **lokalen
 Working Tree**. Sie zertifizieren weder den älteren GitHub-Checkout noch das
 signierte v26-AAB oder einen neuen Release.
