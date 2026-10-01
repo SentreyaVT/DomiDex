@@ -540,6 +540,59 @@ private data class PrivatePushOutcome(val revision: Long, val remoteWins: Boolea
 // Shared only by FULL pulls. Mutations and the foreground sharing return stay outside this gate.
 private val privateFullPullFlights = PrivateFullPullSingleFlight()
 
+/**
+ * Active FULL-pull metadata only. The caller owns the existing per-owner single-flight for the
+ * whole run. EOF, rotation and its cursor reset share one session-guarded Room transaction;
+ * no cloud schema, Room migration, delta checkpoint or cross-process lease is introduced.
+ */
+internal class PrivateFullPullMetadataStore(
+    private val database: CardVaultDatabase,
+    private val ownerUid: String,
+    private val isCurrent: () -> Boolean,
+) {
+    init { require(ownerUid.isNotBlank() && ownerUid.length <= 128 && '\u0000' !in ownerUid) }
+    private val dao = database.cardVaultDao()
+
+    suspend fun readSchedule(): PrivateFullPullSchedule = database.withPrivateSyncSession(isCurrent) {
+        PrivateFullPullScheduleCodec.decode(dao.metadata(phaseKey(ownerUid)))
+    }
+
+    suspend fun readCursor(group: Int): String? = database.withPrivateSyncSession(isCurrent) {
+        dao.metadata(cursorKey(ownerUid, group))
+    }
+
+    suspend fun saveCursor(group: Int, documentId: String) {
+        database.withPrivateSyncSession(isCurrent) {
+            dao.putMetadata(AppMetadataEntity(cursorKey(ownerUid, group), documentId))
+        }
+    }
+
+    suspend fun advanceGroup(group: Int, reachedEof: Boolean): PrivateFullPullSchedule = database.withPrivateSyncSession(isCurrent) {
+        val next = PrivateFullPullScheduleCodec.decode(dao.metadata(phaseKey(ownerUid))).afterGroup(group, reachedEof)
+        if (reachedEof) dao.putMetadata(AppMetadataEntity(cursorKey(ownerUid, group), ""))
+        dao.putMetadata(AppMetadataEntity(phaseKey(ownerUid), PrivateFullPullScheduleCodec.encode(next)))
+        next
+    }
+
+    suspend fun resetCycle() {
+        database.withPrivateSyncSession(isCurrent) {
+            val completed = PrivateFullPullScheduleCodec.decode(dao.metadata(phaseKey(ownerUid)))
+            check(completed.isComplete)
+            // Some groups may already be partway through a following sweep. Preserve them.
+            dao.putMetadata(AppMetadataEntity(phaseKey(ownerUid), PrivateFullPullScheduleCodec.encode(completed.copy(seenEofMask = 0))))
+        }
+    }
+
+    companion object {
+        fun phaseKey(ownerUid: String): String = "private-sync-pull-phase-${ownerKey(ownerUid)}"
+        fun cursorKey(ownerUid: String, group: Int): String {
+            require(group in 0..3)
+            return "private-sync-pull-cursor-${ownerKey(ownerUid)}-$group"
+        }
+        private fun ownerKey(ownerUid: String): String = UUID.nameUUIDFromBytes(ownerUid.toByteArray(StandardCharsets.UTF_8)).toString()
+    }
+}
+
 private suspend fun pullBoundedSnapshot(
     database: CardVaultDatabase,
     firestore: FirebaseFirestore,
@@ -550,9 +603,7 @@ private suspend fun pullBoundedSnapshot(
     session.requireCurrent()
     val user = firestore.collection("users").document(uid)
     val dao = database.cardVaultDao()
-    val ownerKey = UUID.nameUUIDFromBytes(uid.toByteArray(StandardCharsets.UTF_8)).toString()
-    val phaseKey = "private-sync-pull-phase-$ownerKey"
-    fun cursorKey(phase: Int) = "private-sync-pull-cursor-$ownerKey-$phase"
+    val metadata = PrivateFullPullMetadataStore(database, uid, session::isCurrent)
     val groups = listOf(
         RemotePullGroup("privateBinders") { document -> applyRemoteBinder(dao, uid, document) },
         RemotePullGroup("privateBinderPlacements") { document -> applyRemotePlacement(dao, uid, document) },
@@ -560,13 +611,9 @@ private suspend fun pullBoundedSnapshot(
         RemotePullGroup("collectionPriceSelections") { document -> applyRemotePriceSelection(dao, uid, document) },
     )
     val port = object : PrivateFullPullPort {
-        override suspend fun readPhase(): Int = database.withPrivateSyncSession(session::isCurrent) {
-            dao.metadata(phaseKey)?.toIntOrNull() ?: 0
-        }
+        override suspend fun readSchedule(): PrivateFullPullSchedule = metadata.readSchedule()
 
-        override suspend fun readCursor(phase: Int): String? = database.withPrivateSyncSession(session::isCurrent) {
-            dao.metadata(cursorKey(phase))
-        }
+        override suspend fun readCursor(phase: Int): String? = metadata.readCursor(phase)
 
         override suspend fun queryPage(phase: Int, after: String?, limit: Int): List<PrivateFullPullRow> {
             val group = groups[phase]
@@ -587,24 +634,11 @@ private suspend fun pullBoundedSnapshot(
             resolveRemoteDependency(database, firestore, auth, uid, dependency, session)
         }
 
-        override suspend fun saveCursor(phase: Int, documentId: String) {
-            database.withPrivateSyncSession(session::isCurrent) {
-                dao.putMetadata(AppMetadataEntity(cursorKey(phase), documentId))
-            }
-        }
+        override suspend fun saveCursor(phase: Int, documentId: String) = metadata.saveCursor(phase, documentId)
 
-        override suspend fun finishPhase(phase: Int) {
-            database.withPrivateSyncSession(session::isCurrent) {
-                dao.putMetadata(AppMetadataEntity(cursorKey(phase), ""))
-                dao.putMetadata(AppMetadataEntity(phaseKey, (phase + 1).toString()))
-            }
-        }
+        override suspend fun advanceGroup(group: Int, reachedEof: Boolean): PrivateFullPullSchedule = metadata.advanceGroup(group, reachedEof)
 
-        override suspend fun resetCycle() {
-            database.withPrivateSyncSession(session::isCurrent) {
-                dao.putMetadata(AppMetadataEntity(phaseKey, "0"))
-            }
-        }
+        override suspend fun resetCycle() = metadata.resetCycle()
     }
     return runPrivateFullPull(port, PrivateFullPullReadBudget(uid, MAX_REMOTE_LOGICAL_READS_PER_RUN), REMOTE_PULL_PAGE_SIZE)
 }

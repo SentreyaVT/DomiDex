@@ -63,7 +63,8 @@ class PrivateFullPullRunnerTest {
         assertEquals(PrivateFullPullRunResult.MORE_DOCUMENTS, runPrivateFullPull(port, budget(2), maxPageSize = 2))
         assertEquals("b", port.cursors[3])
         assertEquals(0, port.resets)
-        assertEquals(PrivateFullPullRunResult.COMPLETE, runPrivateFullPull(port, budget(2), maxPageSize = 2))
+        // Fair rotation revisits the earlier groups rather than pinning the next run to group 3.
+        assertEquals(PrivateFullPullRunResult.COMPLETE, runPrivateFullPull(port, budget(4), maxPageSize = 2))
         assertEquals("b", port.queries.last().after)
         assertEquals(1, port.resets)
         assertEquals(listOf("a", "b"), port.saved.map { it.second })
@@ -83,7 +84,7 @@ class PrivateFullPullRunnerTest {
         assertEquals(listOf("a"), port.saved.map { it.second })
         assertEquals(3, firstBudget.usedReads)
         assertEquals(PrivateFullPullRunResult.COMPLETE, runPrivateFullPull(port, budget(20), maxPageSize = 2))
-        assertEquals("a", port.queries[1].after)
+        assertEquals("a", port.queries.filter { it.phase == 0 }[1].after)
         assertEquals(listOf("parent-a", "parent-b"), port.resolved.map { it.id })
         assertEquals(listOf("a", "b"), port.saved.map { it.second })
     }
@@ -199,7 +200,7 @@ class PrivateFullPullRunnerTest {
         assertEquals(3, budget.usedReads)
     }
 
-    @Test fun syntheticThousandFiveThousandAndTwentyThousandRowsFinishTwoBoundedCycles() = runBlocking {
+    @Test fun syntheticThousandFiveThousandAndTwentyThousandRowsReachTwoSweepMilestones() = runBlocking {
         // This is pagination/control-flow scale evidence, not Room, Firebase, latency or billing.
         for (count in listOf(1_000, 5_000, 20_000)) {
             val rows = (0 until count).groupBy { it % 4 }.mapValues { (_, ids) ->
@@ -208,13 +209,12 @@ class PrivateFullPullRunnerTest {
             val expected = (0..3).flatMap { phase -> rows.getValue(phase).sortedBy { it.id }.map { phase to it.id } }
             val port = FakePort(rows = rows)
             val traces = mutableListOf<List<Triple<Int, Int, Int>>>()
-            repeat(2) { cycle ->
-                val savedAtStart = port.saved.size
+            repeat(2) { milestone ->
                 val trace = mutableListOf<Triple<Int, Int, Int>>()
                 val maxRuns = (count + 999) / 1_000 + 4
                 var result = PrivateFullPullRunResult.MORE_DOCUMENTS
                 while (result != PrivateFullPullRunResult.COMPLETE) {
-                    assertTrue("$count rows cycle $cycle must terminate within the logical run bound", trace.size < maxRuns)
+                    assertTrue("$count rows milestone $milestone must terminate within the fixture run bound", trace.size < maxRuns)
                     val queriesBefore = port.queries.size
                     val savedBefore = port.saved.size
                     val budget = budget(1_000)
@@ -225,23 +225,82 @@ class PrivateFullPullRunnerTest {
                     assertTrue(port.saved.size - savedBefore <= 1_000)
                     trace.add(Triple(budget.usedReads, queries.size, port.saved.size - savedBefore))
                 }
-                val actual = port.saved.drop(savedAtStart)
-                assertEquals("Exact IDs/order across all four phases for $count rows", expected, actual)
-                assertEquals("No duplicate bookmark in one cycle", count, actual.toSet().size)
-                assertEquals(cycle + 1, port.resets)
-                assertEquals(0, port.phase)
-                assertTrue(port.cursors.isEmpty())
-                // Each document once, with at most one extra empty end-of-phase query per phase.
-                assertTrue(trace.sumOf { it.first } in count..(count + 4))
+                assertEquals("Every identity has been visited by the first milestone", expected.toSet(), port.saved.toSet())
+                assertEquals(milestone + 1, port.resets)
+                assertEquals(0, port.schedule.seenEofMask)
+                // Milestones are independent per-group sweeps, not an ordered global snapshot.
+                // Already finished groups may be revisited while another one still progresses.
+                for (phase in 0..3) {
+                    val sorted = expected.filter { it.first == phase }
+                    val actual = port.saved.filter { it.first == phase }
+                    assertTrue("Group $phase must have completed each acknowledged sweep", actual.size >= sorted.size * (milestone + 1))
+                    actual.forEachIndexed { index, item ->
+                        assertEquals("No skips or repetitions within an ascending group sweep", sorted[index % sorted.size], item)
+                    }
+                }
                 traces.add(trace)
             }
-            assertEquals("The next complete cycle remains bounded and reproducible", traces[0], traces[1])
+            // Keep observed costs visible instead of preserving the old, now false N..N+4 bound.
+            println("FULL-pull rotation rows=$count logicalReadsByMilestone=${traces.map { runs -> runs.map { it.first } }} " +
+                "queriesByMilestone=${traces.map { runs -> runs.map { it.second } }} legacyTwoFullSweepUpper=${2 * (count + 4)}")
         }
+    }
+
+    @Test fun exactBudgetRereadsAreExplicitAndCompletionPreservesActiveCursors() = runBlocking {
+        val port = FakePort(rows = (0..3).associateWith { phase -> (0 until 250).map { row("$phase-${it.toString().padStart(3, '0')}") } })
+        val first = budget(1_000)
+        assertEquals(PrivateFullPullRunResult.MORE_DOCUMENTS, runPrivateFullPull(port, first))
+        assertEquals(1_000, first.usedReads)
+        assertEquals(PrivateFullPullSchedule(0, 7), port.schedule)
+        val second = budget(1_000)
+        assertEquals(PrivateFullPullRunResult.COMPLETE, runPrivateFullPull(port, second))
+        assertEquals("Three fair revisits plus the missing final EOF are real additional reads", 601, second.usedReads)
+        assertEquals(mapOf(0 to "0-199", 1 to "1-199", 2 to "2-199"), port.cursors)
+        assertEquals(1_600, port.saved.size)
+        assertEquals(1_000, port.saved.toSet().size)
+        val third = budget(1_000)
+        assertEquals(PrivateFullPullRunResult.COMPLETE, runPrivateFullPull(port, third))
+        assertEquals(400, third.usedReads)
+        assertEquals(2_000, port.saved.size)
+        assertTrue(port.saved.groupingBy { it }.eachCount().values.all { it == 2 })
+        assertTrue(port.cursors.isEmpty())
+    }
+
+    @Test fun oneReadBudgetPersistsEofAcrossFourInvocations() = runBlocking {
+        val port = FakePort()
+        repeat(3) { assertEquals(PrivateFullPullRunResult.MORE_DOCUMENTS, runPrivateFullPull(port, budget(1))) }
+        assertEquals(PrivateFullPullSchedule(3, 7), port.schedule)
+        assertEquals(PrivateFullPullRunResult.COMPLETE, runPrivateFullPull(port, budget(1)))
+        assertEquals(listOf(0, 1, 2, 3), port.queries.map { it.phase })
+        assertEquals(1, port.resets)
+    }
+
+    @Test fun scheduleCodecAcceptsOnlyExactLegacyOrCanonicalVersionedValues() {
+        assertEquals(PrivateFullPullSchedule(), PrivateFullPullScheduleCodec.decode(null))
+        for (phase in 0..3) assertEquals(PrivateFullPullSchedule(phase, (1 shl phase) - 1),
+            PrivateFullPullScheduleCodec.decode(phase.toString()))
+        assertEquals(PrivateFullPullSchedule(0, 15), PrivateFullPullScheduleCodec.decode("4"))
+        for (next in 0..3) for (mask in 0..15) {
+            val state = PrivateFullPullSchedule(next, mask)
+            assertEquals(state, PrivateFullPullScheduleCodec.decode(PrivateFullPullScheduleCodec.encode(state)))
+        }
+        for (raw in listOf("", "-1", "5", "00", " 0", "0 ", "rr1|4|0", "rr1|0|16", "rr1|00|1",
+            "rr1|0|01", "rr1|0|-1", "rr2|0|0", "rr1|0|0|", "rr1|0|0\n", "garbage")) {
+            assertTrue("Must fail closed without inventing progress: $raw", runCatching { PrivateFullPullScheduleCodec.decode(raw) }.isFailure)
+        }
+    }
+
+    @Test fun finalEofOutsideGroupThreePreservesNextTurnOnReset() = runBlocking {
+        val port = FakePort(initialPhase = 0, rows = mapOf(0 to listOf(row("a"), row("b"), row("c"))))
+        assertEquals(PrivateFullPullRunResult.COMPLETE, runPrivateFullPull(port, budget(20), maxPageSize = 2))
+        assertEquals(listOf(0, 1, 2, 3, 0), port.queries.map { it.phase })
+        assertEquals(PrivateFullPullSchedule(1, 0), port.schedule)
     }
 
     private data class QueryCall(val phase: Int, val after: String?, val limit: Int)
     private class FakePort(initialPhase: Int = 0, val rows: Map<Int, List<PrivateFullPullRow>> = emptyMap()) : PrivateFullPullPort {
-        var phase = initialPhase
+        var schedule = PrivateFullPullScheduleCodec.decode(initialPhase.toString())
+        val phase: Int get() = schedule.nextGroup
         val cursors = mutableMapOf<Int, String>()
         val queries = mutableListOf<QueryCall>()
         val saved = mutableListOf<Pair<Int, String>>()
@@ -252,7 +311,7 @@ class PrivateFullPullRunnerTest {
         var saveFailure: Throwable? = null
         var onResolve: suspend (PrivateRemoteApplyResult.RetryDependency) -> Unit = {}
 
-        override suspend fun readPhase() = phase
+        override suspend fun readSchedule() = schedule
         override suspend fun readCursor(phase: Int) = cursors[phase]
         override suspend fun queryPage(phase: Int, after: String?, limit: Int): List<PrivateFullPullRow> {
             queries.add(QueryCall(phase, after, limit))
@@ -272,11 +331,12 @@ class PrivateFullPullRunnerTest {
             saved.add(phase to documentId)
             cursors[phase] = documentId
         }
-        override suspend fun finishPhase(phase: Int) {
-            cursors.remove(phase)
-            this.phase = phase + 1
+        override suspend fun advanceGroup(group: Int, reachedEof: Boolean): PrivateFullPullSchedule {
+            if (reachedEof) cursors.remove(group)
+            schedule = schedule.afterGroup(group, reachedEof)
+            return schedule
         }
-        override suspend fun resetCycle() { phase = 0; resets++ }
+        override suspend fun resetCycle() { check(schedule.isComplete); schedule = schedule.copy(seenEofMask = 0); resets++ }
     }
 
     companion object {

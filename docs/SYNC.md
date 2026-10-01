@@ -205,9 +205,9 @@ or Gate-4 completion. No production/deployment, Xiaomi, release build or signing
 
 ## Rejected ID-horizon experiment (2026-10-01; not active)
 
-A deterministic regression reproduced a remaining fairness limit: continuously
-appended higher IDs can keep the first full-pull group open across worker runs,
-delaying an existing later-group placement. The original RED is retained locally
+A deterministic regression reproduced a fairness limit in the then-active
+sequential runner: continuously appended higher IDs could keep the first group
+open across worker runs, delaying an existing later-group placement. The original RED is retained locally
 as `full-pull-horizon-red.{log,xml}`. This is a synthetic counterexample, not a
 production-data incident or a claim that an ordinary finite binder cannot sync.
 
@@ -247,8 +247,9 @@ passes were not evidence of faster sync. Historical experiment-only results:
 27 runner cases, six codec cases, 11 Room cases, a full JVM run of 867 PASS /
 one existing opt-in SKIP and an existing 371-case emulator selection all passed
 before the real SDK rejection. **These are not final restored-build results.**
-Fair bounded scheduling and low-latency Android/Web convergence remain open
-Gate-4 work; do not mark them complete or hide the rejected SDK evidence.
+The later active round-robin change is described below; it does not revive this
+rejected horizon query. Low-latency Android/Web convergence and wider Gate-4
+acceptance remain open; do not hide the rejected SDK evidence.
 
 ## Private binder delta protocol — foundation in progress, not active yet
 
@@ -399,7 +400,7 @@ for every field. A dependency returned from SERVER is additionally checked for
 cache/pending-write metadata before it can create a collection parent in Room.
 
 The current ID bookmark still pages a FULL scan, not an incremental high-watermark.
-Blocked documents are revisited after the next full cycle; no permanent-orphan
+Blocked documents are revisited in a later sweep of their group; no permanent-orphan
 inference or hot continuation solely for a missing parent is made. This must not
 be reused as the delta adapter's deferred-document policy. Remote apply and the
 current bookmark are separate transactions; crash replay must remain idempotent.
@@ -417,29 +418,110 @@ Kotlin compilation and 154 selected JVM tests. No release signing or production 
 
 ### Active bounded full-scan runner
 
-`PrivateFullPullRunner` is the worker's actual four-phase control flow; its adapter
-retains Firestore SDK reads, snapshot metadata and session-guarded Room writes.
-It accounts for the whole fetched page before applying rows, at most 200/query and
+`runPrivateFullPull` in `PrivateFullPullRunner.kt` is the actual worker control
+flow. It now rotates pages between four groups in their existing order:
+`privateBinders`, `privateBinderPlacements`, `collectionLayouts`, and
+`collectionPriceSelections`. Firestore queries remain `documentId ASC` with
+`limit/startAfter` and `Source.SERVER`; there is no horizon query, timestamp
+delta, extra cloud index or altered payload/authorization policy.
+
+Each group keeps its own durable exclusive ID cursor. After a page, the next
+group becomes eligible, including when the current page is full. A short or empty
+page establishes that group's EOF and clears only its cursor. That group is not
+queried again during the same invocation after EOF, but is eligible in a later
+invocation even if its persistent EOF bit is already set. Thus an indefinitely
+growing group cannot monopolize every run, and new rows in earlier EOF groups
+remain serviceable while another group is still progressing.
+
+The per-owner `PrivateFullPullSchedule(nextGroup, seenEofMask)` records rotation
+and which groups have reached EOF since the previous completion. Mask `15`
+produces one `COMPLETE` milestone; `resetCycle` clears only the mask and retains
+the next group and all partial cursors. A previously finished group may already
+have started its next sweep by then. **This is not a simultaneous server snapshot,
+not a statement that every cursor is empty, and not a promise that all concurrent
+changes have arrived.** A persisted complete mask resets without another remote
+read; the runner returns rather than starting another milestone in that invocation.
+
+`PrivateFullPullMetadataStore` in `PrivateBinderFirebaseSync.kt` is wired into the
+production adapter, not the separate unintegrated delta foundation. It reuses
+the existing owner-derived `private-sync-pull-phase-*` and per-group
+`private-sync-pull-cursor-*-<group>` keys in `app_metadata`, with no Room migration.
+The schedule codec writes exactly `rr1|<nextGroup 0..3>|<mask 0..15>`. A missing
+value starts at `(0, 0)`. Exact legacy values `0` through `3` decode to that next
+group and the preceding groups' EOF bits; legacy `4` decodes to `(0, 15)`.
+Reading alone does not rewrite legacy state; the next advance/reset persists the
+versioned value. Other values fail closed instead of inventing progress or
+clearing cursors.
+
+Schedule/cursor reads and writes use the actual `withPrivateSyncSession` Room
+transaction helper and the captured `PrivatePullAuthSession` generation guard.
+`advanceGroup` decodes first, then atomically writes rotation/EOF evidence and,
+only at EOF, the current group's empty cursor. Its final guard rejects an
+observed account-generation change before commit, including A-to-B-to-A.
+Reset validates a complete mask and changes only schedule evidence. Remote
+payload apply and its document bookmark remain separate transactions, so crash
+replay must still be idempotent; this change does not make network reads atomic.
+
+The whole fetched page is charged before applying rows: at most 200/query and
 1,000 logical read units/run. Empty queries count one; point reads are reserved
 before requesting a parent, including missing documents. The per-run parent set
-is bounded by that budget and is discarded before the next invocation.
+is bounded by that budget and discarded before the next invocation. If a
+never-attempted dependency cannot fit, the bookmark stays before its child and
+rotation advances without claiming EOF. Already-attempted missing or locally
+blocked parents allow ordinary FULL-scan progression and later group-sweep replay.
+A shared owner gate still spans initial schedule read through final write, retains
+at most eight active owners and releases synchronously in `finally`. Existing
+WorkManager backoff, separate pushes and sharing priority are unchanged. This is
+single-process exclusion, not a distributed lock.
 
-If a never-attempted dependency cannot fit, the bookmark remains before its child.
-Already-attempted missing or locally blocked parents allow the FULL scan to advance
-and be revisited next cycle. Completing phase four resets once, including recovery
-from a persisted phase-four checkpoint; it never starts another full cycle in the
-same invocation. A single shared owner gate covers phase read through final write.
-It retains at most eight active owners and releases synchronously in `finally`.
-Concurrent pulls retry with existing WorkManager backoff; pushes and sharing are
-outside the gate. This is single-process exclusion, not a distributed lock.
+Fair revisits have a measurable logical-read cost. In the fixed, evenly distributed
+synthetic matrix (200/query, 1,000/run, no dependency reads), the confirmed JVM
+traces are:
 
-Thirty-seven new runner/gate/budget cases replace two obsolete cursor-only tests;
-the selected sync/sharing total is now 189 JVM tests. Synthetic 1k/5k/20k matrices
-exercise two finite full cycles and exact ID/phase bookmark sequences. The final
-debug/test/release-Kotlin build and 78 emulator regressions pass. A metadata port
-and fake provider are not Firebase E2E, and logical read units are not an invoice
-prediction (SDK retries and Firestore pricing are not modeled). Delta/network
-watermark integration, actual cross-device scale and remote latency remain open.
+| Total fixture rows | First COMPLETE milestone | Next COMPLETE: additional reads | Combined reads |
+| --- | ---: | ---: | ---: |
+| 1,000 | 1,601 | 400 | 2,001 |
+| 5,000 | 5,601 | 4,400 | 10,001 |
+| 20,000 | 20,004 | 20,004 | 40,008 |
+
+The first 1,000-row milestone exceeds the old sequential `N..N+4` ceiling of
+1,004: it includes 600 real repeated row reads plus the final empty EOF read.
+Those repeats already advance subsequent group sweeps, whose partial cursors
+survive completion. The tests check exact ascending identity sequences within
+each group sweep and at least two completed sweeps per group across the two
+milestones, not a globally ordered snapshot or a universal two-pass cost bound.
+No production latency improvement, billed-read reduction or unchanged-run saving
+is inferred from these synthetic counts; SDK retries and billing are not modeled.
+
+The sequential fairness RED is preserved as `full-pull-fairness-red.{log,xml}`:
+two finite controls passed and only the growing-first-group case failed. With
+rotation, the focused JVM selection is **46/46 PASS**; the full JVM run is
+**865 PASS / one existing live-source opt-in SKIP**, as confirmed by Root.
+Evidence is retained under `artifacts/release27-engineering-20261001/` in
+`full-pull-fairness-focused-results/` and `full-pull-fairness-all-jvm-results/`.
+Tests cover budgets 1/200/201/1,000, new rows after an earlier EOF, durable EOF
+evidence across tiny budgets, strict legacy decoding, bounded dependency handling
+and the scale/cost traces above. The new actual-Room metadata tests now pass
+**5/5 with no skips**: owner isolation, corruption preservation, rollback after
+both writes, A-to-B-to-A final-guard rollback, and real database close/reopen.
+The fixed emulator regression passes **371/371, no skips** at
+`artifacts/android-regression/20261001T151140Z-a0aa117d/manifest.json`;
+the separate Room proof is `full-pull-fairness-room-manifest.json` under the
+engineering artifact directory. Its installed APK hashes match that baseline.
+
+The actual SDK Android/Web price roundtrip and both explicit conflict decisions
+were rerun on this same installed build. All three pass, including independent
+Admin server readbacks, unchanged input hashes, owned fixture cleanup, empty
+reverse mappings and free local ports afterward. Web evidence directories:
+
+- `outputs/android-web-price-local/2026-10-01T15-16-59-907Z-2ab1c907358e409ab70823c7e79d0523/`
+- `outputs/android-web-price-conflict-local/2026-10-01T15-18-04-290Z-cloud-32eea1be3e5447e78ba31c025d189f49/`
+- `outputs/android-web-price-conflict-local/2026-10-01T15-18-56-995Z-local-992029626ad54c928c7d1f13c3f4076b/`
+
+These small actual-SDK fixtures are distinct from the synthetic JVM scale matrix.
+They do not establish 20,000-row SDK convergence, WorkManager scheduling or
+production performance. Cross-device scale, remote latency, delta
+integration and overall Gate-4 acceptance remain open.
 
 ### Preiswahl-Konflikte: explizite Entscheidung statt stiller Cloud-Übernahme (2026-10-01)
 

@@ -2,7 +2,40 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: public catalog execution bound
+### Latest local checkpoint: FULL-pull fairness and viewer cancellation
+
+The existing four-group FULL scan now rotates after each bounded page instead
+of draining the first group indefinitely. Rotation and EOF evidence persist in
+the existing owner-local metadata keys; EOF cursor clearing is one guarded Room
+transaction. No Room/cloud schema, query order, Rules, auth entitlement, outbox,
+delta protocol or sharing priority has changed. Partial group cursors survive a
+completion milestone. This milestone means each group reached EOF at least once,
+not a simultaneous server snapshot. See `docs/SYNC.md` for exact read-cost traces:
+the first 1,000-row milestone costs 1,601 logical reads, not the old 1,004 bound.
+Do not infer a universal cost saving or live latency improvement.
+
+The original growing-first-group RED remains preserved. Focused JVM tests pass
+46/46; full JVM tests pass 865 with one pre-existing optional live-source skip.
+Debug/test APKs, release Kotlin compilation and debug/release lint pass; no release
+APK/AAB was built or signed. Independent source reviews and actual execution now
+agree: fixed **371/371 emulator tests** plus **5/5 actual-Room metadata tests**
+pass without skips. Baseline: `artifacts/android-regression/20261001T151140Z-a0aa117d/manifest.json`.
+App APK SHA-256: `2ac471a4a693702ae8bf74d905c6c207e2f9116f9055953be302b3dc6deb77ef`;
+test APK: `f81c2d4a97dbabb2e5ad63fd45a71d59945067a9143ebb4f70d0ca7a95cc5909`.
+The actual Android/Web price roundtrip and both cloud/local conflict decisions
+also pass on this installed build, with independent server readbacks and complete
+owned-fixture/input/port cleanup checks. Exact evidence paths are in `docs/SYNC.md`.
+They are not proof of real-cloud latency, full WorkManager scheduling or large-scale
+SDK convergence. Xiaomi and production remained untouched.
+
+Sibling Web commit `b8d3d95` binds manual shared-binder retries to the existing
+page/share cancellation signal. The reproduced baseline was 1,199 PASS / 2 FAIL;
+the final full suite is 1,201/1,201 PASS with typecheck, lint and isolated build
+PASS (19.304 s; original dist/config unchanged). Polling cadence and permissions
+are unchanged; overlapping slow automatic refreshes remain documented as open.
+No server-work cancellation or reduced Firestore billing is claimed. Nothing deployed.
+
+### Previous local checkpoint: public catalog execution bound
 
 The sibling Web cache now limits actual public catalog loader promises, including
 uncached overflow: 32 active / 512 FIFO queued per instance. Original deadlines,
@@ -27,7 +60,8 @@ visit only phase 0 when new binder IDs continually extend that group. Three exis
 later rows remain untouched. New JVM baseline: two finite controls PASS, one growing
 fixture FAIL. Evidence: `artifacts/release27-engineering-20261001/full-pull-fairness-red.log`.
 This adversarial control-flow finding is not a measured real-user failure frequency.
-Correction and follow-up verification are in progress; release remains **NOT READY**.
+The source correction and bounded device/SDK follow-up verification are described
+above. Overall release remains **NOT READY**.
 
 ## Scope and safety boundaries
 
