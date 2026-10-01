@@ -8,8 +8,11 @@ ein eigenes Grading-System gehören nicht zum aktuellen Funktionsumfang.
 
 ## Projektstand: geschlossene Alpha
 
-**Technische Bestandsaufnahme: 1. Oktober 2026.** Dieses Dokumentationsupdate ist
-kein App-Release. Es enthält keine neuen App-Funktionen, APKs oder AABs.
+**Stand: 1. Oktober 2026.** Die folgende Release-/Git-Zuordnung stammt aus der
+ursprünglichen Bestandsaufnahme. Anschließend begann der lokale Release-27-
+Engineeringlauf auf `codex/release-27-hardening`: geprüfte Änderungen, einzelne
+Testnachweise und offene Gates stehen im [Release-27-Ledger](docs/RELEASE_27.md).
+Version 27 bleibt **unveröffentlicht und nicht zur Signierung freigegeben**.
 
 | Stand | Nachweis |
 | --- | --- |
@@ -20,8 +23,9 @@ kein App-Release. Es enthält keine neuen App-Funktionen, APKs oder AABs.
 
 **Wichtig für einen neuen Checkout:** Der Dokumentationsstand beschreibt auch den
 geprüften lokalen Entwicklungsstand, nicht nur den älteren Code auf GitHub.
-Dieser reine Dokumentations-Push übernimmt absichtlich keine unveröffentlichten
-Code-Commits. Ein Clone des Standardbranches ist **nicht** der Quellnachweis für
+Der damalige reine Dokumentations-Push übernahm keine unveröffentlichten
+Code-Commits. Der spätere Engineeringstand ist lokal gesichert; ein Clone des
+Standardbranches ist **nicht** der Quellnachweis für
 die signierte Play-Version 26 oder die lokale Entwicklung 27. Einzelheiten und
 offene Reproduzierbarkeit: [Projektstatus](docs/PROJECT_STATUS.md).
 
@@ -55,8 +59,8 @@ Historische Testreleases bleiben als Archiv/Vorabversion erhalten.
   Community-Knowledge und manuell bestätigter ScanLab-Fotoversand.
 
 Die neue Auswahl einer geprüften Preisalternative **nur bei fehlendem Trendpreis**,
-ihr Sync-Sidecar und weitere Scanner-/Sharing-Änderungen liegen teilweise nur lokal
-vor. Daraus folgt keine Freigabe oder Veröffentlichung von Version 27.
+ihr Sync-Sidecar und weitere Scanner-/Sharing-Änderungen gehören zum lokalen
+Engineeringstand. Daraus folgt keine Freigabe oder Veröffentlichung von Version 27.
 
 ## Scanner in Kürze
 
@@ -114,15 +118,18 @@ freizugebender Vorgang. Keine automatisierte Release-Pipeline ist auf GitHub akt
 
 ## Test- und Sicherheitsstand
 
-Am 01.10.2026 wurde der lokale JVM-Testlauf erneut ausgeführt: **630 Tests,
+Beim ursprünglichen Dokumentationsaudit am 01.10.2026: **630 JVM-Tests,
 629 bestanden, 1 optionaler Live-Test übersprungen, keine Fehler**. Ergänzende
 Offline-Tests und historische Emulatornachweise stehen in [TESTING](docs/TESTING.md).
-Es gab in diesem Audit keine Geräteinstallation und keinen neuen Kamera-Endtest.
+Dieser ursprüngliche Audit enthielt keine Geräteinstallation und keinen neuen
+Kamera-Endtest. Die späteren lokalen JVM-/Emulatorprüfungen stehen getrennt im
+[Release-27-Ledger](docs/RELEASE_27.md); sie sind keine Freigabe für reale Geräte.
 
 R8-Mapping und eine **partielle** Native-Symbol-ZIP sind Version 26 in Play
 zugeordnet. Nur `libc++_shared.so` ist exakt symbolisch abgedeckt; sechs
-Drittanbieterbibliotheken bleiben offen. App Check ist trotz transitiver
-Bestandteile nicht als initialisierter/enforced App-Schutz nachgewiesen.
+Drittanbieterbibliotheken bleiben offen. App Check ist inzwischen im lokalen
+Entwicklungsstand implementiert, aber standardmäßig **ausgeschaltet**; produktives
+Enforcement ist nicht nachgewiesen. [Vertrag und Aktivierungsgrenzen](docs/RELEASE_27_APP_CHECK.md).
 Weitere Grenzen: [Security](docs/security-entitlements.md).
 
 ## Nächste Schritte und Produktgrenzen

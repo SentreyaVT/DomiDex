@@ -1,12 +1,12 @@
 # DomiDex – Architektur und Datenfluss
 
-Prüfstand: 1. Oktober 2026. Dieses Dokument beschreibt den gelesenen Android-Quellstand, nicht automatisch den Inhalt eines veröffentlichten AAB. Die Repository-/Release-Zuordnung und aktuelle Testresultate stehen im übergeordneten Auditbericht.
+Prüfstand: 1. Oktober 2026. Dieses Dokument beschreibt den gelesenen Android-Quellstand, nicht automatisch den Inhalt eines veröffentlichten AAB. Die ursprüngliche Zuordnung steht im [Projektstatus](PROJECT_STATUS.md), anschließende lokale Korrekturen und Testresultate im [Release-27-Ledger](RELEASE_27.md).
 
 ## Standgrenzen
 
-- Der geprüfte lokale HEAD ist `096aa35` vom 22. September 2026.
-- Im Arbeitsverzeichnis liegen umfangreiche, teils unversionierte Weiterentwicklungen für Release 27. Sie sind weder durch diesen Dokumentationslauf implementiert noch zur Veröffentlichung freigegeben.
-- Die lokale Room-Konfiguration verwendet Schema **13**; der geprüfte HEAD enthält Schema **12**. Die neue Preisalternativen-Tabelle gehört zur lokalen Erweiterung.
+- Ausgangs-HEAD des früheren Dokumentationsaudits war `096aa35` vom 22. September 2026.
+- Die damals teils unversionierten Weiterentwicklungen für Release 27 sind inzwischen im lokalen Engineeringcheckpoint `53b4e40d` gesichert. Weitere gezielte Änderungen werden auf `codex/release-27-hardening` geprüft; keine Veröffentlichungsfreigabe.
+- Die lokale Room-Konfiguration verwendet Schema **13**; der damalige Audit-HEAD `096aa35` enthielt Schema **12**. Die Preisalternativen-Tabelle gehört zur lokalen Erweiterung; im anschließenden Engineeringlauf wurde das Schema nicht erhöht.
 - Der offiziell genutzte Release 26 und der lokale Quellstand sind nicht gleichzusetzen. Ein erfolgreicher lokaler Test beweist nicht rückwirkend den Inhalt oder Zustand eines älteren Releases.
 - Die Web-App und ihre serverseitigen HTTP-Endpunkte werden im separaten Projekt **DomiDex-Web** gepflegt. Dieses Android-Repository ist nicht die vollständige Website oder Backend-Implementierung.
 
@@ -72,7 +72,7 @@ Scanner-Erkennung, lokale Analyse und Scanner-Lab-Uploads sind unterschiedliche 
 
 - Fehlscan-Fotos werden über den bestehenden **manuellen** ScanLab-Prozess übermittelt, nicht durch allgemeine Testerzustimmung automatisch.
 - Gemeinsames Scannerwissen hat eine separate, standardmäßig ausgeschaltete versionierte Einwilligung und überträgt technische Hinweise/Korrekturen, keine Fotos.
-- `functions/knowledge-aggregate.js` aggregiert Beiträge zu Kandidaten/stabilen Hinweisen. Das ist keine dokumentierte automatische Neutrainierung eines ML-Modells.
+- Kanonische Functions-Deployquelle ist `backend/scan-knowledge` im separaten Web-Repository. Androids `functions/knowledge-aggregate.js` bleibt historische Referenz; ein lokaler Functions-Predeploy-Guard verhindert das versehentliche Überschreiben aus diesem Repository. Die Aggregation ist keine automatische Neutrainierung eines ML-Modells. Ownership und Nachweise stehen im [Release-27-Ledger](RELEASE_27.md).
 - Ein optionaler Katalogbild-Beitrag ist nochmals ein eigener Uploadpfad. Seine Datenschutzmerkmale sind nicht mit denen eines ScanLab-JPEGs gleichzusetzen.
 
 Siehe [Firebase-Sicherheitsgrenzen](../FIREBASE_SECURITY.md).

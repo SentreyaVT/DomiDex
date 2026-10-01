@@ -1,13 +1,16 @@
 # Roadmap – nächste Prüfziele, keine Release-Zusage
 
-Stand: 2026-10-01. Ausgangspunkt ist [PROJECT_STATUS](PROJECT_STATUS.md).
-Dieser Dokumentationslauf implementiert keinen Punkt dieser Liste.
+Stand: 2026-10-01. Ausgangspunkt ist der ursprüngliche Audit in
+[PROJECT_STATUS](PROJECT_STATUS.md). Die folgenden Prüfziele sind keine Liste
+vollständig unerledigter Implementierungen: anschließende lokale Teilkorrekturen,
+Tests und offene Gates stehen im [Release-27-Ledger](RELEASE_27.md).
 
 ## Vor dem nächsten Release
 
 1. **Quellstand nachvollziehbar sichern:** lokale Entwicklung, GitHub und
-   Release-Provenienz getrennt prüfen; bisher fehlende Produktdateien später
-   gezielt reviewen/übernehmen. Kein blindes Pushen des kompletten Working Trees.
+   Release-Provenienz getrennt prüfen; der lokale Ausgangsstand ist inzwischen
+   als Engineeringcheckpoint gesichert. Weitere Änderungen gezielt reviewen;
+   kein blindes Pushen des kompletten Working Trees und kein rekonstruierter v26-Quellstand.
 2. **Scanner messen:** gleicher verifizierter Bildkorpus und gleiche Geräte,
    warme/kalte Pfade, OCR-/Netzwerk-/Queue-Zeit, Speicher/Temperatur, Abbruch und
    Kontowechsel. Ältere Karten, Promos und schwieriges Licht gezielt einbeziehen.
@@ -31,8 +34,9 @@ werden durch diese Roadmap freigegeben.
 
 ## Hardening und Wartbarkeit
 
-- App-Check-Provider/Play-Integrity-Eignung und schrittweise Enforcement-Strategie
-  separat prüfen; bestehende UID-/Serverrechte nicht dadurch ersetzen.
+- Die lokal implementierten, standardmäßig deaktivierten App-Check-Provider erst
+  nach Projektregistrierungs-/Play-Integrity-Prüfung aktivieren; Enforcement separat
+  freigeben und bestehende UID-/Serverrechte nicht dadurch ersetzen.
 - Retention, Widerruf und Löschung von Evidence, Cache und Aggregationsbeiträgen
   nachweisbar abstimmen. Katalogbild-Metadaten getrennt vom ScanLab behandeln.
 - Dependency-Verifikation/Locks sowie CI für reproduzierbare Offline- und

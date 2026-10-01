@@ -1,13 +1,15 @@
 # Dokumentationsindex
 
-Stand: 2026-10-01. **Aktuelle Aussagen beginnen beim Projektstatus, nicht bei einem
-älteren Release-Bericht.** Lokaler Entwicklungscode und GitHub-Quellstand sind
-unterschiedlich; die aktuellen Texte kennzeichnen diese Grenze.
+Stand: 2026-10-01. **Für den laufenden Engineeringstand zuerst das Release-27-Ledger
+lesen; der Projektstatus dokumentiert die Ausgangsbefunde.** Ältere Release-Berichte
+sind keine aktuellen Freigaben. Lokaler Entwicklungscode und GitHub-Quellstand
+sind unterschiedlich; die Texte kennzeichnen diese Grenze.
 
 | Frage | Dokument |
 | --- | --- |
 | Was ist DomiDex? | [Haupt-README](../README.md) |
-| Was ist heute belegt / noch offen? | [PROJECT_STATUS](PROJECT_STATUS.md) |
+| Laufende Release-27-Arbeit, Nachweise und offene Gates | [Release-27-Ledger](RELEASE_27.md) |
+| Ausgangsstand und Release-/Git-Zuordnung | [PROJECT_STATUS](PROJECT_STATUS.md) |
 | Aufbau, Daten und Featuregrenzen | [Architektur](ARCHITECTURE.md) |
 | Scanner, Editor, Knowledge, Offline | [Scanner](scanner-architecture.md) |
 | Identität, Preise und Portfolio | [Preisarchitektur](cardmarket-import.md) |
@@ -30,12 +32,12 @@ Sie sind keine aktuelle Anleitung für Signierung, Deployment, Datenschutz,
 Preisstrategie oder Google-Play-Trackstatus. Ältere lokale Artefaktlinks sind
 gegebenenfalls nur auf der ursprünglichen Arbeitsstation zugänglich.
 
-Im lokalen Arbeitsverzeichnis existieren zusätzlich noch nicht versionierte
+Die beim ursprünglichen Audit noch unversionierten
 Berichte `catalog-30th-*.md`, `scanner-v27-performance-20260924.md`,
 `release27-price-sync-validation-20260925.md` und
-`native-symbol-release-pipeline.md`. Der Audit hat sie ausgewertet, aber übernimmt
-sie nicht unbesehen samt ihrer noch unversionierten Produkt-/Testskripte.
-Die relevanten Befunde sind in den aktuellen Seiten zusammengefasst.
+`native-symbol-release-pipeline.md` sind inzwischen im lokalen Engineeringcheckpoint
+gesichert. Ihre damaligen Ergebnisse bleiben historische Nachweise, keine aktuelle
+Releasefreigabe. Die relevanten Befunde sind in den aktuellen Seiten zusammengefasst.
 
 Die Web-App ist ein separates Repository. Diese Android-Dokumentation ist keine
 Behauptung über seinen jeweils aktuellen Deployment-/Rechts-/Frontendstand.

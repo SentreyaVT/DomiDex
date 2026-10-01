@@ -1,8 +1,11 @@
 # DomiDex – technischer Projektstatus
 
-Stand: **2026-10-01**, Europe/Berlin. Zentrale technische Momentaufnahme,
-kein Release-Gate-Pass und keine produktive Änderung. Grundlage: gesamter lokaler
-Checkout, Git-Historie, GitHub lesend und Google Play Console lesend.
+Stand: **2026-10-01**, Europe/Berlin. Ausgangsbefunde des ursprünglichen
+Dokumentationsaudits: lokaler Checkout, Git-Historie, GitHub und Google Play
+Console lesend. Die anschließenden lokalen Änderungen und Teststände sind im
+[Release-27-Ledger](RELEASE_27.md) maßgeblich dokumentiert; kein Gesamt-Gate-Pass
+und keine produktive Veröffentlichung. Der Engineeringbranch heißt
+`codex/release-27-hardening`; sein Ausgangscheckpoint ist `53b4e40d`.
 
 ## Unterschiedliche Projektstände
 
@@ -14,9 +17,9 @@ Checkout, Git-Historie, GitHub lesend und Google Play Console lesend.
 | Lokaler Working Tree | code **27**, `1.0-closed-alpha.6`; zahlreiche schon vorher geänderte und unversionierte Quellen/Tests |
 | Google Play / signiertes Archiv | code **26**, `1.0-closed-alpha.5`; AAB vom 23.09.2026, unverändert |
 
-Der Doku-Push übernimmt keine der vier noch lokalen Code-Commits und keine
-unveröffentlichten Produktdateien. Die Dokumentation ist dadurch neuer als der
-GitHub-Produktquellcode. Eine Quellcode-Abstimmung ist separat erforderlich;
+Der damalige Doku-Push übernahm keine der vier noch lokalen Code-Commits und keine
+unveröffentlichten Produktdateien. Der spätere Engineeringcheckpoint sichert den
+lokalen Entwicklungsstand, nicht rückwirkend die Release-26-Quellen;
 insbesondere lässt sich das v26-AAB keinem vollständigen sauberen Commit zuordnen.
 
 ## Version, Track und Release
@@ -45,8 +48,9 @@ insbesondere lässt sich das v26-AAB keinem vollständigen sauberen Commit zuord
 
 R8 ist im v26-Artefakt vorhanden; Play zeigt `mapping.txt` (104 MB) zugeordnet.
 Aktuelle lokale Releasekonfiguration: Minify an, Code-Shrinking/Optimierung per
-Keep-Regeln aus, Ressourcen-Shrinking aus. Diese Konfiguration ist noch nicht
-vollständig im Git-HEAD enthalten. Nicht auf den älteren GitHub-Checkout übertragen.
+Keep-Regeln aus, Ressourcen-Shrinking aus. Diese Konfiguration war im damaligen
+Audit-HEAD `096aa35` noch nicht vollständig enthalten und ist inzwischen im lokalen
+Engineeringcheckpoint gesichert. Nicht auf den älteren GitHub-Checkout übertragen.
 
 Play zeigt außerdem `native-debug-symbols.zip` (512 KB) bei **Version 26**.
 Das lokal erneut verifizierte Archiv deckt **1 von 7** nativen Bibliotheken ab:
@@ -83,8 +87,9 @@ gegenseitig ergänzende Summanden. Vollständige Abdeckung ist nicht belegt.
   periodische/gezielte Läufe. **Kein garantiert verzögerungsfreier Sync**.
 - Functions enthält einen Scan-Knowledge-Aggregationstrigger. Implementierung
   vorhanden, aktueller Deploy-/Quota-/Retention-Zustand in diesem Audit nicht geprüft.
-- App Check: transitive Bestandteile vorhanden, kein initialisierter Provider in
-  App-Code, Console-Enforcement nicht geprüft. Offenes Hardening, kein Schutzversprechen.
+- App Check: inzwischen lokal implementierte Debug-/Release-Provider und
+  begrenzte REST-Tokenweitergabe, standardmäßig ausgeschaltet. Console-Enforcement
+  nicht nachgewiesen; [Vertrag und offene Aktivierung](RELEASE_27_APP_CHECK.md).
 - ScanLab-Fotos bleiben manuell pro Aufnahme bestätigt; bildfreies Knowledge hat
   separaten Opt-in. Katalogbildbeiträge sind ein dritter Pfad mit Originalbytes.
 - ZIP-Backups sind **nicht verschlüsselt**. Androids Kontolöschdialog öffnet eine
@@ -95,9 +100,10 @@ gegenseitig ergänzende Summanden. Vollständige Abdeckung ist nicht belegt.
 
 ## Tests, CI und offene Freigaben
 
-Frisch am 01.10.2026: JVM **629 bestanden / 1 optional übersprungen**, Node
+Baseline des ursprünglichen Audits am 01.10.2026: JVM **629 bestanden / 1 optional übersprungen**, Node
 **18/18**, native ELF-/Lizenzverifier **27/27**, lokale Firebase-Regeltests
 **18/18**. Details und historische Emulatorläufe: [TESTING](TESTING.md).
+Spätere lokale Tests und ihre jeweiligen Grenzen: [Release-27-Ledger](RELEASE_27.md).
 
 Keine GitHub Actions konfiguriert; API meldet 0 Workflow-Runs. Aktuelle
 Gradle-Dependency-Locks und Gradle-Verification-Metadaten fehlen; npm-Lockfiles
@@ -107,7 +113,9 @@ Produktionsfreigabe noch ein Beweis für alle Karten, alle Geräte oder alle Nut
 Offen bleiben insbesondere vollständige Quellcode-Provenienz, Regressionen mit
 repräsentativem Bildkorpus/echten Geräten, Zwei-Geräte-/Revocation-Tests, fehlende
 Herstellersymbole, Aufbewahrung/Löschung, Rechte an Assets/Daten und abgestimmte
-Datenschutzhinweise. Keine dieser Aufgaben wurde durch einen Codeumbau „erledigt“.
+Datenschutzhinweise. Der ursprüngliche Dokumentationsaudit erledigte diese Aufgaben
+nicht durch Codeänderungen; spätere Teilkorrekturen und verbleibende Lücken stehen
+im Ledger und sind kein pauschaler Abschluss dieser Prüfziele.
 
 ## Roadmap und Finanzierung
 

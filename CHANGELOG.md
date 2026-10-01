@@ -31,13 +31,19 @@ Der folgende Audit war vom anschließend erteilten GitHub-Aufräumauftrag getren
 
 ## Unreleased – lokaler Entwicklungsstand für 27
 
-Bereits vor diesem Audit vorhanden, teils unversioniert: Scanner-Lifecycle-/OCR-
+**Anschließender Engineeringlauf:** Der Ausgangsstand wurde lokal gesichert;
+gezielte Sicherheits-, Sync-, Preis-, Scanner- und Backup-Korrekturen werden auf
+`codex/release-27-hardening` geprüft. Umgesetzte Schritte, Nachweise und offene
+Gates stehen im [Release-27-Ledger](docs/RELEASE_27.md). Kein neues signiertes AAB,
+keine Veröffentlichung und keine Gesamtfreigabe werden damit behauptet.
+
+Bereits vor dem ursprünglichen Audit vorhanden, damals teils unversioniert: Scanner-Lifecycle-/OCR-
 Vorbereitungsoptimierungen, überprüfte Knowledge-Hinweise, zusätzliche genaue
 Katalog-/Preiszuordnungen, explizite Alternativen bei fehlendem Trendpreis mit
 Sync-Sidecar, Sharing-/Darstellungsarbeiten und zugehörige Tests.
 
-Das ist **keine Implementierungs- oder Freigabeerklärung dieses Doku-Commits**.
-Die Änderungen müssen separat als vollständiger Quellstand geprüft werden.
+Die damalige Bestandsaufnahme war **keine Implementierungs- oder Freigabeerklärung**.
+Die spätere Prüfung des gesicherten Quellstands ist im Ledger dokumentiert.
 Die lokale Versionskonfiguration 27 wurde nicht verändert; kein fertiges
 signiertes v27-AAB nachgewiesen.
 
