@@ -1,26 +1,87 @@
-# Cardmarket import boundary
+# DomiDex – Cardmarket-Import und Preisgrenzen
 
-CardVault uses only Cardmarket's public Pokémon downloads, never listing-page scraping or an API key:
+Prüfstand: 1. Oktober 2026. Quellenbasis ist der vorhandene Code; lokale Release-27-Erweiterungen werden ausdrücklich von veröffentlichten Releases getrennt.
 
-- Product catalog: `https://downloads.s3.cardmarket.com/productCatalog/productList/products_singles_6.json`
-- Price guide: `https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_6.json`
-- Official pages: `https://www.cardmarket.com/en/Pokemon/Data/Product-List` and `https://www.cardmarket.com/en/Pokemon/Data/Price-Guide`
-- Official availability announcements: `https://news.cardmarket.com/en/Magic/product-catalog-and-price-guide-now-available` and `https://news.cardmarket.com/en/Magic/cardmarket-price-guide-and-product-catalog-is-now-public`
+## Tatsächlich verwendete Quellen
 
-The downloaded product ID is stored as an external identity (`CARDMARKET_PUBLIC_DOWNLOAD`, `idProduct`). Imported catalog rows use stable internal IDs of the form `cm-pokemon-{idProduct}`. The public product file does not provide a trustworthy collector number, language, or finish in every row; CardVault leaves those unknown rather than inferring them.
+Der Android-Import `app/src/main/java/com/dominik/cardvault/data/sync/CardmarketSync.kt` verwendet die offiziellen öffentlichen Pokémon-Downloads:
 
-Collection entries keep their user-entered identity and optionally store an explicit external product link. Search results never auto-link based on a fuzzy match; the user selects the product and may change or remove the link. This preserves local metadata while allowing the linked product's official price history to drive the portfolio.
+- [Produktkatalog](https://downloads.s3.cardmarket.com/productCatalog/productList/products_singles_6.json)
+- [Preisguide](https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_6.json)
 
-Portfolio valuation uses the raw `trend` field in EUR, without fallback to another field. Low, average, 1/7/30-day averages and available holo fields are retained separately and historically. A failed import does not delete old snapshots or collection data. Phase-1 `DEMO_LOCAL` prices are removed by migration because they were explicitly fictional demonstration values.
+Der Import benötigt keinen persönlichen Cardmarket-API-Schlüssel und durchsucht keine Verkaufsangebote. Einzelne Produktseiten wurden für dokumentierte, statisch hinterlegte Identitätskorrekturen manuell geprüft; das ist kein allgemeiner Laufzeit-Scraper.
 
-WorkManager schedules a network-constrained daily update. Startup requests work only when the last successful import is at least 24 hours old; manual refresh uses unique work to avoid duplicate concurrent imports. Regular tests use local fixtures. The opt-in live smoke test runs only with JVM property `cardvault.liveSmoke=true`.
+Die visuelle Set-/Kartenquelle im aktuellen `PokemonVisualCatalog.kt` ist **TCGdex, Deutsch und Englisch**. Die frühere Beschreibung einer ausschließlich englischen Pokémon-TCG-API-GitHub-Datenquelle ist überholt.
 
-The source adapter and external identity fields remain TCG-neutral. A future public release must independently re-check Cardmarket's then-current commercial data terms; no publishing is part of this phase.
+## Identität vor Preis
 
-## Visual set browser
+Externe Cardmarket-Identität: `CARDMARKET_PUBLIC_DOWNLOAD` und `idProduct`; reine importierte Produktdatensätze verwenden IDs der Form `cm-pokemon-{idProduct}`.
 
-Cardmarket's public product download deliberately remains the price identity source, but it does not contain card images or consistently structured collector numbers. The set-first browser therefore reads the openly published English JSON/image metadata from the Pokémon TCG API project's upstream data repository. This adapter is visual identity assistance only: selecting an image never silently assigns a Cardmarket price. The user must confirm the exact Cardmarket product before a price is linked. If the visual source is offline, the local collection and last Cardmarket prices continue to work.
+Die fachliche Kartenidentität umfasst Set/Karten-ID, Sammlernummer, Sprache und Druckausführung. Ein ähnlicher Name, eine gleiche Root-ID oder eine Position in einer Liste beweist keine identische Karte. Der öffentliche Produktdownload enthält keine ausreichend strukturierten Collector-/Finish-/Variantenfelder für eine universelle Ableitung.
 
-### Current acceptance scope
+Vorhandene konkrete Produktlinks kommen aus geprüften Quellenzuordnungen bzw. einer ausdrücklichen Auswahl. Quarantäneregeln sperren bekannte falsche Identitätspaare. Eine positive Preistabelle allein legitimiert keinen falschen Produktlink.
 
-The verified private-use route is limited to German and English collection entries. The visual reference catalog is English; a German card can be selected by set and artwork, after which the user explicitly confirms German language, collector number, finish, variant, and the exact Cardmarket price product. Automatic German-to-English name translation is not treated as authoritative. Japanese and Chinese OCR scaffolding remains experimental and is not part of this acceptance scope.
+Die gedruckte Main-Set-Gesamtzahl ist keine Obergrenze gültiger Secret-/SAR-Kartennummern. RGB-Karten besitzen ihre eigene gedruckte Identität, beispielsweise `R/RGB`, nicht einen erfundenen Main-Set-Zähler.
+
+## Trend und lokale Preisalternativen-Erweiterung
+
+Ein echter positiver, endlicher Cardmarket-Trendwert mit passender Identität ist die bevorzugte Bewertungsquelle. Mengenwerte werden daraus berechnet. Fehlende Werte werden nicht mit erfundenen Nullen oder einem Preis einer anderen Karte/Variante gefüllt.
+
+Der lokale Release-27-Stand ergänzt `model/CardPriceSelection.kt`, `data/PriceSelectionMapping.kt` und `data/sync/PriceSelectionSyncContract.kt`:
+
+- Nur ohne geeigneten positiven Trendwert kann ein tatsächlich vorhandener Vergleichswert derselben Preisquelle angeboten werden.
+- Es gibt keine Vorauswahl und keine freie Betragseingabe; die Auswahl muss bestätigt werden.
+- Normale und Reverse-Werte werden entsprechend der Druckausführung getrennt.
+- Set-/Karten-/Produkt-ID, Sammlernummer, Variante, Finish, Sprache, Quellzeitpunkt und gewählte Kennzahl sind Bestandteil der Validierung.
+- Bei wieder vorhandenem echtem Trend hat dieser Vorrang.
+- Die Auswahl wird separat unter `users/{uid}/collectionPriceSelections/{entrySyncId}` synchronisiert und nicht als offizielle Trendhistorie gespeichert.
+
+Diese Implementierung liegt im lokalen Arbeitsverzeichnis. Ihr Vorhandensein ist kein Beleg, dass sie bereits in Release 26 oder in jeder veröffentlichten Web-Version enthalten ist. Der UI-Text in `CardVaultApp.kt`, der weiterhin ausschließlich Trendpreise verspricht, ist ein bekannter fachlicher Textabgleich für einen späteren funktionalen Lauf; dieser Dokumentationsauftrag ändert ihn nicht.
+
+Cardmarket-Vergleichswerte sind keine Garantie eines konkreten Verkaufswerts einer individuellen Karte. Sprache, Zustand, tatsächliches Angebot und abgeschlossener Verkauf können vom aggregierten Guide abweichen.
+
+## Import, Cache und Fehlerverhalten
+
+Produkt- und Preisdownload werden gemeinsam verarbeitet und transaktional in Room übernommen. Ein fehlgeschlagener Import löscht keine Sammlung oder bisherigen gültigen Snapshots. Die bestehenden Migrationen entfernen ausdrücklich künstliche frühere Demo-Preise.
+
+WorkManager plant eine netzgebundene Aktualisierung im 24-Stunden-Raster. Beim Start wird ein veralteter Import berücksichtigt; manuelle Aktualisierungen werden gegen parallele Läufe koalesziert. Der Preisguide ist kein Echtzeitfeed.
+
+Visuelle Metadaten besitzen getrennte begrenzte Caches; sie speichern weder Eigentumsrechte noch als Nebenwirkung neue Preise. Android und Web besitzen außerdem unterschiedliche Preis-/Detailcaches. Sofort identische Preise auf allen Geräten sind damit nicht garantiert.
+
+## Nachgewiesene Abdeckung statt Vollständigkeitsbehauptung
+
+Der lokale, noch unversionierte Bericht `docs/release27-price-sync-validation-20260925.md`
+beschreibt folgende Momentaufnahme; die GitHub-lesbare Zusammenfassung steht auch
+in [PROJECT_STATUS](PROJECT_STATUS.md):
+
+| Größe im damaligen Snapshot | Ergebnis |
+| --- | ---: |
+| physische deutsche Sets | 144 |
+| Karten einschließlich lokaler Ergänzungen | 19.463 |
+| untersuchte Druckplätze | 27.131 |
+| unabhängig bepreiste Druckplätze nach Korrektur | 17.867 |
+| Slots ohne ausreichend belegten Quellenverweis | 9.227 |
+| Slot ohne Mapping | 1 |
+
+Diese Zahlen sind ein **datierter Datenaudit**, keine heute neu ausgeführte Abfrage und keine globale Garantie. Eine Null in der strengen Verifikationstabelle bedeutet nicht automatisch, dass jede UI-Karte dieses Sets preislos ist.
+
+8.024 Karten ohne verwertbare druckspezifische ID, zahlreiche Root-ID-Kollisionen und generierte Einzelausführungen verhindern einen seriösen universellen Namen-/Root-ID-Fallback. Ein vorhandenes Verkaufsangebot garantiert außerdem keinen positiven Trendwert im verwendeten Download. Im geprüften Snapshot fehlte dieser unter anderem beim blauen RGB-Mew.
+
+## 30-Jahre-Ergänzungen: zeitlicher Verlauf
+
+Die historischen Nachweise bleiben erhalten; spätere Dokumente ergänzen frühere Grenzen:
+
+Die vier Detailberichte liegen bisher nur lokal unter `docs/`:
+
+1. `catalog-30th-supplement-20260922.md`: drei RGB-Mew und MEP 094–110, Bild-/Sprachfallbacks sowie zu diesem Zeitpunkt ungeklärte Produktzuordnungen.
+2. `catalog-30th-cardmarket-prices-20260922.md`: begrenzter, ausdrücklich belegter erster Satz Produktlinks; keine universelle Namensheuristik.
+3. `catalog-30th-sar-prices-20260923.md`: zusätzliche nummernseitig verifizierte Produktlinks und damalige echte Preisguide-Lücken.
+4. `catalog-30th-classic-cardmarket-20260925.md`: sieben restliche Classic-Zuordnungen; damit im beschriebenen Registry-Stand 30 Classic-, 158 Main-Set- und drei RGB-Identitäten.
+
+Vollständige Identitätslinks für diese Gruppen sind nicht gleichbedeutend mit vollständigen Preisen für jede Druckausführung. Datierte Testzahlen und damalige Nullwerte dürfen nicht stillschweigend als heutige Live-Messung umgedeutet werden.
+
+## Tests und Zuständigkeit
+
+Normale Parser-, Identitäts-, Portfolio- und Auswahltests arbeiten mit lokalen Fixtures. Vorhandene Live-Smoke-Tests sind gesondert opt-in; `cardvault.liveSmoke=true` ist keine Voraussetzung eines sicheren Offline-Tests.
+
+Web-Darstellung, Web-Caches und deren Backend-Vertrag liegen in DomiDex-Web. Gezielte Android-Tests ersetzen weder Web-Tests noch einen realen Zwei-Geräte-Sync-Test. In diesem Dokumentationslauf werden keine Produktlinks, Preise, Firebase-Regeln oder Releases verändert.

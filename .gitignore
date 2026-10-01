@@ -26,3 +26,6 @@ local.properties
 keystore.properties
 secrets.properties
 /app/google-services.json
+
+# Local streaming/social-media exports; preserve files without publishing them.
+/output/
