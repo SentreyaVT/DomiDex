@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { after, before, beforeEach, test } from "node:test";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
 import { ref, uploadBytes } from "firebase/storage";
+import { clearLocalStorage } from "./emulator-fixtures.mjs";
 
 let environment;
 const hash = "a".repeat(64);
@@ -18,7 +19,7 @@ before(async () => {
     storage: { rules: readFileSync(new URL("../storage.rules", import.meta.url), "utf8") },
   });
 });
-beforeEach(async () => { await environment.clearStorage(); await environment.clearFirestore(); });
+beforeEach(async () => { await clearLocalStorage(environment); await environment.clearFirestore(); });
 after(async () => environment.cleanup());
 
 test("A: unauthenticated upload is denied", async () => {

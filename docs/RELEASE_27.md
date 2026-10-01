@@ -75,7 +75,7 @@ from the reproducible current-source checkpoint above.
 | Web lint | baseline FAIL → fixed PASS | 26 test-only findings; no suppressed rules or weakened assertions |
 | Web legal prebuild check | PASS | local route check |
 | Android existing Firebase rules suites | PASS, 18 tests, 5.89 s | 11 Firestore + 7 Storage; localhost demo project |
-| Expanded security contract suite | pending | new explicit allow/deny evidence required |
+| Expanded security contract suite | PASS, 89/89, 33.338 s | 18 existing Android + 62 new + 9 historical Web; 24 new red cases fixed |
 | Web isolated production-mode build | PASS, 20.413 s | 294-source-file temp copy; original config; demo env, network blocked; NOT deployable |
 | Live cost/Cloud Run/App Check | NOT TESTED | no external production actions |
 
@@ -129,7 +129,7 @@ An 18-test pass alone is not Gate 1 approval.
 | Gate | Status | Required next evidence |
 |---|---|---|
 | 0 Baseline | IN PROGRESS | fresh JVM, selected isolated instrumentation, safe Web build |
-| 1 Firebase security | IN PROGRESS | owner/access/disabled/locks/sidecar/default-deny and two-client tests |
+| 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | NOT TESTED | authorization, distributed limits, errors, payloads, OpenAPI |
 | 3 App Check | NOT TESTED | actual integration and monitor-first behavior, no blind enforcement |
 | 4 Collection/binder sync | NOT TESTED | initial/delta/outbox/conflict/offline/restart/multi-client scale |
