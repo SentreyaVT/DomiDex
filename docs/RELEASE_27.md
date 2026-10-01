@@ -2,7 +2,63 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: confirmed rereads and bounded shared-view refresh
+### Latest local checkpoint: binder metadata without unused price work
+
+`observeBinders` now returns only the five fields its sole repository consumer
+uses. Removed are two unused price aggregates and their linked-product/latest-price
+LEFT JOINs. Counts, owner/tombstone filtering, names, grouping and sorting remain
+identical. Price values still come from `currentCardsFor`, including its independent
+raw-price and price-selection observations. The projection is not a Room entity;
+schema, migrations, indices, sync, price identities and cloud contracts are unchanged.
+
+Two new real-Room tests keep one live repository subscription through quantity,
+name, ordering, move, deletion and A→B→A changes, and through trend/alternative/
+clear/raw-price-only changes. They check Reverse Holo isolation and unchanged
+foreign/tombstoned entries. The executed SQL is inspected only after the first
+test's functional controls. Before the fix: one control PASS and one precise
+`BINDER_METADATA_UNUSED_PRICE_AGGREGATES` failure. After: **2/2 PASS**.
+Evidence under `artifacts/release27-engineering-20261001/`:
+`binder-metadata-room-163449-612bbb77/` (RED),
+`binder-metadata-room-163953-c0d94222/` (GREEN).
+
+Actual before/after scale runs use the same synthetic in-app Room fixture,
+1k/5k/20k entries, one warmup and three warm repetitions. Each run passes 87
+measurements and all before/after full-column table-integrity assertions.
+
+| Entries | Set-binder first emission before (median ms) | After (median ms) | Process CPU before/after (median ms) |
+|---|---:|---:|---:|
+| 1,000 | 41.31 | 45.36 | 69 / 71 |
+| 5,000 | 137.01 | 133.94 | 200 / 189 |
+| 20,000 | 967.91 | 970.42 | 1,209 / 1,154 |
+
+**No material end-to-end loading-speed improvement is demonstrated.** The 1k
+wall-time median is higher, the 5k median slightly lower and 20k essentially
+unchanged. CPU samples at 5k/20k are lower, but three consecutive repetitions
+are not a statistical/production guarantee. This is time to the first repository
+emission on a fresh subscription in a warm process/SQLite environment, including
+mapping/combine work, not isolated SQL, UI, cold-start, scanner or network latency.
+The fixture has 5% tombstones, three foreign sentinels, two price snapshots per
+card and no saved alternative-price rows; the two live tests cover those separately.
+SELECT count remains three; fewer joins do not mean fewer Firestore reads.
+
+Scale evidence: `room-scale-current-20261001T162603Z-3307e465f17146bdac153b2fc6ba5717/`
+and `room-scale-current-20261001T164022Z-6c5da26bfa9e4462996936cb28e86f13/`.
+The pre-fix debug artifacts were restored after a separately observed Android
+Studio build completed; source was unchanged and both installed hashes were
+verified before the measurement. No binary reproducibility claim is made.
+
+Final combined working-tree verification: **371/371** offline API-36 regressions,
+284.224 s, no skips/failures (`artifacts/android-regression/20261001T164219Z-11fc31b3/manifest.json`).
+JVM **865 PASS / one pre-existing optional live-source SKIP**, no failures/errors.
+Debug/test APKs, release Kotlin compilation and both lints pass in 3m 51s;
+`binder-metadata-green-regression.log`, preserved XML in `binder-metadata-green-unit/`.
+Tested app APK SHA-256: `8c2198ac5eeae63bfa9f18b8bb57f5c1f41d7223660227ffeb3fb4e419ee8dec`;
+test APK: `489ddb2e66cb276609975aa52b71d0711645cd449796ff977f295731fe2b0a9d`.
+The combined tree includes the separately scoped four-error-log minimization.
+No Xiaomi action, release signing/AAB, production change or deployment. Overall
+release remains **NOT READY**; the wider documented gates are not closed by this fix.
+
+### Previous local checkpoint: confirmed rereads and bounded shared-view refresh
 
 The separately reproduced missing/malformed collection reread no longer removes
 its durable checkpoint. Both actual worker reread paths require an existing,

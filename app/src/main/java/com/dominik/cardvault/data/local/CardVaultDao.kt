@@ -48,13 +48,9 @@ interface CardVaultDao {
     @Query("""
         SELECT e.binderId AS id, MAX(c.setName) AS name, NULL AS heroAsset,
                COUNT(DISTINCT e.cardId) AS uniqueCards,
-               COALESCE(SUM(e.quantity), 0) AS ownedCards,
-               SUM(CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%reverse%' THEN NULLIF(p.holoTrendValueMinor, 0) ELSE p.trendValueMinor END * e.quantity) AS marketValueMinor,
-               MAX(CASE WHEN CASE WHEN LOWER(COALESCE(e.finishOverride, c.finish)) LIKE '%reverse%' THEN NULLIF(p.holoTrendValueMinor, 0) ELSE p.trendValueMinor END IS NULL THEN NULL ELSE p.effectiveAtEpochMillis END) AS lastPriceUpdatedAtEpochMillis
+               COALESCE(SUM(e.quantity), 0) AS ownedCards
         FROM collection_entries e
         JOIN catalog_cards c ON c.id = e.cardId
-        LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource AND linked.externalProductId = e.externalProductId
-        LEFT JOIN raw_price_snapshots p ON p.id = (SELECT p2.id FROM raw_price_snapshots p2 WHERE p2.cardId = COALESCE(linked.id, c.id) AND p2.source = 'CARDMARKET_PUBLIC_DOWNLOAD' AND """ + SAFE_COLLECTION_PRICE_LINK_SQL + """ ORDER BY p2.effectiveAtEpochMillis DESC, p2.id DESC LIMIT 1)
         WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
         GROUP BY e.binderId
         ORDER BY MAX(e.updatedAtEpochMillis) DESC, MAX(c.setName) COLLATE NOCASE

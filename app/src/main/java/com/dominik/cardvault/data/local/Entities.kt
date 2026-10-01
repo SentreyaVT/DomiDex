@@ -458,8 +458,6 @@ data class BinderProjection(
     val heroAsset: String?,
     val uniqueCards: Int,
     val ownedCards: Int,
-    val marketValueMinor: Long?,
-    val lastPriceUpdatedAtEpochMillis: Long?,
 )
 
 data class CatalogSearchProjection(
