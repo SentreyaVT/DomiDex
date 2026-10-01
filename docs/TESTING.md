@@ -8,6 +8,27 @@ Stand: 2026-10-01. Die folgenden aktuellen Tests beziehen sich auf den **lokalen
 Working Tree**. Sie zertifizieren weder den älteren GitHub-Checkout noch das
 signierte v26-AAB oder einen neuen Release.
 
+## Feste Release-27-Emulatorregression
+
+Der versionierte [Android-Regressionsrunner](../scripts/verification/android-regression/README.md)
+reproduziert eine geprüfte Auswahl von 371 konkreten Testmethoden. Er baut nichts,
+verwendet ausschließlich bereits vorhandene normale Debug-/Test-APKs und erlaubt
+nur den benannten Offline-AVD `DomiDex_R27_Baseline_API36` auf `emulator-5554`.
+Ein angeschlossenes Smartphone wird nicht ausgewählt. Voraussetzungen und Grenzen
+zuerst im verlinkten README lesen; kein allgemeiner `connectedDebugAndroidTest`-
+Aufruf bei angeschlossenen echten Geräten.
+
+```powershell
+python -I -B scripts/verification/android-regression/test_runner.py
+python -I -B scripts/verification/android-regression/run.py --check
+python -I -B scripts/verification/android-regression/run.py --run
+```
+
+`--check` ist lesend; erst `--run` installiert und testet auf dem festgelegten AVD.
+Ein vollständiger PASS verlangt alle 371 erwarteten Identitäten genau einmal und
+keine Skips. Aktuelle Ergebnisse einschließlich gesonderter neuer Testgruppen
+stehen im Release-27-Ledger, nicht in den historischen Baseline-Zahlen darunter.
+
 ## Neu ausgeführt in diesem Dokumentationsaudit
 
 | Prüfung | Ergebnis | Grenze |
