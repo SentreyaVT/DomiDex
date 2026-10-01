@@ -902,6 +902,19 @@ After the explicit resume, the same compile/lint-only tasks pass in **1m50s**:
 up-to-date; release lint completed. This is not R8 execution or an AAB validation.
 No release APK/AAB, signing, upload or deployment was performed.
 
+### Non-finite and overflowing price regression (2026-10-01)
+
+Three additional actual-parser JVM cases pass for both normal and reverse trend:
+quoted `NaN`, quoted `Infinity`, and an exact cent value of `Long.MAX_VALUE + 1`.
+Each first proves the same valid JSON shape accepts a decimal string, then puts
+the invalid value after a valid record and requires the entire parse to fail,
+not return its partially parsed prefix. The existing BigDecimal/exact-Long policy
+already rejects these values; no parser or product behavior was changed.
+Evidence: `cardmarket-invalid-prices-jvm.log` under the ignored engineering
+directory. The subsequent full JVM run has **856 PASS / 1 existing opt-in SKIP**
+across 126 suites; debug/test build and debug lint pass in 1m32s, with copied XML
+in `price-conflict-sdk-jvm-results/`. This is not a live provider coverage claim.
+
 ### Web price reuse and sharing consistency follow-up
 
 Web commit `b3a5d43` preserves unchanged collection price results only within the
