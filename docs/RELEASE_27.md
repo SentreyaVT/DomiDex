@@ -10,7 +10,12 @@ in gates; findings and red tests are retained, not relabelled as successful test
 No production deployment, Firebase configuration change, Play upload, secret rotation,
 billing change or release signing has been performed in this engineering run.
 Only normal local debug builds are permitted for isolated emulator validation now.
-The physical Xiaomi is not used. Real-device validation remains NOT TESTED.
+On 2026-10-01 the user separately installed a version-27 debug APK on the Xiaomi
+and performed scans himself. Root used read-only package/hash and allowlisted
+timing checks only; no installation, camera launch or setting change on that phone.
+The user confirmed two cards were recognized correctly and felt fast. This limited
+manual observation is not the complete real-device matrix or a controlled v26/v27
+performance comparison; those remain NOT TESTED.
 
 The five user mission documents define the scope. Their gate numbering overlaps at
 14–15: database migration, release engineering and final RC validation are tracked
@@ -150,7 +155,69 @@ Android and Web copies are byte-identical, as inspected locally (not asserted li
 Existing tests do not cover the whole disabled/deletion-lock/price-selection matrix.
 An 18-test pass alone is not Gate 1 approval.
 
+### Limited user-operated Xiaomi observation (2026-10-01)
+
+The user's installed version-27 / `1.0-closed-alpha.6` debug APK has SHA-256
+`1636F9C06A5B1A121E72168F3F4D4E3DBD32A38C751ADA01231ED12628AF3518`, identical
+to the then-existing IDE debug artifact. The user clarified that he installed a
+debug APK himself and subsequently opened Android Studio. This is not the APK
+used for the earlier isolated emulator SDK proof, nor an exact release-26 source
+baseline. No release/production artifact or phone setting was changed by this check.
+
+The user reports that both scanned cards were recognized correctly and felt fast.
+Keep this qualitative result distinct from the redacted diagnostic sample: the
+latest three completed worker durations in that sample were 3,741 / 3,525 / 1,725 ms,
+including OCR 2,912 / 2,728 / 1,243 ms; terminal states were AMBIGUOUS / AMBIGUOUS /
+MANUAL_REVIEW. They are not independently assigned to the user's two test cards or
+claimed to be two automatic ACCEPTED decisions. Earlier queued captures showed
+additional waiting; worker duration excludes queue wait. These observations do not
+establish a controlled speed/recall improvement over release 26 or emulator replays.
+
+Read-only current-process timing extraction retained only allowlisted numeric/status
+fields. No raw OCR text, card images, account data or raw device logs were saved.
+The bounded local evidence is `artifacts/release27-engineering-20261001/
+xiaomi-v27-timing-batch-readonly-20261001.json`. A full physical lifecycle, account,
+offline and multi-device regression matrix is still outstanding.
+
 ## Gate ledger
+
+### 2026-10-01: fair local retry selection and repeatable emulator checkpoint
+
+The still-unwired delta Room adapter now has owner-isolated, durable round-robin
+reservation of up to 50 deferred markers, fixed per-group ID horizons and atomic
+schedule-only updates. No active worker, cloud schema, outbox policy or payload is
+changed. Six new JVM and 18 actual Room tests pass (Room 0.992 s), including restart,
+concurrent reservations, corrupt state, cancellation and account-generation guards.
+Two independent source reviews found no remaining blocker in that narrow scope.
+Reservation is neither ACK nor an exclusive lock; later reads/apply still need trust
+and exact-marker CAS. Details and preserved first test-source compilation failure:
+`docs/SYNC.md`. It does not complete Gate 4 or prove lower network latency.
+
+Fresh debug/test build and lint pass in 1m 9s after correcting that test-only typo.
+The complete JVM output contains 854 cases in 125 suites: **853 PASS, 1 existing
+live-source opt-in SKIP, 0 failures/errors**. Retained XML evidence:
+`artifacts/release27-engineering-20261001/deferred-schedule/full-unit-results/`.
+
+The versioned `scripts/verification/android-regression/` runner passes **24 pure
+contract tests**, then its read-only preflight and actual **371/371 PASS**, 272.227 s,
+0 skips/failures. Evidence `artifacts/android-regression/20261001T061326Z-65675803/`:
+manifest Exit 0, input hashes unchanged during the run, offline/no-reverse afterward,
+and exact installation receipts. Debug SHA-256
+`845B6F6F0DCA89D3F0D3A0551467EA7E6B9C08D205571009829669B094C73FBE`;
+test SHA-256 `9E0893E222BE95B9EDDCA9729032D4C5B35576E0D1B60F30B6D9331C93867491`.
+Both were installed only on the named isolated emulator, not the Xiaomi.
+
+The runner does not build, sign releases or contact production. Two selector/dump
+issues and a cleanup-ownership issue were caught and corrected before its first run.
+Actual API-36 arguments were opaque in the process dump, so token-based emergency
+package cleanup is not available in that observation; it fails closed rather than
+stopping an unproven process. README states this limitation. Source hashes do not
+independently prove reproducibility of an arbitrary old APK. Release-26 AAB, mapping
+and partial-symbol archive were rehashed and remain identical to the immutable table.
+
+Next source finding to reproduce separately: the active ID-based full pull can
+keep following newly appended lexicographic tail IDs before visiting later groups.
+No fixed-horizon change or delta activation is claimed in this checkpoint.
 
 | Gate | Status | Required next evidence |
 |---|---|---|
@@ -158,7 +225,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; local delta-to-business Room adapter 32/32; full sync-package 140 PASS/1 opt-in SKIP (later 140 PASS/4 opt-in SKIP); actual Android SDK overlay proof 3/3 with independent server readback; full Android/Web convergence, active delta integration and multi-client scale remain; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; local delta-to-business Room adapter 32/32; full sync-package 140 PASS/1 opt-in SKIP (later 140 PASS/4 opt-in SKIP); actual Android SDK overlay proof 3/3 with independent server readback; unwired fair deferred reservation 6 JVM +18 Room PASS; full Android/Web convergence, active delta integration and multi-client scale remain; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
@@ -167,7 +234,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest root 847 JVM PASS/1 opt-in SKIP, 1,197 Web, 371 emulator tests, 84 current Rules and 30 local backend SDK cases; release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; physical/live contracts untested |
+| 13 Full regression | IN PROGRESS | latest root 853 JVM PASS/1 opt-in SKIP, 1,197 Web, reproducible 371 emulator cases +18 new Room cases, 24 runner contract tests, 84 current Rules and 30 local backend SDK cases; release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; complete physical/live contracts untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
