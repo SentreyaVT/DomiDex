@@ -433,10 +433,13 @@ class FirebaseCollectionSession(
     suspend fun keepCloudVersionsForConflicts(): Int = withContext(Dispatchers.IO) {
         val uid = entitledOwnerUid ?: return@withContext 0
         if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return@withContext 0
+        val actionCurrent = captureConflictSession(uid)
+        val priceResolved = resolvePriceSelectionConflicts(uid, keepLocal = false)
+        if (!actionCurrent()) return@withContext priceResolved
         val dao = database.cardVaultDao()
         var resolved = 0
         dao.conflictedSyncOutbox(uid).forEach { conflict ->
-            if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return@withContext resolved
+            if (!actionCurrent()) return@withContext resolved + priceResolved
             val document = runCatching {
                 firestore.document(collectionEntryPath(uid, conflict.syncId))
                     .get(Source.SERVER)
@@ -511,7 +514,52 @@ class FirebaseCollectionSession(
             }
             resolved += applied
         }
-        resolved
+        resolved + priceResolved
+    }
+
+    suspend fun keepLocalPriceSelectionConflicts(ownerUid: String): Int = resolvePriceSelectionConflicts(ownerUid, keepLocal = true)
+
+    /** Guard the newly suspending combined Settings action, including A -> B -> A/token refresh. */
+    internal fun captureConflictSession(uid: String): () -> Boolean {
+        val generation = entitlementGeneration
+        return {
+            !closed && entitledOwnerUid == uid && entitlementGeneration == generation &&
+                canonicalCollectionOwnerUid(auth.currentUser) == uid
+        }
+    }
+
+    /** Existing explicit Settings decisions also cover price sidecars, with a per-action auth lease. */
+    private suspend fun resolvePriceSelectionConflicts(uid: String, keepLocal: Boolean): Int = withContext(Dispatchers.IO) {
+        if (entitledOwnerUid != uid || canonicalCollectionOwnerUid(auth.currentUser) != uid) return@withContext 0
+        val conflicts = database.cardVaultDao().conflictedPriceSelectionOutbox(uid)
+        if (conflicts.isEmpty()) return@withContext 0
+        PrivatePullAuthSession.use(auth, uid) { session ->
+            var resolved = 0
+            fun current() = session.isCurrent() && entitledOwnerUid == uid
+            for (conflict in conflicts) {
+                session.requireCurrent()
+                if (!current()) throw PrivatePullAccountChangedException()
+                val applied = if (keepLocal) {
+                    keepLocalPriceSelectionConflict(database, conflict, UUID.randomUUID().toString(),
+                        System.currentTimeMillis(), ::current)
+                } else {
+                    val document = try {
+                        firestore.document(collectionPriceSelectionPath(uid, conflict.recordId))
+                            .get(Source.SERVER).awaitPrivateBinderTask(session)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: PrivatePullAccountChangedException) {
+                        throw error
+                    } catch (_: Exception) {
+                        continue // Offline/permission failures retain the exact conflict.
+                    }
+                    keepCloudPriceSelectionConflict(database, conflict, document.data.orEmpty(),
+                        document.exists() && !document.metadata.isFromCache && !document.metadata.hasPendingWrites(), ::current)
+                }
+                if (applied) resolved++
+            }
+            resolved
+        }
     }
 
     override fun close() {

@@ -529,3 +529,36 @@ was added; external ingress/bypass/logging evidence is needed before enforcement
 
 No production deployment, signing, AAB, Xiaomi action or live account test was
 performed for either follow-up.
+
+### Price-choice preservation and final local regression checkpoint
+
+The Android PRICE_SELECTION remote-wins case now preserves its local payload,
+source date, base revision and exact outbox mutation as an explicit conflict.
+The existing Settings local/cloud decision handles it; ordinary pull cannot discard
+the pending choice. Rebase and cloud replacement are transactional and validate
+owner/auth generation, parent state, exact printing and source fields. A confirmed
+remote clear may acknowledge a deleted parent without resurrecting it. Other private
+record kinds retain their existing policy; Room schema and rules are unchanged.
+See `docs/SYNC.md` for the exact limits and callback integration.
+
+Web search and missing-binder-card add flows distinguish a successful card write
+from a failed optional price-choice write. Retry now writes only the original price
+choice, not the acknowledged card quantity. Context/account changes require a fresh
+selection and cannot receive the old action's completion. Its pending state is
+UI-local, not a new persistent offline outbox. The real-component RED reproduced
+double-add behavior before the fix.
+
+Independent root checkpoint: **801 Android JVM tests: 800 PASS / 1 existing opt-in
+SKIP / 0 FAIL / 0 ERROR**, 118 classes. Debug/test APKs, release Kotlin, debug/release
+lint pass; combined Gradle run 3m 16s. The combined offline API-36 emulator selection
+passes **151/151 in 19.886 s**, covering the new price conflicts, price-history
+projection, above-main-set prices, Room/ACK/pull, sharing and knowledge regressions.
+Only emulator-5554 was installed, airplane mode 1 / Wi-Fi 0; Xiaomi untouched.
+Evidence: `gate4-price-conflict-root-{regression,instrumentation}.log`.
+
+Independent root Web checkpoint: **1,000/1,000 in 62 files**, 32.52 s, no external
+network or environment-file loading. React-act/Canvas harness warnings remain;
+this does not establish visual rendering, real authentication or live convergence.
+No release signing, R8 execution, AAB or deployment was performed. The older
+Collection cloud-resolution path has a separate account-generation review follow-up;
+the above results do not declare that follow-up or the entire release complete.

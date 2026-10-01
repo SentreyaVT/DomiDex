@@ -235,3 +235,61 @@ debug/test/release-Kotlin build and 78 emulator regressions pass. A metadata por
 and fake provider are not Firebase E2E, and logical read units are not an invoice
 prediction (SDK retries and Firestore pricing are not modeled). Delta/network
 watermark integration, actual cross-device scale and remote latency remain open.
+
+### Preiswahl-Konflikte: explizite Entscheidung statt stiller Cloud-Übernahme (2026-10-01)
+
+Der `PRICE_SELECTION`-Push verwendet bei abweichender Remote-Revision jetzt eine
+eigene Konfliktentscheidung. Die exakt aktuelle Outbox-Mutation bleibt bestehen;
+`lastError = price-selection-conflict:<revision>` und `syncState = CONFLICT`
+kennzeichnen den wartenden Datensatz. Der gewählte Preis, sein Quelldatum und die
+bisherige lokale Basisrevision werden dabei nicht verändert. Für Binder,
+Platzierungen, Layouts und erfolgreiche ACKs gelten die bisherigen Policies.
+
+Nur solche markierten Preiszeilen werden aus der normalen Pending-Auswahl
+ausgeschlossen. Sie können andere Synchronisationsarbeit nicht dauerhaft
+blockieren und bleiben durch ihre Outbox vor gewöhnlichem Pull-Apply geschützt.
+Der vorhandene Konfliktzähler in den Einstellungen umfasst Collection- und
+Preiswahl-Konflikte. Es gibt keine neue Room-Spalte, Migration oder Firestore-Regel.
+
+- **Lokale Fassung senden:** prüft den exakt aktuellen Konflikt, einen stabilen
+  bestätigten Collection-Parent und die vollständige Kartenidentität. Eine neue
+  Mutation wird ausdrücklich gegen die bekannte Remote-Revision vorbereitet.
+  Quelldatum, Betrag und gewählte Metrik bleiben unverändert. Ein späterer
+  Serverkonflikt erfordert erneut eine Entscheidung; es gibt kein blindes Rebase.
+- **Cloud-Fassung übernehmen:** liest das Dokument erneut mit `Source.SERVER`.
+  Nur vorhandene, nicht aus dem Cache stammende und nicht lokal schwebende,
+  vollständig validierte Daten dürfen übernommen werden. Parent-/Owner-/Mutation-
+  und Revisionsprüfungen liegen mit Payload-Übernahme und Outbox-Löschung in einer
+  gemeinsamen Room-Transaktion. Gleiche Revision bedeutet nur bei dieser expliziten
+  Entscheidung Zustimmung, niemals im normalen Pull. Physisch fehlende, ungültige,
+  ältere oder noch blockierte Daten lassen den Konflikt unverändert.
+- Ein gültiger Cloud-Clear darf bei einem bestätigten gelöschten Parent übernommen
+  werden; eine aktive Auswahl oder lokale Entscheidung darf ihn nicht wiederbeleben.
+  Auch lokale Clears müssen tatsächlich zwölf leere Wertfelder enthalten.
+- Die neuen Preisaktionen verwenden eine Owner-/Auth-Generation-Lease. Die danach
+  fortgesetzte bestehende Collection-Entscheidung erhält über `MainActivity` den
+  bestehenden Entitlement-Generationsschutz; ein Konto-Rundwechsel A → B → A oder
+  eine ungültige Sitzung darf keine alte Fortsetzung in Room bestätigen.
+
+Nachweis: Der zuvor ausgeführte Worker-Policy-RED-Lauf hatte **1 Fehler bei 5 Tests**
+(Preis-Remote-Wins wählte noch `APPLY_REMOTE`). Final sind **146 ausgewählte JVM-Tests**
+und **98 echte Room-/Regressionsfälle im isolierten Emulator** grün, darunter
+**19 neue Konflikt-Tests**. Debug-/Test-APKs und Release-Kotlin-Kompilierung sind
+geprüft; kein Release-Build, Signing oder Deployment. Die Room-Tests sind kein
+Firebase-Worker- oder Geräte-zu-Geräte-E2E-Nachweis.
+
+Separat wurden mit realem JavaScript-SDK und lokalen unveränderten Firestore-Regeln
+**25 Zwei-Client-Tests** bestanden (21 Preiswahl, 4 bestehende Sync-Fälle). Die
+ursprünglichen RED-Ergebnisse bleiben erhalten: `permission-denied` bei konkurrierender
+Revision wird nicht zwingend automatisch vom SDK wiederholt; `disableNetwork()`
+blockiert im installierten Node-SDK nicht sämtliche direkten Transaction-RPCs.
+Ein eigener Loopback-Proxy prüft deshalb zusätzlich echten Transportabbruch,
+unveränderten bestätigten Serverstand, Reconnect ohne Replay und bewussten Retry.
+Das ist eine SDK-/Rules-Matrix, keine Ausführung der Android-Worker/Web-UI-Pipeline.
+
+Lokale Protokolle und isolierter Runner:
+`artifacts/release27-engineering-20261001/security-gate4-two-client/`.
+Der Node-Loopback-Guard ist keine OS-Firewall und instrumentiert nicht den Java-
+Emulator; verwendet wurden ausschließlich Demo-Projekt, synthetische Owner,
+leere Credential-Konfiguration und der bereits gecachte Emulator. Alle eigenen
+Firebase-/Proxy-Ports waren nach dem Lauf wieder frei.

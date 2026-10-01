@@ -48,6 +48,8 @@ class MainActivity : ComponentActivity() {
             activeOwnerUid = session.ownerUid,
             onSyncNeeded = session::requestSync,
             onKeepCloudConflicts = session::keepCloudVersionsForConflicts,
+            onKeepLocalPriceConflicts = session::keepLocalPriceSelectionConflicts,
+            captureConflictSession = session::captureConflictSession,
             cloudState = session.cloudState,
         )
         val syncScheduler = CardmarketSyncScheduler(applicationContext)

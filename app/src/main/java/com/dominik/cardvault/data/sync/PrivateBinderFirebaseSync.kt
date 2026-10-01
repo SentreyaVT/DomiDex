@@ -78,6 +78,7 @@ internal suspend fun deferredPriceSelectionParentPending(
 internal enum class PrivatePushCommitAction {
     COMPLETE_CURRENT,
     APPLY_REMOTE,
+    MARK_PRICE_CONFLICT,
     REBASE_SUCCESSOR,
     KEEP_SUCCESSOR,
     NONE,
@@ -118,10 +119,12 @@ internal fun privatePushCommitAction(
     remoteWins: Boolean,
     sentMutationId: String,
     currentMutationId: String?,
+    recordType: String? = null,
 ): PrivatePushCommitAction = when {
     currentMutationId == null -> PrivatePushCommitAction.NONE
     currentMutationId != sentMutationId && remoteWins -> PrivatePushCommitAction.KEEP_SUCCESSOR
     currentMutationId != sentMutationId -> PrivatePushCommitAction.REBASE_SUCCESSOR
+    remoteWins && recordType == PRIVATE_SYNC_PRICE_SELECTION -> PrivatePushCommitAction.MARK_PRICE_CONFLICT
     remoteWins -> PrivatePushCommitAction.APPLY_REMOTE
     else -> PrivatePushCommitAction.COMPLETE_CURRENT
 }
@@ -316,7 +319,7 @@ class PrivateBinderSyncWorker(
                     }
                 }.awaitPrivateBinderTask(session)
             }.getOrElse { return@withContext Result.retry() }
-            val remoteDocument = if (pushOutcome.remoteWins) {
+            val remoteDocument = if (pushOutcome.remoteWins && mutation.recordType != PRIVATE_SYNC_PRICE_SELECTION) {
                 runCatching { reference.get(Source.SERVER).awaitPrivateBinderTask(session) }
                     .getOrElse { return@withContext Result.retry() }
             } else {
@@ -325,7 +328,10 @@ class PrivateBinderSyncWorker(
             var retryRemoteApply = false
             database.withPrivateSyncSession(session::isCurrent) {
                 val current = dao.privateBinderSyncOutbox(mutation.entryKey)
-                when (privatePushCommitAction(pushOutcome.remoteWins, mutation.mutationId, current?.mutationId)) {
+                when (privatePushCommitAction(pushOutcome.remoteWins, mutation.mutationId, current?.mutationId, mutation.recordType)) {
+                    PrivatePushCommitAction.MARK_PRICE_CONFLICT -> {
+                        markPriceSelectionConflict(dao, mutation, pushOutcome.revision)
+                    }
                     PrivatePushCommitAction.COMPLETE_CURRENT -> {
                         dao.deletePrivateBinderSyncOutboxIfCurrent(mutation.entryKey, mutation.mutationId)
                         when (mutation.recordType) {

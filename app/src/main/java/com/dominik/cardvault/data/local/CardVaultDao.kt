@@ -231,8 +231,19 @@ interface CardVaultDao {
     @Upsert
     suspend fun upsertPrivateBinderSyncOutbox(value: PrivateBinderSyncOutboxEntity)
 
-    @Query("SELECT * FROM private_binder_sync_outbox WHERE ownerUid = :ownerUid ORDER BY createdAtEpochMillis LIMIT :limit")
+    @Query("""SELECT * FROM private_binder_sync_outbox WHERE ownerUid = :ownerUid
+        AND (recordType != 'PRICE_SELECTION' OR lastError IS NULL OR lastError NOT GLOB 'price-selection-conflict:*')
+        ORDER BY createdAtEpochMillis LIMIT :limit""")
     suspend fun pendingPrivateBinderSyncOutbox(ownerUid: String, limit: Int = 50): List<PrivateBinderSyncOutboxEntity>
+
+    @Query("""SELECT * FROM private_binder_sync_outbox WHERE ownerUid = :ownerUid
+        AND recordType = 'PRICE_SELECTION' AND lastError GLOB 'price-selection-conflict:*'
+        ORDER BY createdAtEpochMillis, entryKey""")
+    suspend fun conflictedPriceSelectionOutbox(ownerUid: String): List<PrivateBinderSyncOutboxEntity>
+
+    @Query("""SELECT COUNT(*) FROM private_binder_sync_outbox WHERE ownerUid = :ownerUid
+        AND recordType = 'PRICE_SELECTION' AND lastError GLOB 'price-selection-conflict:*'""")
+    fun observePriceSelectionConflictCount(ownerUid: String): Flow<Int>
 
     /** Sharing priority reuses the same outbox, limited to one binder and its placements. */
     @Query("""

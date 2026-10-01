@@ -11,6 +11,7 @@ import com.dominik.cardvault.data.sync.PRIVATE_SYNC_PLACEMENT
 import com.dominik.cardvault.data.sync.PRIVATE_SYNC_PRICE_SELECTION
 import com.dominik.cardvault.data.sync.PRIVATE_SYNC_UPSERT
 import com.dominik.cardvault.data.sync.deterministicPrivatePlacementId
+import com.dominik.cardvault.data.sync.withPrivateSyncSession
 import com.dominik.cardvault.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -37,6 +38,8 @@ class RoomCollectionRepository(
     private val onKeepCloudConflicts: suspend () -> Int = { 0 },
     override val cloudState: Flow<com.dominik.cardvault.data.sync.CollectionCloudState> = kotlinx.coroutines.flow.flowOf(com.dominik.cardvault.data.sync.CollectionCloudState(com.dominik.cardvault.data.sync.CollectionCloudStatus.LOCAL_ONLY)),
     private val verifyGuestClaimOwner: suspend () -> String = { com.dominik.cardvault.auth.requireVerifiedCollectionOwnerForClaim() },
+    private val onKeepLocalPriceConflicts: suspend (String) -> Int = { 0 },
+    private val captureConflictSession: (String) -> (() -> Boolean) = { owner -> { activeOwnerUid.value == owner } },
 ) : CollectionRepository {
     private val dao = database.cardVaultDao()
     private val catalogQueries = CatalogQueryCache<CatalogSearchResult>()
@@ -88,7 +91,9 @@ class RoomCollectionRepository(
     override val guestEntryCount: Flow<Int> = dao.observeGuestEntryCount()
     override val syncConflictCount: Flow<Int> = activeOwnerUid.flatMapLatest { ownerUid ->
         if (ownerUid == GUEST_OWNER_UID) kotlinx.coroutines.flow.flowOf(0)
-        else dao.observeSyncConflictCount(ownerUid)
+        else combine(dao.observeSyncConflictCount(ownerUid), dao.observePriceSelectionConflictCount(ownerUid)) { collection, prices ->
+            collection + prices
+        }
     }
     override val syncErrorCount: Flow<Int> = activeOwnerUid.flatMapLatest { ownerUid ->
         if (ownerUid == GUEST_OWNER_UID) kotlinx.coroutines.flow.flowOf(0)
@@ -820,8 +825,10 @@ class RoomCollectionRepository(
     override suspend fun retryConflictsKeepingLocal(): Int {
         val ownerUid = activeOwnerUid.value
         if (ownerUid == GUEST_OWNER_UID) return 0
+        val isCurrent = captureConflictSession(ownerUid)
+        val priceRetried = onKeepLocalPriceConflicts(ownerUid)
         var retried = 0
-        database.withTransaction {
+        database.withPrivateSyncSession(isCurrent) {
             val now = System.currentTimeMillis()
             dao.conflictedSyncOutbox(ownerUid).forEach { conflict ->
                 val remoteRevision = com.dominik.cardvault.data.sync.parseRemoteConflictRevision(conflict.lastError)
@@ -846,8 +853,8 @@ class RoomCollectionRepository(
                 }
             }
         }
-        if (retried > 0) onSyncNeeded()
-        return retried
+        if (retried > 0 || priceRetried > 0) onSyncNeeded()
+        return retried + priceRetried
     }
 
     override suspend fun keepCloudVersionsForConflicts(): Int = onKeepCloudConflicts()

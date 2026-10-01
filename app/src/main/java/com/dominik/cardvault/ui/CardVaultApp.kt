@@ -550,7 +550,7 @@ private val relaxedTutorialSteps = listOf(
     if (confirmKeepLocal) AlertDialog(
         onDismissRequest = { if (!syncWorking) confirmKeepLocal = false },
         title = { Text("Lokale Fassung behalten?") },
-        text = { Text("Damit ersetzt du bei bearbeiteten Karten bewusst die neuere Cloud-Fassung. Löschkonflikte bleiben aus Sicherheitsgründen unangetastet. Es erfolgt keine automatische Zusammenführung.") },
+        text = { Text("Damit sendest du bearbeitete Karten und deine lokale Preisauswahl bewusst erneut gegen die bekannte Cloud-Fassung. Erneute Änderungen erzeugen wieder einen Konflikt. Löschkonflikte und unklare Kartenidentitäten bleiben unangetastet. Es erfolgt keine automatische Zusammenführung.") },
         confirmButton = {
             TextButton(
                 enabled = !syncWorking && signedIn,
@@ -579,7 +579,7 @@ private val relaxedTutorialSteps = listOf(
     if (confirmKeepCloud) AlertDialog(
         onDismissRequest = { if (!syncWorking) confirmKeepCloud = false },
         title = { Text("Cloud-Fassung behalten?") },
-        text = { Text("DomiDex lädt für jeden Konflikt die aktuelle Cloud-Fassung neu. Die dazugehörige lokale Änderung wird danach ersetzt. Nicht erreichbare oder inzwischen erneut geänderte Einträge bleiben sicher im Konfliktstatus.") },
+        text = { Text("DomiDex lädt für Karten und Preisauswahl die aktuelle Cloud-Fassung neu. Die dazugehörige lokale Änderung wird danach ersetzt. Nicht erreichbare, unklare oder inzwischen lokal erneut geänderte Einträge bleiben sicher im Konfliktstatus.") },
         confirmButton = {
             TextButton(
                 enabled = !syncWorking && signedIn,
