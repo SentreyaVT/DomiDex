@@ -3815,10 +3815,24 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             feedbackEditorSession = null
         }
     }
-    LaunchedEffect(analysis) {
-        val current = analysis ?: return@LaunchedEffect
-        if (queueReviewMode) return@LaunchedEffect
-        if (!current.manualIdentityConfirmed && (!current.imageQuality.cardDetected || current.imageQuality.reason.isNotBlank())) {
+    fun manualAnalysisContext() = ManualScannerAnalysisContext(analysis, queueReviewMode, selectedScanId, latestScanFile?.path)
+    ManualScannerAnalysisEffect(
+        context = manualAnalysisContext(),
+        currentContext = ::manualAnalysisContext,
+        resolve = { current ->
+            // Manual correction uses the same source-backed resolver as a queued scan.
+            withContext(Dispatchers.IO) { CardScanCandidateResolver.resolve(current, repository, visualCatalog) }
+        },
+        verifyArtwork = { current, visualCandidates ->
+            val descriptor = withContext(Dispatchers.Default) { CardArtworkVerifier.describe(checkNotNull(current.normalizedCard)) }
+            CardArtworkVerifier.verifyCandidates(listOf(descriptor), visualCandidates.associate { it.card.scanIdentityKey() to it.card.imageUrl })
+        },
+        callbacks = ManualScannerAnalysisCallbacks(
+        inactive = {
+            candidatesLoading = false
+            artworkLoading = false
+        },
+        invalidFrame = { current ->
             candidates = emptyList()
             candidateScores = emptyMap()
             candidatesLoading = false
@@ -3830,8 +3844,8 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 finalConfidence = 0,
                 reason = current.imageQuality.reason.ifBlank { "card_frame_missing" },
             )
-            return@LaunchedEffect
-        }
+        },
+        started = { current ->
         ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
             state = AutoScanState.MATCHING,
             numberConfidence = current.numberConfidence,
@@ -3842,76 +3856,58 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
         candidatesLoading = true
         artworkScores = emptyMap()
         artworkLoading = false
-        // Manual evidence correction re-enters exactly the same source-backed
-        // resolver as a fresh queued scan. This keeps cross-set denominator
-        // fallback, source-code learning and language fallback consistent.
-        val resolution = runCatching {
-            withContext(Dispatchers.IO) { CardScanCandidateResolver.resolve(current, repository, visualCatalog) }
-        }.getOrNull()
-        val ranked = resolution?.candidates.orEmpty().map { it.card to it.score }
-        candidates = ranked.map { it.first }
-        candidateScores = ranked.associate { it.first.scanIdentityKey() to it.second }
+        },
+        resolved = { ranked ->
+        candidates = ranked.map { it.card }
+        candidateScores = ranked.associate { it.card.scanIdentityKey() to it.score }
         candidatesLoading = false
-        // Module 4 is deliberately asynchronous: a public reference image may be slow or absent,
-        // but it must never hold the camera or price refresh queue. It only corroborates an
-        // already strict set + number candidate and is surfaced before the collector adds a card.
-        current.normalizedCard?.takeIf { ranked.isNotEmpty() }?.let { captured ->
-            val visualCandidates = ranked.map { it.first }.filter { !it.imageUrl.isNullOrBlank() }.take(ScanQueuePolicy.MAX_VISUAL_CANDIDATES)
-            if (visualCandidates.isNotEmpty()) {
-                artworkLoading = true
-                scope.launch {
-                    val verified = try {
-                        val descriptor = withContext(Dispatchers.Default) { CardArtworkVerifier.describe(captured) }
-                        CardArtworkVerifier.verifyCandidates(listOf(descriptor), visualCandidates.associate { it.scanIdentityKey() to it.imageUrl })
-                    } finally { artworkLoading = false }
-                    artworkScores = verified
-                    val bestArtwork = verified[ranked.first().first.scanIdentityKey()]
-                    ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
-                        artworkConfidence = bestArtwork?.confidence ?: 0f,
-                        artworkMatch = bestArtwork?.match?.name.orEmpty(),
-                    )
-                }
-            }
-        }
-        val decision = constrainManualWholeImageDecision(
-            current,
-            resolution?.decision ?: ScannerDecisionResult(ScannerDecision.REJECTED, reason = "catalog_lookup_unavailable"),
-        )
+        },
+        artworkLoading = { artworkLoading = it },
+        artwork = { verified, ranked ->
+            artworkScores = verified
+            val bestArtwork = verified[ranked.first().card.scanIdentityKey()]
+            ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
+                artworkConfidence = bestArtwork?.confidence ?: 0f,
+                artworkMatch = bestArtwork?.match?.name.orEmpty(),
+            )
+        },
+        decision = { resolution, decision ->
         ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
             state = when (decision.decision) { ScannerDecision.ACCEPTED -> AutoScanState.CONFIRMED; ScannerDecision.AMBIGUOUS -> AutoScanState.AMBIGUOUS; ScannerDecision.REJECTED -> AutoScanState.NOT_FOUND },
-            candidateCount = ranked.size,
+            candidateCount = resolution?.candidates.orEmpty().size,
             finalConfidence = decision.bestScore,
             secondBestConfidence = decision.secondScore ?: 0,
             decision = decision.decision.name,
             reason = decision.reason,
         )
-        if (decision.decision == ScannerDecision.ACCEPTED && ranked.isNotEmpty()) {
+        },
+        accepted = { current, resolution, decision ->
             // Fast scan mode never adds a card silently. It clears the blocking
             // sheet and keeps the best evidence-backed result in the lower rail,
             // ready for a deliberate tap while the camera continues with the next.
             val resultScanId = selectedScanId ?: latestScanFile?.name ?: UUID.randomUUID().toString()
-            val acceptedCandidate = ranked.first().first
+            val acceptedCandidate = resolution.candidates.first().card
             scanSession = scanSession.registerIdentity(resultScanId, acceptedCandidate.scanSessionIdentityKey()).session
             updateQueuedScan(resultScanId) { scan ->
                 scan.copy(
                     stage = ScanPipelineStage.MATCHED,
                     analysis = current.copy(normalizedCard = null, visualDescriptors = emptyList()),
-                    candidates = resolution?.candidates.orEmpty(),
+                    candidates = resolution.candidates,
                     decision = decision,
-                    message = "${CardRecognitionRanker.label(ranked.first().second)} · zum Hinzufügen bereit",
+                    message = "${CardRecognitionRanker.label(resolution.candidates.first().score)} · zum Hinzufügen bereit",
                 )
             }
             analysis = null
             queueReviewMode = false
-        }
+        },
         // A successful photo must never leave the collector at a dead end. When OCR
         // lacks sufficient evidence, immediately ask for the two printed markers
         // rather than pretending that a card identity can be guessed.
-        if (decision.decision == ScannerDecision.REJECTED) {
+        rejected = { current ->
             manualEvidence = false
             feedbackConsentPending = latestScanFile != null && !current.manualIdentityConfirmed
-        }
-    }
+        },
+    ))
     fun enqueueScan(
         file: File,
         qualityEligible: Boolean,
