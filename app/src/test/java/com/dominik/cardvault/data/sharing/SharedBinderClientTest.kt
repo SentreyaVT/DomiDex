@@ -38,6 +38,62 @@ class SharedBinderClientTest {
         assertNull(page.total!!.amountEur)
     }
 
+    // Synthetic public wire DTOs only: these are not an Android/Web end-to-end test.
+    @Test fun optionalSelectionBasisRemainsBackwardCompatibleWithoutChangingPublishedPrice() {
+        val original = pricedFixture("12.34")
+        val selection = original.replace("\"source\":\"Cardmarket\"", "\"source\":\"Cardmarket\",\"basis\":\"selection\"")
+        val expected = SharedBinderContract.parse(original.toByteArray(), 0)
+        val actual = SharedBinderContract.parse(selection.toByteArray(), 0)
+        assertEquals(expected, actual)
+        assertEquals(12.34, actual.cards.single().price!!.amountEur!!, 0.0)
+        assertEquals("2026-10-01T00:00:00.000Z", actual.cards.single().price!!.asOf)
+        assertNull(actual.total)
+    }
+
+    @Test fun publishedPriceAndTotalAcceptTheExactAmountCeiling() {
+        val page = SharedBinderContract.parse(pricedFixture("1000000000", """{"amount":1000000000,"currency":"EUR","complete":true,"pricedCards":1,"visibleCards":1}""").toByteArray(), 0)
+        assertEquals(1_000_000_000.0, page.cards.single().price!!.amountEur!!, 0.0)
+        assertEquals(1_000_000_000.0, page.total!!.amountEur!!, 0.0)
+        assertTrue(page.total!!.complete)
+        assertEquals(1, page.total!!.pricedCards)
+        assertEquals(1, page.total!!.visibleCards)
+    }
+
+    @Test fun publishedPriceAboveTheAmountCeilingRejectsThePageInsteadOfClamping() {
+        listOf("1000000000.01", "90071992547409.91").forEach { amount ->
+            failure { SharedBinderContract.parse(pricedFixture(amount).toByteArray(), 0) }
+        }
+    }
+
+    @Test fun publishedTotalAboveTheAmountCeilingRejectsThePageDespiteAValidCardPrice() {
+        listOf("1000000000.01", "90071992547409.91").forEach { amount ->
+            val total = """{"amount":$amount,"currency":"EUR","complete":true,"pricedCards":1,"visibleCards":1}"""
+            failure { SharedBinderContract.parse(pricedFixture("12.34", total).toByteArray(), 0) }
+        }
+    }
+
+    @Test fun omittedOverflowingTotalKeepsReadableCardPricesWithoutInventingZeroOrASum() {
+        val json = pricedFixture("600000000")
+        val firstCard = json.substringAfter("\"cards\":[").substringBefore("],\"unavailableSlots\"")
+        val secondCard = firstCard.replace("\"slot\":0", "\"slot\":1").replace("\"cardId\":\"base1-1\"", "\"cardId\":\"base1-2\"")
+        val page = SharedBinderContract.parse(json.replace(firstCard, "$firstCard,$secondCard").toByteArray(), 0)
+        assertEquals(listOf(0, 1), page.cards.map { it.slot })
+        assertEquals(listOf(600_000_000.0, 600_000_000.0), page.cards.map { it.price!!.amountEur })
+        assertNull("The server omitted total; the client must not replace it with zero or 1.2 billion EUR", page.total)
+    }
+
+    @Test fun inconsistentPublishedTotalCompletenessOrCountsRemainRejected() {
+        listOf(
+            """{"amount":12.34,"currency":"EUR","complete":false,"pricedCards":1,"visibleCards":1}""",
+            """{"amount":null,"currency":"EUR","complete":true,"pricedCards":1,"visibleCards":1}""",
+            """{"amount":12.34,"currency":"EUR","complete":true,"pricedCards":0,"visibleCards":1}""",
+            """{"amount":12.34,"currency":"EUR","complete":false,"pricedCards":0,"visibleCards":1}""",
+            """{"amount":null,"currency":"EUR","complete":false,"pricedCards":2,"visibleCards":1}""",
+        ).forEach { total ->
+            failure { SharedBinderContract.parse(pricedFixture("12.34", total).toByteArray(), 0) }
+        }
+    }
+
     @Test fun malformedPagesCannotMixSlotsOrDisplayDuplicateCards() {
         listOf(
             fixture().replace("\"page\":0", "\"page\":1"),
@@ -142,6 +198,10 @@ class SharedBinderClientTest {
     }
 
     private fun fixture() = """{"title":"Fixture","coverStyle":"galaxy","page":0,"pageCount":2,"cards":[{"slot":0,"cardId":"base1-1","name":"Pikachu","setName":"Basis","collectorNumber":"1","image":null,"finish":"Holo","holoEffectId":"rainbow","holoIntensity":0.5}],"unavailableSlots":[]}"""
+    private fun pricedFixture(amount: String, total: String? = null): String {
+        val priced = fixture().replace("\"holoIntensity\":0.5", """"holoIntensity":0.5,"price":{"amount":$amount,"currency":"EUR","source":"Cardmarket","asOf":"2026-10-01T00:00:00.000Z"}""")
+        return if (total == null) priced else priced.replace("\"title\":", "\"total\":$total,\"title\":")
+    }
     private fun failure(block: () -> Unit): SharedBinderReadException {
         try { block() } catch (failure: SharedBinderReadException) { return failure }
         throw AssertionError("Expected safe failure")
