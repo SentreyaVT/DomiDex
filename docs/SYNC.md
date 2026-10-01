@@ -144,8 +144,8 @@ listener. Rollout flags must not bypass any security checks.
 - The common remote-apply seam now implements explicit deferred outcomes, pending
   membership protection and confirmed tombstone receipts (evidence below). The
   future delta adapter must still persist recheck markers for deferred documents.
-- Bound the full worker budget, not just each group. Stop a completed group cycle:
-  repeatedly starting Idle at the same boundary inside one run would replay forever.
+- The active full-pull budget and cycle stop are now covered by the runner tests
+  below; a future delta adapter must preserve those properties independently.
 - Timestamp trust remains an adapter obligation. The Android public snapshot API
   has no server read-time field; a representable timestamp alone is not proof of a
   valid historical writer. Malformed legacy values must not poison progress.
@@ -209,3 +209,29 @@ An initial runner invocation had two wrong fully-qualified class names; the corr
 78-case run passed. Evidence: `gate4-confirmed-dependency-instrumentation.log` and
 `gate4-confirmed-dependency-build.log`. The latter passes debug/test builds, release
 Kotlin compilation and 154 selected JVM tests. No release signing or production call.
+
+### Active bounded full-scan runner
+
+`PrivateFullPullRunner` is the worker's actual four-phase control flow; its adapter
+retains Firestore SDK reads, snapshot metadata and session-guarded Room writes.
+It accounts for the whole fetched page before applying rows, at most 200/query and
+1,000 logical read units/run. Empty queries count one; point reads are reserved
+before requesting a parent, including missing documents. The per-run parent set
+is bounded by that budget and is discarded before the next invocation.
+
+If a never-attempted dependency cannot fit, the bookmark remains before its child.
+Already-attempted missing or locally blocked parents allow the FULL scan to advance
+and be revisited next cycle. Completing phase four resets once, including recovery
+from a persisted phase-four checkpoint; it never starts another full cycle in the
+same invocation. A single shared owner gate covers phase read through final write.
+It retains at most eight active owners and releases synchronously in `finally`.
+Concurrent pulls retry with existing WorkManager backoff; pushes and sharing are
+outside the gate. This is single-process exclusion, not a distributed lock.
+
+Thirty-seven new runner/gate/budget cases replace two obsolete cursor-only tests;
+the selected sync/sharing total is now 189 JVM tests. Synthetic 1k/5k/20k matrices
+exercise two finite full cycles and exact ID/phase bookmark sequences. The final
+debug/test/release-Kotlin build and 78 emulator regressions pass. A metadata port
+and fake provider are not Firebase E2E, and logical read units are not an invoice
+prediction (SDK retries and Firestore pricing are not modeled). Delta/network
+watermark integration, actual cross-device scale and remote latency remain open.

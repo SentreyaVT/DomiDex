@@ -158,12 +158,12 @@ An 18-test pass alone is not Gate 1 approval.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | ACK/failure/terminal-state fixes plus delta persistence foundation: 116 selected JVM tests and 57 combined emulator tests pass; indexed slot lookup measured through 20k rows; delta worker integration and multi-client scale remain; see SYNC.md |
-| 5 Pricing/catalog | NOT TESTED | exact-identity centralized fetch/cache/fallback/retention evidence |
+| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply protection and bounded single-flight full pulls active; 189 selected JVM and 78 emulator tests pass; synthetic 1k/5k/20k runner cycles; delta integration and multi-client scale remain; see SYNC.md |
+| 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes and seven verified mappings tested; full coverage, incremental loading and centralized delivery remain |
 | 6 Shared binder scale | NOT TESTED | 5k placements, pagination, final revoke check, caching |
 | 7 Camera stability | NOT TESTED | synthetic/emulator regression; real hardware matrix separate |
 | 8 Recognition | NOT TESTED | multisignal, variant-aware false accepts, reproducible benchmark |
-| 9 Community knowledge | NOT TESTED | independent evidence, conflict, freshness and no hint-only acceptance |
+| 9 Community knowledge | IN PROGRESS (baseline FAIL) | 15 focused safety cases reproduce 10 failures; confidence, freshness and lifecycle fixes under implementation, not yet claimed passing |
 | 10 Privacy/lifecycle | NOT TESTED | export/deletion/locks/storage/retention inventory |
 | 11 Observability/cost | NOT TESTED | low-cardinality safe metrics; simulation labelled, alerts prepared |
 | 12 Load/scale | NOT TESTED | 10/40/80 concurrency; 1k/5k/20k collections; no production load |
@@ -299,6 +299,29 @@ debug/test APK builds and release Kotlin compilation pass (43 s combined build).
 The original test command contained two incorrect test-class names; this was a
 runner configuration failure, followed by the corrected passing run. No live
 account switch, Firestore E2E, network-saving or full Gate 4 completion is claimed.
+
+### Bounded full-pull follow-up
+
+The existing full scan now shares one 1,000-unit logical read budget across query
+results, empty queries and dependent document reads. Repeated missing parents are
+looked up once per invocation. An unread parent at budget exhaustion does not
+advance the current document's bookmark; already-attempted missing parents do not
+cause an immediate orphan loop. A process-local owner-specific non-waiting gate
+prevents two full pulls from racing the same bookmark. Busy/capacity preserves the
+request with WorkManager retry, while pushes and priority sharing stay outside.
+
+The production loop is directly tested through a synthetic port. Forty-four focused
+tests pass, including two complete cycles at each of 1k/5k/20k rows, exact bookmark
+identities, <=200 rows/query, <=1,000 logical units/run, interruptions, cancellation,
+missing parents and phase boundaries. Two tests of an obsolete unused cursor helper
+were replaced, not counted as worker coverage. The first focused run had a corrected
+JUnit void-signature error; no executed pre-fix performance/functional RED is claimed.
+
+Final combined check: 189/189 selected JVM tests, 78/78 offline-emulator regressions
+(3.025 s), debug/test APK builds and release Kotlin compilation (42 s) pass. Evidence:
+`gate4-full-pull-final-build.log`, `gate4-full-pull-final-instrumentation.log` and
+`scanner-baseline/full-pull-green/`. This proves local control flow and Room helpers,
+not multi-device Firebase convergence, billed-read counts or end-to-end sync latency.
 
 ## Gate 5 Android import safety (partial, local validation)
 

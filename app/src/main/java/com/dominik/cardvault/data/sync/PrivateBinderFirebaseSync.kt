@@ -34,6 +34,7 @@ import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -95,21 +96,6 @@ internal sealed interface PrivateRemoteApplyResult {
         val type: PrivateRemoteDependencyType,
         val id: String,
     ) : PrivateRemoteApplyResult
-}
-
-internal data class PrivateRemoteCheckpoint(
-    val cursor: String?,
-    val dependencyPending: Boolean,
-)
-
-internal fun privateRemoteCheckpointAfter(
-    checkpoint: PrivateRemoteCheckpoint,
-    documentId: String,
-    result: PrivateRemoteApplyResult,
-): PrivateRemoteCheckpoint = when {
-    checkpoint.dependencyPending -> checkpoint
-    result is PrivateRemoteApplyResult.RetryDependency -> checkpoint.copy(dependencyPending = true)
-    else -> PrivateRemoteCheckpoint(cursor = documentId, dependencyPending = false)
 }
 
 internal fun shouldRestorePrivateMutationAfterRemoteApply(result: PrivateRemoteApplyResult): Boolean =
@@ -396,16 +382,29 @@ class PrivateBinderSyncWorker(
             // No unrelated binder/layout pull on this foreground sharing path.
             return@withContext Result.success()
         }
-        val pullResult = runCatching { pullBoundedSnapshot(database, firestore, uid, session) }
-            .onFailure { Log.w(LOG_TAG, "Private-Binder-Abruf wird später wiederholt (${it.javaClass.simpleName}).") }
-            .getOrElse { return@withContext Result.retry() }
+        val pullFlight = try {
+            privateFullPullFlights.tryRun(uid) { pullBoundedSnapshot(database, firestore, uid, session) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(LOG_TAG, "Private-Binder-Abruf wird später wiederholt (${error.javaClass.simpleName}).")
+            return@withContext Result.retry()
+        }
+        val pullResult = when (pullFlight) {
+            is PrivateFullPullFlightResult.Ran -> pullFlight.value
+            // The active pull may already have visited a recently changed area. Preserve this
+            // request with WorkManager backoff; neither claim completion nor create a hot APPEND.
+            PrivateFullPullFlightResult.OwnerBusy,
+            PrivateFullPullFlightResult.CapacityReached,
+            -> return@withContext Result.retry()
+        }
         // The collection worker can finish while this worker performs its bounded remote pull.
         // A remembered dependency is not itself a failure: only a still-pending parent needs backoff.
         val parentStillPending = database.withPrivateSyncSession(session::isCurrent) {
             deferredPriceSelectionParentPending(dao, uid, deferredPriceSelections)
         }
         when (privateSyncContinuation(parentStillPending,
-            pullResult == PrivateRemotePullResult.MORE_DOCUMENTS,
+            pullResult == PrivateFullPullRunResult.MORE_DOCUMENTS,
             dao.pendingPrivateBinderSyncOutbox(uid, 1).isNotEmpty())) {
             PrivateSyncContinuation.RETRY -> return@withContext Result.retry()
             PrivateSyncContinuation.APPEND -> PrivateBinderSyncScheduler.schedule(applicationContext, uid)
@@ -487,84 +486,75 @@ class PrivateBinderSyncWorker(
 
 private data class PrivatePushOutcome(val revision: Long, val remoteWins: Boolean)
 
-private enum class PrivateRemotePullResult {
-    COMPLETE,
-    MORE_DOCUMENTS,
-}
+// Shared only by FULL pulls. Mutations and the foreground sharing return stay outside this gate.
+private val privateFullPullFlights = PrivateFullPullSingleFlight()
 
 private suspend fun pullBoundedSnapshot(
     database: CardVaultDatabase,
     firestore: FirebaseFirestore,
     uid: String,
     session: PrivatePullAuthSession,
-): PrivateRemotePullResult {
+): PrivateFullPullRunResult {
     session.requireCurrent()
     val user = firestore.collection("users").document(uid)
     val dao = database.cardVaultDao()
     val ownerKey = UUID.nameUUIDFromBytes(uid.toByteArray(StandardCharsets.UTF_8)).toString()
     val phaseKey = "private-sync-pull-phase-$ownerKey"
-    var phase = dao.metadata(phaseKey)?.toIntOrNull()?.coerceIn(0, 4) ?: 0
-    var remaining = MAX_REMOTE_DOCUMENTS_PER_RUN
+    fun cursorKey(phase: Int) = "private-sync-pull-cursor-$ownerKey-$phase"
     val groups = listOf(
         RemotePullGroup("privateBinders") { document -> applyRemoteBinder(dao, uid, document) },
         RemotePullGroup("privateBinderPlacements") { document -> applyRemotePlacement(dao, uid, document) },
         RemotePullGroup("collectionLayouts") { document -> applyRemoteLayout(dao, uid, document) },
         RemotePullGroup("collectionPriceSelections") { document -> applyRemotePriceSelection(dao, uid, document) },
     )
-    while (phase < groups.size) {
-        val group = groups[phase]
-        val cursorKey = "private-sync-pull-cursor-$ownerKey-$phase"
-        var cursor = dao.metadata(cursorKey)?.takeIf(String::isNotBlank)
-        while (remaining > 0) {
-            val pageSize = minOf(REMOTE_PULL_PAGE_SIZE, remaining)
+    val port = object : PrivateFullPullPort {
+        override suspend fun readPhase(): Int = database.withPrivateSyncSession(session::isCurrent) {
+            dao.metadata(phaseKey)?.toIntOrNull() ?: 0
+        }
+
+        override suspend fun readCursor(phase: Int): String? = database.withPrivateSyncSession(session::isCurrent) {
+            dao.metadata(cursorKey(phase))
+        }
+
+        override suspend fun queryPage(phase: Int, after: String?, limit: Int): List<PrivateFullPullRow> {
+            val group = groups[phase]
             var query = user.collection(group.collectionName)
                 .orderBy(FieldPath.documentId())
-                .limit(pageSize.toLong())
-            if (cursor != null) query = query.startAfter(cursor)
+                .limit(limit.toLong())
+            if (after != null) query = query.startAfter(after)
             session.requireCurrent()
             val documents = query.get(Source.SERVER).awaitPrivateBinderTask(session).documents
-            if (documents.isNotEmpty()) {
-                for (document in documents) {
-                    var applyResult = database.withPrivateSyncSession(session::isCurrent) { group.apply(document) }
-                    val resolvedDependencies = mutableSetOf<PrivateRemoteApplyResult.RetryDependency>()
-                    while (applyResult is PrivateRemoteApplyResult.RetryDependency) {
-                        if (!resolvedDependencies.add(applyResult)) {
-                            // No permanent-orphan inference: a locally blocked parent can become
-                            // usable later. This FULL scan retries it in its next complete cycle.
-                            break
-                        }
-                        resolveRemoteDependency(database, firestore, uid, applyResult, session)
-                        applyResult = database.withPrivateSyncSession(session::isCurrent) { group.apply(document) }
-                    }
-                    // This bookmark pages a FULL ID scan, not a delta high-watermark. Blocked
-                    // documents are revisited after phase reset; do not create a hot APPEND loop
-                    // solely for one unresolved dependency. A future delta adapter must instead
-                    // retain a durable recheck marker before advancing past such a document.
-                    val checkpoint = PrivateRemoteCheckpoint(document.id, dependencyPending = false)
-                    database.withPrivateSyncSession(session::isCurrent) {
-                        checkpoint.cursor
-                            ?.takeIf { it != cursor }
-                            ?.let { dao.putMetadata(AppMetadataEntity(cursorKey, it)) }
-                    }
-                    cursor = checkpoint.cursor
+            return documents.map { document ->
+                PrivateFullPullRow(document.id) {
+                    database.withPrivateSyncSession(session::isCurrent) { group.apply(document) }
                 }
-                remaining -= documents.size
             }
-            if (documents.size < pageSize) {
-                database.withPrivateSyncSession(session::isCurrent) {
-                    dao.putMetadata(AppMetadataEntity(cursorKey, ""))
-                    phase++
-                    dao.putMetadata(AppMetadataEntity(phaseKey, phase.toString()))
-                }
-                break
+        }
+
+        override suspend fun resolveDependency(dependency: PrivateRemoteApplyResult.RetryDependency) {
+            resolveRemoteDependency(database, firestore, uid, dependency, session)
+        }
+
+        override suspend fun saveCursor(phase: Int, documentId: String) {
+            database.withPrivateSyncSession(session::isCurrent) {
+                dao.putMetadata(AppMetadataEntity(cursorKey(phase), documentId))
             }
-            if (remaining == 0) return PrivateRemotePullResult.MORE_DOCUMENTS
+        }
+
+        override suspend fun finishPhase(phase: Int) {
+            database.withPrivateSyncSession(session::isCurrent) {
+                dao.putMetadata(AppMetadataEntity(cursorKey(phase), ""))
+                dao.putMetadata(AppMetadataEntity(phaseKey, (phase + 1).toString()))
+            }
+        }
+
+        override suspend fun resetCycle() {
+            database.withPrivateSyncSession(session::isCurrent) {
+                dao.putMetadata(AppMetadataEntity(phaseKey, "0"))
+            }
         }
     }
-    database.withPrivateSyncSession(session::isCurrent) {
-        dao.putMetadata(AppMetadataEntity(phaseKey, "0"))
-    }
-    return PrivateRemotePullResult.COMPLETE
+    return runPrivateFullPull(port, PrivateFullPullReadBudget(uid, MAX_REMOTE_LOGICAL_READS_PER_RUN), REMOTE_PULL_PAGE_SIZE)
 }
 
 private class RemotePullGroup(
@@ -646,7 +636,7 @@ private suspend fun applyRemotePriceSelection(dao: CardVaultDao, uid: String, do
     applyRemoteRecord(dao, uid, PRIVATE_SYNC_PRICE_SELECTION, document)
 
 private const val REMOTE_PULL_PAGE_SIZE = 200
-private const val MAX_REMOTE_DOCUMENTS_PER_RUN = 1_000
+private const val MAX_REMOTE_LOGICAL_READS_PER_RUN = 1_000
 
 internal suspend fun <T> Task<T>.awaitPrivateBinderTask(session: PrivatePullAuthSession): T {
     session.requireCurrent()

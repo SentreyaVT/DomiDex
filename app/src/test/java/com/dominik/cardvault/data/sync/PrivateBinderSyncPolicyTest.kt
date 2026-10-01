@@ -69,44 +69,6 @@ class PrivateBinderSyncPolicyTest {
         )
     }
 
-    @Test fun remoteCursorStopsBeforeDocumentWhoseLocalDependencyHasNotArrived() {
-        val afterFirst = privateRemoteCheckpointAfter(
-            checkpoint = PrivateRemoteCheckpoint(cursor = "before", dependencyPending = false),
-            documentId = "placement-1",
-            result = PrivateRemoteApplyResult.Checkpoint,
-        )
-        val blocked = privateRemoteCheckpointAfter(
-            checkpoint = afterFirst,
-            documentId = "placement-2",
-            result = PrivateRemoteApplyResult.RetryDependency(
-                PrivateRemoteDependencyType.COLLECTION_ENTRY,
-                "entry-2",
-            ),
-        )
-
-        assertEquals("placement-1", blocked.cursor)
-        assertEquals(true, blocked.dependencyPending)
-    }
-
-    @Test fun retryingDeferredDocumentAdvancesOnlyAfterItsDependencyExists() {
-        val deferred = privateRemoteCheckpointAfter(
-            checkpoint = PrivateRemoteCheckpoint(cursor = "placement-1", dependencyPending = false),
-            documentId = "placement-2",
-            result = PrivateRemoteApplyResult.RetryDependency(
-                PrivateRemoteDependencyType.COLLECTION_ENTRY,
-                "entry-2",
-            ),
-        )
-        val retried = privateRemoteCheckpointAfter(
-            checkpoint = PrivateRemoteCheckpoint(cursor = deferred.cursor, dependencyPending = false),
-            documentId = "placement-2",
-            result = PrivateRemoteApplyResult.Checkpoint,
-        )
-
-        assertEquals("placement-2", retried.cursor)
-        assertEquals(false, retried.dependencyPending)
-    }
-
     @Test fun remoteWinsKeepsItsDurableMutationWhileARequiredLocalRowIsMissing() {
         assertEquals(
             true,
