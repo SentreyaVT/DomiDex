@@ -363,3 +363,41 @@ sharing selection passes 87/87 tests in nine files and 4/4 separate archived-del
 compatibility tests. No production read, deployment, schema, private sidecar exposure
 or change to share options. See the Web handoff for detailed evidence and remaining
 pagination/price-parity constraints.
+
+### Price-history retention audit (read-only, 2026-10-01)
+
+`raw_price_snapshots` is a global local catalog cache, unique by product/source/source
+time. Reimporting the same source time uses REPLACE: it does not add rows, but still
+writes and can invalidate Room observers. New source times add rows for every joined
+catalog product, not just owned cards. There is no general runtime retention policy.
+The 24-hour schedule, startup staleness check and manual refresh do not guarantee
+exactly one successful import or new source timestamp per day.
+
+Portfolio history is owner/identity filtered, but currently materializes all 16 raw
+fields for all retained source dates of those products. Binder summaries already
+avoid this history; private binder contents still load it for per-card change percent.
+MAX history and the earliest positive normal/reverse trend are current UI contracts.
+A blind 365-day cutoff would change them and is therefore **not implemented**.
+
+One-year **simulation only**, assuming a constant catalog, one new source timestamp
+per day, 365 successful days and no deletion:
+
+| Joined products | Retained rows | REPLACE attempts with four imports of each daily snapshot |
+|---|---:|---:|
+| 1,000 | 365,000 | 1,460,000 |
+| 10,000 | 3,650,000 | 14,600,000 |
+| 50,000 | 18,250,000 | 73,000,000 |
+
+Formula: products × distinct source timestamps; repeated imports of the same daily
+timestamp increase writes, not rows. Four distinct source timestamps daily would
+also quadruple rows. An owner with 200/2,000 distinct products could materialize
+73,000/730,000 history objects in this scenario. Duplicate owned copies do not
+duplicate product history. These counts do not establish MB, elapsed time or actual
+production use. Existing 1k/5k/20k scale fixtures have only two source dates; they
+are not a year-long history benchmark.
+
+Smallest follow-up candidate: a four-field owner-safe trend projection, preserving
+all dates, values, MAX and identity semantics. This could reduce fields/materialized
+object size, not row growth or downloads. It first needs exact result-equivalence,
+365-date, normal/reverse/null/zero, same-date correction and owner-isolation tests.
+Retention/compaction remains a separate decision with explicit history semantics.
