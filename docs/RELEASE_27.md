@@ -2,6 +2,33 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
+### Latest local checkpoint: public catalog execution bound
+
+The sibling Web cache now limits actual public catalog loader promises, including
+uncached overflow: 32 active / 512 FIFO queued per instance. Original deadlines,
+dedup/cache budgets, price identities and private authorization remain unchanged.
+Active cancellation cannot release a permit until its underlying loader settles.
+Overload remains uncached unavailability, never a fabricated value. The historical
+480 simultaneous synthetic provider calls are now bounded to 32 in the same 80-reader
+fixture; this is not a socket, heap or cross-replica limit.
+
+Root compared 16/32/64 configurations. Default 32 is a conservative compromise,
+not a proven production optimum or unconditional speedup. Full measurements,
+including longer burst waits than unbounded execution and outstanding O(N) private
+reads, are retained in Web `tests/sharing-concurrency/README.md`.
+Final checks: 103/103 cache/body/package cases, 12/12 actual-handler concurrency
+cases (10/40/80 readers, three repetitions), 1,199/1,199 full Web unit cases,
+typecheck/lint and isolated production-mode build (13.058 s). Root dist and nine
+build/deploy metadata files remain byte-identical. No deployment, Firebase change,
+Android behavior change, release signing or Xiaomi action in this block.
+
+Gate 4 fairness is now independently reproduced: four 1,000-read FULL-pull runs
+visit only phase 0 when new binder IDs continually extend that group. Three existing
+later rows remain untouched. New JVM baseline: two finite controls PASS, one growing
+fixture FAIL. Evidence: `artifacts/release27-engineering-20261001/full-pull-fairness-red.log`.
+This adversarial control-flow finding is not a measured real-user failure frequency.
+Correction and follow-up verification are in progress; release remains **NOT READY**.
+
 ## Scope and safety boundaries
 
 Harden the existing Android client and separate Web/backend without replacing working
