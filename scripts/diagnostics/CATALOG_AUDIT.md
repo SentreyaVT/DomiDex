@@ -42,3 +42,24 @@ An exact source reference is not the same as independent physical checklist veri
 The diagnostic JUnit test passing means all report rows were produced; it does **not** mean every row has a price. `node --test scripts/diagnostics/catalog-integrity-policy.test.mjs` validates the reporting safety rules independently.
 
 `unsafeMappedBinderSlots` records actual non-empty pre-fix Binder mappings without any declared printing product ID. Removing those guesses is a safety correction, not proof of new price coverage. Exact-ID priced printing counts are kept separately so an apparent price-coverage drop cannot hide in the totals.
+
+### Reused printing IDs and descriptor provenance
+
+`sourcePrintingId` is the raw upstream ID. `runtimePrintingId` records Android's
+locally disambiguated reference ID; it is not new source evidence. A raw ID such
+as `generated` can describe several Normal/Holo/Reverse or stamped/foil printings.
+The report matches raw ID **and** the independently reconstructed Android finish
+and physical descriptor, never raw ID alone. Generated metadata remains flagged.
+
+Conflicting positive product IDs on indistinguishable matching source rows, or
+contradictory `thirdParty.cardmarket` / printing-level `pricing.cardmarket.idProduct`,
+block the diagnostic product/price including registry fallback. A unique declared
+ID among matching duplicate rows is source evidence regardless of row order, but
+an absent runtime mapping is still unavailable. An unknown descriptor or missing
+detail cannot become source-verified merely through `localVerifiedProductId`.
+This stricter report may flag an existing maintained app mapping as an evidence
+gap; it does not itself modify or prove a regression in the app's price display.
+
+Compare before/after outputs with the **same policy version** and frozen source
+bytes. When refining the policy, regenerate both reports in new directories;
+never compare an old lenient reporting rule with a new strict one as price gain/loss.

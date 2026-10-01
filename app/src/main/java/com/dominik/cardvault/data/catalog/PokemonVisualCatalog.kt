@@ -203,6 +203,8 @@ data class PokemonPrintVariant(
     val id: String, val finish: String, val variant: String,
     /** Exact public source link, never inferred from a title or product order. */
     val cardmarketProductId: Long? = null,
+    /** Preserve raw provenance when a reused source ID needs a unique local reference ID. */
+    val sourceVariantId: String = id,
 )
 
 data class PokemonVisualCard(
@@ -689,7 +691,7 @@ class PokemonVisualCatalog private constructor(
 
     private fun parseCardDetail(reader: JsonReader): CatalogCardDetail {
         val result = mutableListOf<PokemonPrintVariant>()
-        val blockedCardmarketVariantIds = mutableSetOf<String>()
+        val conflictingPrintings = mutableSetOf<Triple<String, String, String>>()
         var rarity: String? = null
         var image: String? = null
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
@@ -746,13 +748,33 @@ class PokemonVisualCatalog private constructor(
                 }.joinToString(" · ")
                 if (id.isNotBlank()) {
                     val conflicting = cardmarketProductId != null && pricingProductId != null && cardmarketProductId != pricingProductId
-                    if (conflicting) blockedCardmarketVariantIds += id
+                    if (conflicting) conflictingPrintings += Triple(id, finish, sourceVariant)
                     result += PokemonPrintVariant(id, finish, sourceVariant, cardmarketProductId.takeUnless { conflicting })
                 }
             }
             else -> reader.skipValue()
         }; reader.endObject()
-        return CatalogCardDetail(rarity, result.distinctBy { it.id }, image, blockedCardmarketVariantIds.toSet())
+        // Older source payloads reuse "generated" for Normal/Holo and Reverse.
+        // Preserve existing reference IDs and only disambiguate additional physical
+        // printings. Reserve every real source ID before allocating local suffixes.
+        val reservedIds = result.mapTo(mutableSetOf()) { it.id }
+        val usedIds = mutableSetOf<String>()
+        val blockedCardmarketVariantIds = mutableSetOf<String>()
+        val printings = result.distinctBy { Triple(it.id, it.finish, it.variant) }.map { printing ->
+            var localId = printing.id
+            if (localId in usedIds) {
+                val base = "${printing.id}~${printing.finish.length}:${printing.finish}${printing.variant.length}:${printing.variant}"
+                localId = base
+                var suffix = 1
+                while (localId in reservedIds || localId in usedIds) localId = "$base~${suffix++}"
+            }
+            usedIds += localId
+            if (Triple(printing.sourceVariantId, printing.finish, printing.variant) in conflictingPrintings) {
+                blockedCardmarketVariantIds += localId
+            }
+            printing.copy(id = localId)
+        }
+        return CatalogCardDetail(rarity, printings, image, blockedCardmarketVariantIds.toSet())
     }
 
     /** Inspect only printing-level identity; never import provider prices or root IDs. */

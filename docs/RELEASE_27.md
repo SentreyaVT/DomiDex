@@ -2,7 +2,62 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: contradictory printing identities fail closed
+### Latest local checkpoint: reused source IDs retain distinct physical printings
+
+Android no longer deduplicates printings by raw ID alone. The existing first
+reference ID stays unchanged; additional different finish/descriptor records
+receive collision-checked local reference IDs. All actual source IDs are reserved
+first, and the raw `sourceVariantId` remains available separately for diagnostics.
+Existing private entries, placements, schema and sync identities are not migrated.
+The prior per-record identity-conflict guard now follows the full raw-ID/finish/
+descriptor identity, so an invalid printing cannot block a healthy sibling.
+
+Ten focused JVM methods cover both source orders, cache/registry reuse, descriptor
+differences, source-ID collisions and no sibling/root price borrowing. Initial
+combined RED: 12 PASS / seven targeted FAIL; final combined identity cases **20/20**.
+Full debug/test APKs, release Kotlin and both lints pass in **3m 40s**;
+**885 JVM PASS / one existing optional SKIP**, 129 classes, no failures/errors.
+Fixed offline emulator matrix: **371/371 PASS**, 297.546 s, source/APKs unchanged
+through invocation and offline/no-reverse checks passed. Only a subsequently
+removed stale draft comment differs from the tested JVM source; product code did
+not change. Evidence: `artifacts/release27-engineering-20261001/generated-printing-*`
+and `artifacts/android-regression/20261001T175101Z-f3ad78a3/manifest.json`.
+App APK SHA-256: `191722879590f9388aedbe8d797c16a4b8ef7386f8e91ddd0120978a58494161`;
+test APK: `489ddb2e66cb276609975aa52b71d0711645cd449796ff977f295731fe2b0a9d`.
+
+The same frozen 25 September snapshot was verified before/after: 19,738 manifest
+records match, 19,748 actual files keep aggregate
+`9af1f37909e9c5331599655cf26befd8b97ccf6e8aaf674a623d8d24ca07b32b`.
+The actual audit method passes without skip in 14.704 s (Gradle 1m 58s).
+It restores **218 previously discarded printings**: 164 in `swsh1`, 54 in
+`swsh3.5`. All 31,397 previous printing records retain identical fields after
+excluding the new diagnostic runtime-ID field. There are now 31,615 source/fallback
+printings and 27,349 canonical slots across 144 physical index sets / 19,463 cards.
+Exact runtime links stay 17,903; strictly verified priced slots stay 17,867.
+The 218 restored forms have no exact source product links: **metadata coverage
+gain, not invented price coverage**. No new network/image check or UI-wide claim.
+
+Diagnostic matching now uses raw ID + actual finish/descriptor, with unique
+declared-ID agreement and fail-closed conflicting/missing metadata. Its independent
+policy/report suite is **24/24**, including two newly reproduced reviewer cases.
+Both before/after reports were regenerated with that identical stricter policy:
+20,252 available prices are unchanged, unavailable rows increase by exactly 218.
+Do not compare these figures with the previous looser 20,257-report total as an
+app regression. Fresh outputs: `C:/Users/Dominik/AppData/Local/Temp/domidex-v27-price-replay-20261001-1753/`.
+
+Newly exposed follow-up: three source rows describe the same raw-ID/finish/descriptor
+with contradictory products (`sv10.5b-034`, `sv10-096`, `sv03-125`). The diagnostic
+flags these; Android's pre-existing cross-row first-wins behavior is still under
+targeted review. This differs from the earlier within-one-record contradiction
+guard. The snapshot still contains no within-one-record positive ID contradiction.
+
+Web counterpart is independently tested in commit `87ef22e`: complete raw
+subtype/stamp/foil descriptions, stable ordinary/legacy identity, private-field
+exclusion, **1,259 unit + 103 catalog + 31 isolated SDK tests PASS**, isolated build
+successful. No deployment. No Xiaomi, signing/AAB, R8, Rules or production change.
+Overall release remains **NOT READY**.
+
+### Previous local checkpoint: contradictory printing identities fail closed
 
 The actual Android detail parser now compares a printing's positive
 `thirdParty.cardmarket` with its positive `pricing.cardmarket.idProduct`. When

@@ -12,13 +12,48 @@ export function sourcePrintingMetadata(printing) {
   };
 }
 
+// Independent reconstruction of the Android parser's physical descriptor. A
+// local disambiguated ID is not source evidence, and raw IDs alone can collide.
+function sourcePrintingIdentity(printing) {
+  const type = typeof printing?.type === 'string' ? printing.type : '';
+  const finish = /reverse/i.test(type) ? 'Reverse Holo' : /holo/i.test(type) ? 'Holo'
+    : /^normal$/i.test(type) ? 'Normal' : type.trim() ? type : 'Normal';
+  // Android preserves a nonblank size exactly, while trimming metadata markers.
+  const parts = [typeof printing?.size === 'string' && printing.size.trim() ? printing.size : finish];
+  const append = (label, value) => {
+    if (typeof value === 'string' && value.trim()) parts.push(`${label}: ${value.trim()}`);
+  };
+  append('Untertyp', printing?.subtype);
+  const stamps = new Map();
+  for (const value of Array.isArray(printing?.stamp) ? printing.stamp : [printing?.stamp]) {
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const stamp = value.trim();
+    if (!stamps.has(stamp.toLowerCase())) stamps.set(stamp.toLowerCase(), stamp);
+  }
+  append('Stempel', [...stamps].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, value]) => value).join(' + '));
+  append('Folie', printing?.foil);
+  return { finish, descriptor: parts.join(' · ') };
+}
+
+const positiveId = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
+
 export function evaluatePrinting({ runtime, source, provenance, products, prices, slots = [], image, highPriceEur = 1000 }) {
   const reasons = new Set();
   const flags = new Set();
-  const print = source?.variants_detailed?.find(row => row.variantId === runtime.sourcePrintingId);
-  const rawId = print?.thirdParty?.cardmarket;
-  const sourceId = Number.isSafeInteger(rawId) && rawId > 0 ? rawId : null;
-  const declaredProductId = sourceId ?? runtime.localVerifiedProductId ?? null;
+  const matchingPrintings = (Array.isArray(source?.variants_detailed) ? source.variants_detailed : []).filter(row => {
+    if (row?.variantId !== runtime.sourcePrintingId) return false;
+    const identity = sourcePrintingIdentity(row);
+    return identity.finish === runtime.finish && identity.descriptor === runtime.variant;
+  });
+  const print = matchingPrintings[0];
+  const declaredIds = new Set(matchingPrintings.map(row => positiveId(row.thirdParty?.cardmarket)).filter(id => id !== null));
+  const conflicting = declaredIds.size > 1 || matchingPrintings.some(row => {
+    const declared = positiveId(row.thirdParty?.cardmarket), priced = positiveId(row.pricing?.cardmarket?.idProduct);
+    return declared !== null && priced !== null && declared !== priced;
+  });
+  if (conflicting) reasons.add('SOURCE_PRINTING_IDENTITY_CONFLICT');
+  const sourceId = conflicting ? null : declaredIds.values().next().value ?? null;
+  const declaredProductId = conflicting || !print ? null : sourceId ?? positiveId(runtime.localVerifiedProductId);
   const quarantined = quarantinedLinks.some(row => row.sourceCardId === runtime.sourceCardId.toLowerCase() && row.rejectedProductId === declaredProductId);
   const productId = quarantined ? null : declaredProductId;
   if (quarantined) reasons.add('SOURCE_PRODUCT_ID_QUARANTINED');
