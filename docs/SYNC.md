@@ -46,6 +46,53 @@ These are deterministic local Room/worker-contract tests, not two physical devic
 or a live Firebase end-to-end run. No Xiaomi, production data or release signing
 was used. The wider Gate 4 delta/scale work below is still in progress.
 
+## Rejected ID-horizon experiment (2026-10-01; not active)
+
+A deterministic regression reproduced a remaining fairness limit: continuously
+appended higher IDs can keep the first full-pull group open across worker runs,
+delaying an existing later-group placement. The original RED is retained locally
+as `full-pull-horizon-red.{log,xml}`. This is a synthetic counterexample, not a
+production-data incident or a claim that an ordinary finite binder cannot sync.
+
+An attempted fixed ID horizon used `documentId DESC, limit(1)` before each group.
+Although its isolated runner/codec/Room tests passed, the actual Android Firestore
+26.5.0 SDK against the fixed local Firestore 1.22.0 emulator rejected this exact
+query with `FAILED_PRECONDITION: Firestore does not support descending key scans`.
+The four-case SDK run had **3 PASS / 1 FAIL** and no successful post-run independent
+server proof. Cleanup, free ports, empty reverse mappings and unchanged input
+hashes were verified. Evidence in the sibling Web repository:
+`outputs/private-pull-sdk-local/2026-10-01T12-47-08-248Z-d9bb1ef9/`.
+
+Root therefore removed **only this uncommitted experiment** from the active
+Firebase adapter, full-pull runner, tests and SDK harness. The prior ascending-ID
+`limit/startAfter` path, per-owner cursor/phase metadata, bounded read budget,
+existing session guards and sharing priority remain. No Room migration, cloud
+schema/index/rules change, release signing, deployment or phone action occurred.
+The new tuple store, query helper and their tests are not compiled or wired.
+Their source snapshots and the four-case harness are preserved under the ignored
+Android engineering directory `rejected-full-pull-horizon-source/{android,web}/`;
+the older timestamp-delta/deferred foundations below remain unchanged.
+
+`ASC + limitToLast(1)` is not an independent workaround: the exact installed SDK
+source, `com/google/firebase/firestore/core/Query.java:494–535`, reverses query
+ordering and bounds for LIMIT_TO_LAST. This is a limitation of the tested query
+under the tested setup, **not a blanket claim that production Firestore can never
+support a descending name index**. Google's
+[Firestore index definition](https://github.com/GoogleCloudPlatform/magic-modules/blob/main/mmv1/products/firestore/Index.yaml)
+includes such an index; neither its presence for DomiDex nor emulator support was
+established. No production index was inspected or created for this experiment.
+Additional payload ordering/filtering would introduce new completeness/index
+assumptions and was not substituted blindly.
+
+The rejected approach also added one sequential query to each small nonempty
+group and deferred newly appended tail IDs until a later cycle. Its synthetic
+passes were not evidence of faster sync. Historical experiment-only results:
+27 runner cases, six codec cases, 11 Room cases, a full JVM run of 867 PASS /
+one existing opt-in SKIP and an existing 371-case emulator selection all passed
+before the real SDK rejection. **These are not final restored-build results.**
+Fair bounded scheduling and low-latency Android/Web convergence remain open
+Gate-4 work; do not mark them complete or hide the rejected SDK evidence.
+
 ## Private binder delta protocol — foundation in progress, not active yet
 
 `PrivateBinderPullProtocol.kt` now defines pure phases, timestamp tuples, bounded

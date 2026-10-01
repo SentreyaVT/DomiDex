@@ -219,6 +219,13 @@ Next source finding to reproduce separately: the active ID-based full pull can
 keep following newly appended lexicographic tail IDs before visiting later groups.
 No fixed-horizon change or delta activation is claimed in this checkpoint.
 
+Subsequent check: that starvation was reproduced, but the proposed descending-ID
+horizon failed the actual SDK/emulator query test (three existing cases passed,
+the new case failed). Root preserved the rejected source and evidence and removed
+only the uncommitted horizon experiment. The prior ASC path and all earlier fixes
+remain. No index/schema/rules/deployment change was attempted. See `docs/SYNC.md`;
+the failed attempt and its synthetic passes do not close Gate 4.
+
 | Gate | Status | Required next evidence |
 |---|---|---|
 | 0 Baseline | PASS (local reproducible scope) | frozen current source, fresh JVM/instrumentation/scanner timings and isolated Web build; live limits explicit |
