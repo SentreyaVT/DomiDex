@@ -17,7 +17,42 @@ remain applicable. Historical delta experiments below are retained as evidence,
 not current rollout instructions. Overall NOT READY is not lifted solely by
 this scope adjustment. Release-signing/production/Xiaomi restrictions remain.
 
-### Latest local checkpoint: current parser source passes isolated R8
+### Latest local checkpoint: actual offline FULL-worker recovery (2026-10-02)
+
+Test-only extension: a valid pending private binder/outbox in a uniquely marked
+Room file survives two real worker retries with its SDK transport disabled,
+including file close/reopen between them. All fourteen business tables remain
+exact; the worker does not open Room before successful SERVER authorization.
+An independent nominal SDK client observes no premature remote write. After
+re-enable, the real transaction, ACK and current four-group FULL sweep complete;
+a second online invocation preserves every local/remote field and timestamp.
+This does not claim OS reconnect delivery, WorkManager retry, process death or
+page/budget-scale completion. No product/schema/Rules/architecture change.
+
+**12/12 actual SDK cases PASS** in 91.365 s complete harness time; new case 4.094 s.
+Twelve independent complete Admin preflights/readbacks and thirteen nominal
+Google accounts pass, with no extra documents/claims or changed prior owners.
+16/16 pure validators and focused lint pass. Fresh installed-identity proof plus
+11/11 Room rollback/ACK controls pass. Debug/test build, release Kotlin and both
+lints PASS in 2m1s (104 tasks, ten executed); unchanged JVM task is UP-TO-DATE,
+reusing the recorded 914 PASS / one optional SKIP, not a fresh JVM execution.
+
+App remains byte-identical `64d40b75180873a339413460b5af1455a32c32ac24096577777d3a725ec822d3`;
+new test APK `ad0bb28f57bc5778cab306b4dfc98a579a1ceb36a5f50d7996c549d39ce1f5e7`,
+source snapshot `261bda2e3022f6bd7b1bdcfe640b07c41e520afc06772a3e16b10a45716063c2`.
+Inputs frozen, ports free, reverse mappings empty and instrumentation idle at exit.
+Evidence: Android `artifacts/release27-engineering-20261002/offline-full-test-build.log`
+and `collection-session-room-222722-9c8f340d/manifest.json`; Web
+`outputs/collection-sync-session-local/2026-10-01T22-27-50-753Z-8fc2d585e11e4d0881894a53d65a83f2/`.
+Fresh broad Web regression: **1285/1285 in 78 files**, 34.68 s,
+`outputs/release-local/2026-10-01T22-30-01-188Z-19892.{json,log}`; existing
+act/Canvas harness warnings remain. Fresh fixed Android regression on these exact
+APKs: **371/371 PASS**, zero skips/failures, 316.390 s instrumentation,
+`artifacts/android-regression/20261001T222953Z-34f463c1/manifest.json`; frozen inputs
+and final offline/no-reverse/idle checks pass. No live cloud, signing, release build or Xiaomi.
+Overall NOT READY; this closes this narrow offline proof, not all remaining gates.
+
+### Previous local checkpoint: current parser source passes isolated R8
 
 Source commit `2dce825` now passes a fresh offline R8-only run after the parser
 pattern reuse. The reviewed guard allows exactly 32 task paths ending at
@@ -1018,7 +1053,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS, FULL retained | Existing owner/session/ACK/conflict/fair-pull protections and dated Android/Web SDK/Room proofs remain. Latest session/deferred suite 11/11 uses its own pre-parser APK; actual scheduler/UI/process and multi-client scale boundaries remain. Delta activation and its separate acceptance gates are deferred by explicit owner decision 2026-10-02, not R27 requirements; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS, FULL retained | Latest actual SDK suite 12/12 on current product APK adds durable offline private-worker retry, file reopen, real ACK/FULL and idempotence; 11/11 Room controls. Actual scheduler/UI/process, page/budget-scale and multi-client boundaries remain. Delta activation and its separate acceptance gates are deferred by explicit owner decision 2026-10-02, not R27 requirements; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded Android import with 3 actual Room persistence/rollback cases, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card decoded-body cap/cancellation proven 14/14, cache/package regression 83/83; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
@@ -1027,7 +1062,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | Latest parser checkpoint: Android 914 JVM PASS/1 existing optional SKIP, 371 fixed emulator cases plus 3 analyzer cases; R8-only source 2dce825 PASS. Earlier 11 SDK/11 Room proofs retain their own pre-parser APK identities, not relabelled as new runtime coverage. Latest broad Web product suite 1285 PASS, 103 public-cache cases and 33 local backend/Web-client SDK cases are separate/overlapping scopes. Build/lint and historical failures remain documented; physical/live contracts remain untested |
+| 13 Full regression | IN PROGRESS | Current product APK: 914 JVM PASS/1 existing optional SKIP reused, fresh 371/371 emulator cases, 12/12 actual SDK and 11/11 Room controls; three earlier analyzer cases share the same product APK. R8-only source 2dce825 PASS. Fresh broad Web product suite 1285 PASS; 103 public-cache cases and 33 local backend/Web-client SDK cases retain their separate dated scopes. Build/lint and historical failures remain documented; physical/live contracts remain untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |

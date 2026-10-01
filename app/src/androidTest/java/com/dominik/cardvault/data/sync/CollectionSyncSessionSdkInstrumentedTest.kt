@@ -9,6 +9,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.security.NetworkSecurityPolicy
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -23,6 +24,7 @@ import com.dominik.cardvault.data.local.CollectionEntryEntity
 import com.dominik.cardvault.data.local.CollectionSyncOutboxEntity
 import com.dominik.cardvault.data.local.PrivateBinderEntity
 import com.dominik.cardvault.data.local.PrivateBinderPlacementEntity
+import com.dominik.cardvault.data.local.PrivateBinderSyncOutboxEntity
 import com.dominik.cardvault.data.local.SYNC_CLEAN
 import com.dominik.cardvault.data.local.SYNC_PENDING
 import com.google.android.gms.tasks.Task
@@ -116,6 +118,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "offlineSessionNeedsExplicitRecheckWithinObservedReconnectWindow" -> "session-offline"
             "usableConnectivitySignalRechecksActualEntitlementWithoutManualSync" -> "session-reconnect"
             "deferredPlacementPointReadSurvivesRoomReopenUntilParentDelivery" -> "deferred-point-read"
+            "offlinePrivateMutationSurvivesRoomReopenAndCompletesFullPull" -> "private-offline-retry"
             else -> error("Unreviewed collection-session proof method")
         }
         owner = "sdk-proof-collection-$scenario"
@@ -131,13 +134,17 @@ class CollectionSyncSessionSdkInstrumentedTest {
             for (port in listOf(PrivatePullDemoGrpcGate.AUTH_PORT, PrivatePullDemoGrpcGate.FIRESTORE_PORT)) {
                 Socket().use { it.connect(InetSocketAddress(PrivatePullDemoGrpcGate.HOST, port), 3_000) }
             }
-            if (scenario == "deferred-point-read") createDeferredRoomFixture()
+            if (scenario in setOf("deferred-point-read", "private-offline-retry")) createDeferredRoomFixture()
             else room = Room.inMemoryDatabaseBuilder(context, CardVaultDatabase::class.java).build()
             gate = PrivatePullDemoGrpcGate().also { it.verifyForeignDatabaseFailsBeforeStart() }
             subject = client("subject")
             control = client("control")
             signIn(subject.auth, owner)
             signIn(control.auth, owner)
+            if (scenario == "private-offline-retry") {
+                seedOfflinePrivatePendingFixture()
+                return@withTimeout
+            }
             if (scenario == "deferred-point-read") {
                 deferredInitialSeed = assertDeferredServerSeed()
                 assertDeferredLocalCounts(parent = 0, binder = 0, placement = 0)
@@ -227,6 +234,168 @@ class CollectionSyncSessionSdkInstrumentedTest {
         dao.upsertSyncOutbox(originalMutation)
         assertEquals(originalEntry, dao.getCollectionEntryBySyncId(owner, ENTRY))
         assertEquals(originalMutation, dao.syncOutbox(originalMutation.entryKey))
+    }
+
+    @Test fun offlinePrivateMutationSurvivesRoomReopenAndCompletesFullPull() = runBlocking(Dispatchers.IO) {
+        withTimeout(120_000) {
+            check(scenario == "private-offline-retry")
+            // Actual successful online access first: an authorization failure must not be
+            // mistaken for transport-offline retry. This does not bypass the worker's verifier.
+            requireActualEntitlement()
+            assertDiagnosticServerEmpty()
+            val pending = offlinePrivateBinder()
+            val mutation = offlinePrivateMutation()
+            assertEquals(pending, dao.privateBinder(pending.id, owner))
+            assertEquals(mutation, dao.privateBinderSyncOutbox(mutation.entryKey))
+            assertEquals(listOf(mutation), dao.pendingPrivateBinderSyncOutbox(owner, 2))
+            val before = offlinePrivateFullSnapshot()
+            for ((table, rows) in before) {
+                val expected = if (table in setOf("private_binders", "private_binder_sync_outbox", "app_metadata")) 1 else 0
+                assertEquals("Fresh deterministic Room fixture: $table", expected, rows.size)
+            }
+            assertEquals(mapOf("deferred-sdk-fixture-owner" to checkNotNull(deferredRoomOwnerMarker)),
+                offlinePrivateMetadata())
+
+            // SDK transport control only. Android's offline safety settings remain untouched.
+            subject.firestore.disableNetwork().bounded()
+            offlinePrivateWorkerPass(ListenableWorker.Result.retry(), expectedRoomOpens = 0)
+            assertEquals("First actual offline retry must preserve every Room row", before, offlinePrivateFullSnapshot())
+            assertEquals(mutation, dao.privateBinderSyncOutbox(mutation.entryKey))
+            assertDiagnosticServerEmpty() // Separate, still-online nominal control SDK.
+
+            // Reuses only the exact run/owner/UUID-marked test database helper. This is a
+            // database close/reopen, not an Android process death or a WorkManager delivery.
+            closeAndReopenDeferredRoom()
+            assertEquals("Durable pending fixture must survive file reopen", before, offlinePrivateFullSnapshot())
+            assertEquals(pending, dao.privateBinder(pending.id, owner))
+            assertEquals(mutation, dao.privateBinderSyncOutbox(mutation.entryKey))
+            offlinePrivateWorkerPass(ListenableWorker.Result.retry(), expectedRoomOpens = 0)
+            assertEquals("Second actual offline retry must retain the original mutation", before, offlinePrivateFullSnapshot())
+            assertEquals(listOf(mutation), dao.pendingPrivateBinderSyncOutbox(owner, 2))
+            assertDiagnosticServerEmpty()
+
+            subject.firestore.enableNetwork().bounded()
+            requireActualEntitlement() // Genuine Source.SERVER entitlement, no injected predicate.
+            assertEquals("Reachability alone must not consume Room's outbox", before, offlinePrivateFullSnapshot())
+            offlinePrivateWorkerPass(ListenableWorker.Result.success(), expectedRoomOpens = 1)
+            assertEquals(pending.copy(syncState = SYNC_CLEAN, remoteRevision = 1),
+                dao.privateBinder(pending.id, owner))
+            assertNull(dao.privateBinderSyncOutbox(mutation.entryKey))
+            assertTrue(dao.pendingPrivateBinderSyncOutbox(owner, 2).isEmpty())
+            val expectedMetadata = buildMap {
+                put("deferred-sdk-fixture-owner", checkNotNull(deferredRoomOwnerMarker))
+                put(PrivateFullPullMetadataStore.phaseKey(owner), "rr1|0|0")
+                for (group in 0..3) put(PrivateFullPullMetadataStore.cursorKey(owner, group), "")
+            }
+            // A single binder is smaller than one page; each of the four real groups reaches
+            // EOF. This is not a universal assertion that completed FULL cycles clear all cursors.
+            assertEquals(expectedMetadata, offlinePrivateMetadata())
+            val recovered = offlinePrivateFullSnapshot()
+            assertEquals(before - setOf("private_binders", "private_binder_sync_outbox", "app_metadata"),
+                recovered - setOf("private_binders", "private_binder_sync_outbox", "app_metadata"))
+            assertEquals(1, recovered.getValue("private_binders").size)
+            assertTrue(recovered.getValue("private_binder_sync_outbox").isEmpty())
+            assertEquals(expectedMetadata.size, recovered.getValue("app_metadata").size)
+            val server = assertOfflinePrivateServerBinder()
+
+            // A fresh invocation must not manufacture a new mutation/revision/server timestamp.
+            offlinePrivateWorkerPass(ListenableWorker.Result.success(), expectedRoomOpens = 1)
+            assertEquals("Second online invocation must be fully idempotent in Room", recovered, offlinePrivateFullSnapshot())
+            assertEquals("Second online invocation must preserve the complete remote payload", server,
+                assertOfflinePrivateServerBinder())
+            assertEquals(0, continuationCount)
+        }
+    }
+
+    private fun offlinePrivateBinder() = PrivateBinderEntity(
+        id = "offline-retry-binder", ownerUid = owner, name = "Synthetic offline retry binder",
+        description = null, coverStyle = "DOMIDEX", minimumPageCount = 1,
+        createdAtEpochMillis = FIXTURE_TIME, updatedAtEpochMillis = FIXTURE_TIME,
+        lastOpenedAtEpochMillis = null, syncState = SYNC_PENDING, remoteRevision = 0,
+        deletedAtEpochMillis = null,
+    )
+
+    private fun offlinePrivateMutation() = PrivateBinderSyncOutboxEntity(
+        entryKey = "$owner:$PRIVATE_SYNC_BINDER:offline-retry-binder",
+        mutationId = "private-offline-$runId-binder", ownerUid = owner,
+        recordType = PRIVATE_SYNC_BINDER, recordId = "offline-retry-binder",
+        operation = PRIVATE_SYNC_UPSERT, expectedRemoteRevision = 0,
+        updatedAtEpochMillis = FIXTURE_TIME, createdAtEpochMillis = FIXTURE_TIME, lastError = null,
+    )
+
+    private suspend fun seedOfflinePrivatePendingFixture() {
+        check(scenario == "private-offline-retry")
+        assertDiagnosticServerEmpty()
+        database.withTransaction {
+            dao.insertPrivateBinder(offlinePrivateBinder())
+            dao.upsertPrivateBinderSyncOutbox(offlinePrivateMutation())
+        }
+        // Deliberately synthetic, valid durable pending input, not a claimed actual repository
+        // creation, earlier worker ACK, OS restart or upload interrupted after Commit.
+    }
+
+    private suspend fun offlinePrivateWorkerPass(expected: ListenableWorker.Result, expectedRoomOpens: Int) {
+        var opens = 0
+        val appends = mutableListOf<String>()
+        val shares = mutableListOf<Pair<String, String>>()
+        val result = withTimeout(30_000) {
+            runPrivateBinderSync(owner, null, subject.auth, subject.firestore,
+                database = { opens++; database },
+                appendPrivate = { uid -> appends.add(uid); Unit },
+                continueSharing = { uid, binder -> shares.add(uid to binder); Unit })
+        }
+        assertEquals("Actual private worker outcome, not an injected retry", expected, result)
+        assertEquals("Offline access must fail before Room; online must use the exact fixture", expectedRoomOpens, opens)
+        assertTrue("No hot continuation for this bounded one-binder fixture", appends.isEmpty())
+        assertTrue("No sharing path is requested", shares.isEmpty())
+        assertEquals(owner, canonicalCollectionOwnerUid(subject.auth.currentUser))
+        assertEquals(owner, canonicalCollectionOwnerUid(control.auth.currentUser))
+    }
+
+    private suspend fun assertOfflinePrivateServerBinder(): Map<String, Any?> {
+        val binders = lateServerRows("privateBinders")
+        assertEquals(setOf("offline-retry-binder"), binders.keys)
+        val payload = binders.getValue("offline-retry-binder")
+        val timestamp = checkNotNull(payload["updatedAt"])
+        // lateServerRows already requires an actual Timestamp, confirmed SERVER metadata and
+        // no pending writes. This exact map checks every value/key; no count-only proof.
+        val expected = mapOf(
+            "binderId" to "offline-retry-binder", "ownerUid" to owner,
+            "name" to "Synthetic offline retry binder", "description" to null,
+            "coverStyle" to "DOMIDEX", "minimumPageCount" to 1L,
+            "createdAtClient" to FIXTURE_TIME, "updatedAtClient" to FIXTURE_TIME,
+            "lastOpenedAtClient" to null, "deleted" to false, "revision" to 1L,
+            "lastMutationId" to "private-offline-$runId-binder", "updatedAt" to timestamp,
+        )
+        assertEquals(expected, payload)
+        for (collection in listOf("collectionEntries", "privateBinderPlacements", "collectionLayouts", "collectionPriceSelections")) {
+            assertTrue("No unrelated remote records: $collection", lateServerRows(collection).isEmpty())
+        }
+        val access = control.firestore.document("accountAccess/$owner").get(Source.SERVER).bounded()
+        assertFalse(access.metadata.isFromCache)
+        assertFalse(access.metadata.hasPendingWrites())
+        assertFalse(access.exists())
+        return expected
+    }
+
+    private fun offlinePrivateMetadata(): Map<String, String> =
+        database.openHelper.readableDatabase.query("SELECT `key`, value FROM app_metadata ORDER BY `key`").use { cursor ->
+            buildMap {
+                while (cursor.moveToNext()) put(cursor.getString(0), cursor.getString(1))
+            }
+        }
+
+    private fun offlinePrivateFullSnapshot(): Map<String, List<List<String?>>> = listOf(
+        "catalog_cards", "binders", "collection_entries", "collection_sync_outbox", "private_binders",
+        "private_binder_placements", "collection_layout", "collection_price_selections",
+        "private_binder_sync_outbox", "raw_price_snapshots", "graded_market_records", "grading_analyses",
+        "app_metadata", "catalog_sync_state",
+    ).associateWith { table ->
+        database.openHelper.readableDatabase.query("SELECT * FROM `$table` ORDER BY rowid").use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add((0 until cursor.columnCount).map { if (cursor.isNull(it)) null else cursor.getString(it) })
+            }
+        }
     }
 
     @Test fun healthyCollectionPushAcknowledgesAndRereads() = runBlocking(Dispatchers.IO) {
@@ -1406,7 +1575,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
     }
 
     private suspend fun createDeferredRoomFixture() {
-        check(scenario == "deferred-point-read" && room == null && deferredRoomName == null)
+        check(scenario in setOf("deferred-point-read", "private-offline-retry") && room == null && deferredRoomName == null)
         val nonce = UUID.randomUUID().toString()
         val name = "domidex-deferred-sdk-$runId-$nonce.db"
         val file = context.getDatabasePath(name).canonicalFile

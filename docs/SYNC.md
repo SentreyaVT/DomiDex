@@ -26,6 +26,27 @@ R27 full-sync lifecycle, offline/conflict, multi-client and scale checks still
 apply; this decision does not claim instantaneous sync, zero remaining bugs,
 completed hardware validation or authorization to deploy/sign.
 
+## Active FULL worker: durable offline retry (2026-10-02)
+
+The twelfth actual local SDK case starts with a deterministic pending private
+binder and original outbox mutation in its own marked Room file. With only the
+subject SDK transport disabled, two real worker invocations (before/after file
+close/reopen) return retry before database access and preserve all fourteen
+business tables. The independent nominal SDK client confirms no remote write.
+After real SERVER access returns, the unchanged worker performs the actual
+transaction, revision1 ACK and four-group FULL pull. A second online pass leaves
+all Room and remote fields, revision and server timestamp exactly unchanged.
+
+12/12 actual SDK cases and 11/11 Room controls pass on the current parser APK,
+with 16 pure host validators. Twelve full Admin preflights/readbacks check every
+document/reference and all thirteen nominal Google accounts. Evidence: Web
+`outputs/collection-sync-session-local/2026-10-01T22-27-50-753Z-8fc2d585e11e4d0881894a53d65a83f2/`;
+installed identities: Android engineering `collection-session-room-222722-9c8f340d/`.
+App code/APK, schema, Rules, scheduler and FULL policy are unchanged. This is a
+synthetic pending DAO fixture and genuine file reopen, not repository creation,
+process death, automatic WorkManager/OS reconnect delivery or a large FULL cycle.
+The unrelated deferred-adapter case below remains inactive research.
+
 ## Deferred point-read / persistent Room integration (2026-10-01)
 
 The eleventh actual local SDK case proves the existing unwired Room adapter can
