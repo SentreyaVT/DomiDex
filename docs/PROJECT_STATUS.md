@@ -70,12 +70,17 @@ und keine Behauptung „alle Warnungen weg“. [Details und Hashes](BUILD_AND_RE
 | Favoriten | Lokale Dashboard-Fokuskarte | Keine separate vollständige Favoritenfunktion nachgewiesen |
 | Grading | Historische Models/Tabellen und nicht aktiv erreichbare Oberfläche | Kein eigenes Analyse-/Grading-System; UI-Web-Ankündigung ist kein bestätigtes nächstes Feature |
 
-Preis-Snapshot vom **25.09.2026**, keine heutige Live-Vollprüfung: 144 physische
-deutsche Index-Sets, 19.463 Karten einschließlich 20 lokaler Ergänzungen,
-27.131 kanonische Binder-Druckplätze. **17.867** unabhängig bepreiste Plätze;
-9.227 mit unzureichender Quellenverifikation, 1 ohne Mapping. Diese Kategorien
-sind nicht identisch mit allen fehlenden Preisfeldern und nicht einfach
-gegenseitig ergänzende Summanden. Vollständige Abdeckung ist nicht belegt.
+Preis-Snapshot vom **25.09.2026**, lokal am **01.10.2026** nach den
+Druckidentitätskorrekturen erneut ausgewertet; keine heutige Live-Vollprüfung:
+144 physische deutsche Index-Sets, 19.463 Karten einschließlich 20 lokaler
+Ergänzungen und **27.349 kanonische Binder-Druckplätze**. Davon sind 17.903 exakt
+einem deklarierten Produkt zugeordnet: **17.867** unabhängig verifiziert bepreist,
+29 ohne passenden Trendwert für die Druckform und sieben mit Preis, aber ohne
+vollständige unabhängige Quelldetails. Weitere 9.445 Plätze sind nicht ausreichend
+quellenverifiziert; bei einem fehlt der deklarierte Produktdatensatz im Snapshot.
+Fehlende Quellenverifikation ist nicht gleichbedeutend mit fehlendem Marktpreis.
+Vollständige Abdeckung ist nicht belegt; Datenstand und getrennte Nenner bleiben
+im [Preis-Replay-Nachweis](RELEASE_27.md) dokumentiert.
 
 ## Cloud und Datenschutz
 
