@@ -5,6 +5,35 @@ The current application remains Room-first. Auth, entitlements, owner isolation,
 optimistic revisions, tombstones and the existing private-sharing readiness gate
 must remain authoritative. No production data migration is authorized here.
 
+## Additional actual SDK boundary evidence (2026-10-01)
+
+The existing five-case collection harness now also passes an actual optimistic
+SDK-write overlay and a private-worker late-parent recovery case: **7/7**, seven
+independent complete Admin preflights/readbacks, eight nominal Google test accounts.
+No product, Rules, schema, scheduler or delta-rollout change was needed.
+
+The first new case holds an actual outgoing WriteRequest. A real Source.SERVER
+read is existing/non-cache/pending and successfully decodes, while a separate
+client still reads the full revision-1 server seed. Two actual worker retries
+retain every Room row and original outbox. After the real Rules-authorized ACK,
+fresh reread converges to revision 2 and removes exactly that checkpoint; another
+pass is idempotent. The initial resumed checkpoint is synthetic, not a claimed
+earlier worker ACK. No incoming ACK response is intercepted.
+
+The second uses a deliberate Admin-seeded orphan in the local demo database;
+normal client Rules do not permit creating it. The first actual private-worker
+pass applies independent binders without inventing a parent or scheduling a hot
+retry. A second named nominal client creates the missing collection entry under
+real Rules. A new actual pass imports the same unmodified placement, preserving
+slot, effect, identity and revision. This proves recovery when a pass runs, not
+automatic WorkManager scheduling or a latency bound. Intermediate proof is SDK
+and Room; independent Admin observations are before/after each whole method.
+
+Web evidence: `outputs/collection-sync-session-local/2026-10-01T18-53-04-230Z-52fcb2bc3e124af5be3ea075fe3cd920/`.
+Installed APK/11 real Room case evidence:
+`artifacts/release27-engineering-20261001/collection-session-room-185032-bbcdb47a/manifest.json`.
+All cleanup/input checks pass. Gate 4 remains open for the wider documented matrix.
+
 ## Confirmed collection reread before removing checkpoints (2026-10-01)
 
 Follow-up to the session guard below: a missing document or null decoder result

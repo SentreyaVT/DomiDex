@@ -2,7 +2,34 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: equivalent collection projection, measured conservatively
+### Latest local checkpoint: genuine pending overlay and late-parent recovery
+
+Two test-only additions extend the existing collection-session SDK harness to
+**7/7 PASS**, seven full independent Admin preflights and seven readbacks, eight
+nominal Google/appAccess-only accounts. Real pending Source.SERVER data decodes
+successfully but cannot discard the resumed outbox checkpoint; after its actual
+ACK the worker converges exactly and remains idempotent. An unchanged orphan
+placement is recovered by the real private worker after an independent nominal
+client creates its parent. No product or Rules change was necessary.
+
+The orphan is deliberately Admin-seeded legacy/resilience state in a fresh demo
+database, not a normal Rules-allowed client create race. Both actual worker passes
+are invoked by the test; WorkManager scheduling, UI latency and delta activation
+remain unproven. Details: `docs/SYNC.md` and the Web harness README.
+
+Web evidence: `outputs/collection-sync-session-local/2026-10-01T18-53-04-230Z-52fcb2bc3e124af5be3ea075fe3cd920/`.
+15.317 s summed Android test time; 51.187 s complete local harness. Input hashes,
+free ports, empty reverse mappings and idle instrumentation all verified.
+Ten separate pure validator cases and focused host lint pass. Debug/test build
+passes in 33s; 11 additional existing Room session-commit cases also pass.
+Installed APK identity proof:
+`artifacts/release27-engineering-20261001/collection-session-room-185032-bbcdb47a/manifest.json`.
+App remains `b85d6a5bb0a90fbef91ecadb88c913b2a4e9282027311a8907f91b8111931cf4`;
+new test APK `a7bb873e80a044fe5b608ede46a1091fcee48987b637575ee603caf207866df9`.
+No signing, release artifact, production change, deployment or Xiaomi use.
+Overall **NOT READY**; these scoped proofs do not close the wider Gate 4.
+
+### Previous local checkpoint: equivalent collection projection, measured conservatively
 
 The Room collection mapper constructs each card once instead of constructing and
 copying it. Portfolio history no longer re-sorts the already chronologically

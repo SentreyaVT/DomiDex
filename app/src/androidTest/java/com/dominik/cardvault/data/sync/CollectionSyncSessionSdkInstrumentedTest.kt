@@ -18,6 +18,8 @@ import com.dominik.cardvault.data.local.CardVaultDatabase
 import com.dominik.cardvault.data.local.CatalogCardEntity
 import com.dominik.cardvault.data.local.CollectionEntryEntity
 import com.dominik.cardvault.data.local.CollectionSyncOutboxEntity
+import com.dominik.cardvault.data.local.PrivateBinderEntity
+import com.dominik.cardvault.data.local.PrivateBinderPlacementEntity
 import com.dominik.cardvault.data.local.SYNC_CLEAN
 import com.dominik.cardvault.data.local.SYNC_PENDING
 import com.google.android.gms.tasks.Task
@@ -26,12 +28,15 @@ import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldPath
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.MemoryCacheSettings
 import com.google.firebase.firestore.Source
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.nio.charset.StandardCharsets
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -53,7 +58,7 @@ import org.junit.rules.TestName
 import org.junit.runner.RunWith
 
 /**
- * Opt-in, real SDK/Room proof of the actual CollectionSyncWorker pass. The transport
+ * Opt-in real SDK/Room proofs of collection checkpoints and private-binder recovery. The transport
  * gate holds an actual CommitRequest, not an invented ACK or an injected owner predicate.
  * A separate named SDK client and the host Admin readback prove the server commit.
  * This does not exercise WorkManager delivery or any production project/account.
@@ -93,6 +98,8 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "missingRereadRetainsCheckpoint" -> "missing"
             "malformedRereadRetainsCheckpoint" -> "malformed"
             "confirmedRereadCompletesCheckpoint" -> "confirmed"
+            "pendingOverlayRereadRetainsCheckpointUntilActualAck" -> "pending-overlay"
+            "lateParentPlacementIsRecoveredWithoutRemoteRewrite" -> "late-parent"
             else -> error("Unreviewed collection-session proof method")
         }
         owner = "sdk-proof-collection-$scenario"
@@ -114,7 +121,15 @@ class CollectionSyncSessionSdkInstrumentedTest {
             control = client("control")
             signIn(subject.auth, owner)
             signIn(control.auth, owner)
-            if (scenario in setOf("missing", "malformed", "confirmed")) {
+            if (scenario == "late-parent") {
+                // Genuine remote orphan recovery: no invented local parent or checkpoint.
+                assertFalse(remote().exists())
+                assertLateRoomCount("collection_entries", 0)
+                assertLateRoomCount("catalog_cards", 0)
+                assertLateRoomOutboxesEmpty()
+                return@withTimeout
+            }
+            if (scenario in setOf("missing", "malformed", "confirmed", "pending-overlay")) {
                 // Verify the actual independently readable server fixture BEFORE constructing
                 // a synthetic process-resume checkpoint. This is not an invented actual ACK.
                 initialRereadDocument = assertRereadFixture(remote())
@@ -273,6 +288,122 @@ class CollectionSyncSessionSdkInstrumentedTest {
         assertResumeCheckpointBehavior(confirmed = true)
     }
 
+    /**
+     * Real SDK optimistic write, not a transaction/snapshot mock. The gate
+     * holds the outgoing WriteRequest before server commit, NOT an incoming ACK.
+     * The pre-existing CLEAN/PENDING row is an explicit synthetic resume checkpoint.
+     */
+    @Test fun pendingOverlayRereadRetainsCheckpointUntilActualAck() = runBlocking(Dispatchers.IO) {
+        withTimeout(120_000) {
+            check(scenario == "pending-overlay")
+            val seeded = checkNotNull(initialRereadDocument)
+            val seedData = checkNotNull(seeded.data)
+            val seedDecoded = checkNotNull(RemoteCollectionEntry.from(seeded, owner))
+            val before = localSnapshot()
+            assertEquals(SYNC_CLEAN, originalEntry.syncState)
+            assertEquals(1L, originalEntry.remoteRevision)
+            assertEquals(SYNC_PENDING, originalMutation.state)
+            assertEquals(0L, originalMutation.expectedRemoteRevision)
+            requireActualEntitlement()
+
+            val overlayMutationId = "collection-session-$runId-pending-overlay-write"
+            val overlayNotes = "isolated collection pending overlay"
+            val overlayFields = mapOf(
+                "revision" to 2L, "lastMutationId" to overlayMutationId,
+                "quantity" to 3L, "notes" to overlayNotes, "updatedAtClient" to FIXTURE_TIME + 1L,
+            )
+            val payload = seedData + overlayFields + ("updatedAt" to FieldValue.serverTimestamp())
+            val reference = subject.firestore.document("users/$owner/collectionEntries/$ENTRY")
+            val transportGate = checkNotNull(gate)
+            transportGate.arm(PrivatePullDemoGrpcGate.Kind.OPTIMISTIC_WRITE,
+                "${PrivatePullDemoGrpcGate.DATABASE}/documents/users/$owner/collectionEntries/$ENTRY")
+            // Do not await set() yet: its real task remains pending at the transport gate.
+            val write = reference.set(payload)
+            transportGate.awaitHeld()
+            assertFalse("The actual WriteStream mutation must still be unacknowledged", write.isComplete)
+
+            suspend fun assertValidPendingServerOverlay() {
+                assertFalse("Held WriteStream task completed unexpectedly", write.isComplete)
+                val point = reference.get(Source.SERVER).bounded()
+                assertEquals(reference.path, point.reference.path)
+                assertTrue("Source.SERVER must return the actual existing overlay", point.exists())
+                assertFalse("A cache-only response does not prove this boundary", point.metadata.isFromCache)
+                assertTrue("A real local SDK mutation is mandatory", point.metadata.hasPendingWrites())
+                assertNull(point.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.NONE))
+                assertEquals(seedData + overlayFields + ("updatedAt" to null), point.data)
+                val decoded = checkNotNull(RemoteCollectionEntry.from(point, owner)) {
+                    "A malformed/undecodable overlay would not isolate the pending-writes guard"
+                }
+                // The real decoder retains valid client time while serverTimestamp is pending.
+                assertEquals(seedDecoded.copy(revision = 2L, quantity = 3, notes = overlayNotes,
+                    updatedAtEpochMillis = FIXTURE_TIME + 1L), decoded)
+                assertEquals("Independent server must still hold the unchanged revision-1 seed",
+                    seedData, assertRereadFixture(remote()).data)
+            }
+
+            assertValidPendingServerOverlay()
+            repeat(2) {
+                requireActualEntitlement()
+                val result = runPass()
+                // Check the transport/decoder preconditions again before claiming a retry proof:
+                // a timeout, permission error, completed write, or missing doc is NOT this case.
+                assertValidPendingServerOverlay()
+                assertEquals("PENDING_OVERLAY_DISCARDED_CHECKPOINT: never accept the unconfirmed SDK overlay",
+                    before, localSnapshot())
+                assertEquals(originalEntry, dao.getCollectionEntryBySyncId(owner, ENTRY))
+                assertEquals(originalMutation, dao.syncOutbox(originalMutation.entryKey))
+                assertEquals(ListenableWorker.Result.retry(), result)
+                assertEquals(0, continuationCount)
+            }
+
+            // Only after both protected retries do we send the original real mutation.
+            // It obeys unchanged Rules (revision+1 and serverTimestamp), not a rejected-write fixture.
+            transportGate.release()
+            write.bounded()
+            assertTrue(write.isSuccessful)
+            val confirmed = remote()
+            assertTrue(confirmed.exists())
+            val confirmedTimestamp = checkNotNull(confirmed.getTimestamp("updatedAt"))
+            assertTrue(confirmedTimestamp >= checkNotNull(seeded.getTimestamp("updatedAt")))
+            val expectedRemote = seedData + overlayFields + ("updatedAt" to confirmedTimestamp)
+            assertEquals(expectedRemote, confirmed.data)
+            val subjectConfirmed = reference.get(Source.SERVER).bounded()
+            assertFalse(subjectConfirmed.metadata.isFromCache)
+            assertFalse(subjectConfirmed.metadata.hasPendingWrites())
+            assertEquals(expectedRemote, subjectConfirmed.data)
+            val confirmedDecoded = checkNotNull(RemoteCollectionEntry.from(confirmed, owner))
+            assertEquals(seedDecoded.copy(revision = 2L, quantity = 3, notes = overlayNotes,
+                updatedAtEpochMillis = confirmedTimestamp.toDate().time), confirmedDecoded)
+
+            requireActualEntitlement()
+            assertEquals(ListenableWorker.Result.success(), runPass())
+            val expectedEntry = originalEntry.copy(
+                quantity = 3, notes = overlayNotes, remoteRevision = 2L,
+                updatedAtEpochMillis = confirmedTimestamp.toDate().time,
+                finishOverride = "Normal", variantOverride = "Standard",
+            )
+            assertEquals(expectedEntry, dao.getCollectionEntryBySyncId(owner, ENTRY))
+            assertNull(dao.syncOutbox(originalMutation.entryKey))
+            assertTrue(dao.pendingSyncOutbox(owner, 2).isEmpty())
+            assertEquals(0, continuationCount)
+            val converged = localSnapshot()
+            assertEquals(1, checkNotNull(converged["collection_entries"]).size)
+            assertEquals(emptyList<List<String?>>(), converged["collection_sync_outbox"])
+            val changedTables = setOf("collection_entries", "collection_sync_outbox")
+            assertEquals("No catalog, binder, private-outbox or metadata side effects",
+                before.filterKeys { it !in changedTables }, converged.filterKeys { it !in changedTables })
+            assertEquals("Reread cannot rewrite the independently committed server payload",
+                expectedRemote, remote().data)
+
+            // Fresh authenticated no-op proves no extra server revision, timestamp or local mutation.
+            requireActualEntitlement()
+            assertEquals(ListenableWorker.Result.success(), runPass())
+            assertEquals(converged, localSnapshot())
+            assertEquals(expectedRemote, remote().data)
+            assertEquals(0, continuationCount)
+        }
+    }
+
     private suspend fun assertResumeCheckpointBehavior(confirmed: Boolean) = withTimeout(120_000) {
         check((scenario == "confirmed") == confirmed)
         val seeded = checkNotNull(initialRereadDocument)
@@ -309,7 +440,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
 
     /** Admin seeds only this local fixture; production decoder and real SDK read are not mocked. */
     private fun assertRereadFixture(snapshot: DocumentSnapshot): DocumentSnapshot = snapshot.also {
-        check(scenario in setOf("missing", "malformed", "confirmed"))
+        check(scenario in setOf("missing", "malformed", "confirmed", "pending-overlay"))
         assertEquals("users/$owner/collectionEntries/$ENTRY", snapshot.reference.path)
         if (scenario == "missing") {
             assertFalse(snapshot.exists())
@@ -343,6 +474,197 @@ class CollectionSyncSessionSdkInstrumentedTest {
             }
         }
     }
+
+    @Test fun lateParentPlacementIsRecoveredWithoutRemoteRewrite() = runBlocking(Dispatchers.IO) {
+        withTimeout(120_000) {
+            check(scenario == "late-parent" && owner == "sdk-proof-collection-late-parent")
+            requireActualEntitlement()
+            // This is a real SDK-observed subject lease across BOTH worker passes.
+            // Each actual worker still creates/verifies its own lease as normal.
+            PrivatePullAuthSession.use(subject.auth, owner) { unchangedSubjectSession ->
+                val beforeBinders = lateServerRows("privateBinders")
+                val beforePlacements = lateServerRows("privateBinderPlacements")
+                assertEquals(listOf("late-parent-binder", "late-parent-control"), beforeBinders.keys.toList())
+                for ((id, data) in beforeBinders) {
+                    assertEquals(lateBinderPayload(id, checkNotNull(data["updatedAt"])), data)
+                }
+                assertEquals(listOf("late-parent-placement"), beforePlacements.keys.toList())
+                val originalPlacement = checkNotNull(beforePlacements["late-parent-placement"])
+                assertEquals(latePlacementPayload(checkNotNull(originalPlacement["updatedAt"])), originalPlacement)
+                assertTrue(lateServerRows("collectionEntries").isEmpty())
+                assertTrue(lateServerRows("collectionLayouts").isEmpty())
+                assertTrue(lateServerRows("collectionPriceSelections").isEmpty())
+                assertFalse(remote().exists())
+                assertNull(dao.getCollectionEntryBySyncId(owner, ENTRY))
+                assertNull(dao.privateBinderPlacement("late-parent-placement", owner))
+                assertLateRoomCount("private_binders", 0)
+
+                // Genuine first product pass: dependency lookup reaches the empty
+                // server. No direct helper application or invented local parent.
+                latePrivateWorkerPass()
+                unchangedSubjectSession.requireCurrent()
+                assertEquals(lateExpectedBinder("late-parent-binder"), dao.privateBinder("late-parent-binder", owner))
+                assertEquals(lateExpectedBinder("late-parent-control"), dao.privateBinder("late-parent-control", owner))
+                assertNull("A missing server parent must not become a dummy card", dao.getCollectionEntryBySyncId(owner, ENTRY))
+                assertNull("Placement must wait for its real parent", dao.privateBinderPlacement("late-parent-placement", owner))
+                assertLateRoomCount("collection_entries", 0)
+                assertLateRoomCount("catalog_cards", 0)
+                assertLateRoomCount("private_binder_placements", 0)
+                assertLateRoomCount("private_binders", 2)
+                assertLateRoomOutboxesEmpty()
+                assertLateCompletedSmallSweep()
+                assertEquals(beforeBinders, lateServerRows("privateBinders"))
+                assertEquals(beforePlacements, lateServerRows("privateBinderPlacements"))
+                assertTrue("First worker must not create the missing parent remotely", lateServerRows("collectionEntries").isEmpty())
+
+                // Separate named SDK/cache, same nominal appAccess-only Google owner.
+                // This is a real Rules-authorized create, not Admin or a fabricated ACK.
+                val reference = control.firestore.document("users/$owner/collectionEntries/$ENTRY")
+                control.firestore.runTransaction { transaction ->
+                    check(!transaction.get(reference).exists()) { "Late-parent fixture was not absent" }
+                    transaction.set(reference, lateParentPayload(FieldValue.serverTimestamp()))
+                }.bounded()
+                val confirmedParent = remote()
+                assertTrue(confirmedParent.exists())
+                val parentTimestamp = checkNotNull(confirmedParent.getTimestamp("updatedAt"))
+                assertTrue(parentTimestamp.seconds > 1_700_000_000L)
+                assertEquals(lateParentPayload(parentTimestamp), confirmedParent.data)
+                assertNotNull("Actual production decoder must accept the delivered parent", RemoteCollectionEntry.from(confirmedParent, owner))
+                // Reading via independent control must not have applied anything to Room.
+                assertNull(dao.getCollectionEntryBySyncId(owner, ENTRY))
+                assertNull(dao.privateBinderPlacement("late-parent-placement", owner))
+                unchangedSubjectSession.requireCurrent()
+
+                // No placement edit, new revision, timestamp bump, cursor reset or
+                // local insertion in the test between the two genuine worker passes.
+                latePrivateWorkerPass()
+                unchangedSubjectSession.requireCurrent()
+                val parent = checkNotNull(dao.getCollectionEntryBySyncId(owner, ENTRY))
+                val serverTime = parentTimestamp.toDate().time
+                val expectedCardId = "cloud-${UUID.nameUUIDFromBytes("$owner:$ENTRY".toByteArray(StandardCharsets.UTF_8))}"
+                assertEquals(CollectionEntryEntity(
+                    id = parent.id, cardId = expectedCardId, quantity = 2, condition = "Near Mint",
+                    acquisitionPriceMinor = null, acquisitionCurrency = null, acquisitionDateEpochDay = null,
+                    notes = "isolated collection session proof", frontPhotoUri = null, backPhotoUri = null,
+                    createdAtEpochMillis = serverTime, updatedAtEpochMillis = serverTime,
+                    externalProductSource = null, externalProductId = null, binderId = "inbox",
+                    ownerUid = owner, syncId = ENTRY, syncState = SYNC_CLEAN, remoteRevision = 1,
+                    deletedAtEpochMillis = null, finishOverride = "Normal", variantOverride = "Standard",
+                    effectOverride = null, sourceSetId = "synthetic-set", sourceCardId = "synthetic-set-001",
+                ), parent)
+                assertTrue(parent.id > 0)
+                assertEquals(PrivateBinderPlacementEntity(
+                    id = "late-parent-placement", ownerUid = owner, binderId = "late-parent-binder",
+                    collectionEntryId = parent.id, slotPosition = 4, holoEffectId = "rainbow", holoIntensity = 0.5f,
+                    createdAtEpochMillis = FIXTURE_TIME, updatedAtEpochMillis = FIXTURE_TIME,
+                    syncState = SYNC_CLEAN, remoteRevision = 1, deletedAtEpochMillis = null,
+                ), dao.privateBinderPlacement("late-parent-placement", owner))
+                assertEquals(lateExpectedBinder("late-parent-binder"), dao.privateBinder("late-parent-binder", owner))
+                assertEquals(lateExpectedBinder("late-parent-control"), dao.privateBinder("late-parent-control", owner))
+                assertLateRoomCount("collection_entries", 1)
+                assertLateRoomCount("catalog_cards", 1)
+                assertLateRoomCount("private_binder_placements", 1)
+                assertLateRoomCount("private_binders", 2)
+                assertLateRoomOutboxesEmpty()
+                assertLateCompletedSmallSweep()
+                assertEquals(beforeBinders, lateServerRows("privateBinders"))
+                assertEquals(beforePlacements, lateServerRows("privateBinderPlacements"))
+                assertEquals(mapOf(ENTRY to checkNotNull(confirmedParent.data)), lateServerRows("collectionEntries"))
+                assertTrue(lateServerRows("collectionLayouts").isEmpty())
+                assertTrue(lateServerRows("collectionPriceSelections").isEmpty())
+                assertEquals(0, continuationCount)
+            }
+        }
+    }
+
+    private suspend fun latePrivateWorkerPass() {
+        var opens = 0
+        val appends = mutableListOf<String>()
+        val shares = mutableListOf<Pair<String, String>>()
+        val result = withTimeout(45_000) {
+            runPrivateBinderSync(owner, null, subject.auth, subject.firestore,
+                database = { opens++; database },
+                appendPrivate = { uid -> appends.add(uid); Unit },
+                continueSharing = { uid, binder -> shares.add(uid to binder); Unit })
+        }
+        assertTrue("Actual worker must access our isolated Room", opens > 0)
+        assertEquals(ListenableWorker.Result.success(), result)
+        assertTrue("Missing parent alone must not schedule a hot continuation", appends.isEmpty())
+        assertTrue(shares.isEmpty())
+    }
+
+    private suspend fun lateServerRows(collection: String): Map<String, Map<String, Any>> {
+        check(collection in setOf("privateBinders", "privateBinderPlacements", "collectionEntries",
+            "collectionLayouts", "collectionPriceSelections"))
+        // Independent reader, bounded even if the host accidentally supplies extra data.
+        val snapshot = control.firestore.collection("users/$owner/$collection")
+            .orderBy(FieldPath.documentId()).limit(8).get(Source.SERVER).bounded()
+        assertFalse(snapshot.metadata.isFromCache)
+        assertFalse(snapshot.metadata.hasPendingWrites())
+        return snapshot.documents.associate { document ->
+            assertFalse(document.metadata.isFromCache)
+            assertFalse(document.metadata.hasPendingWrites())
+            val timestamp = checkNotNull(document.getTimestamp("updatedAt"))
+            assertTrue(timestamp.seconds > 1_700_000_000L)
+            document.id to checkNotNull(document.data)
+        }
+    }
+
+    private fun assertLateRoomCount(table: String, expected: Int) {
+        check(table in setOf("catalog_cards", "collection_entries", "private_binders",
+            "private_binder_placements", "collection_sync_outbox", "private_binder_sync_outbox"))
+        database.openHelper.readableDatabase.query("SELECT COUNT(*) FROM `$table`").use {
+            check(it.moveToFirst())
+            assertEquals(table, expected, it.getInt(0))
+        }
+    }
+
+    private fun assertLateRoomOutboxesEmpty() {
+        assertLateRoomCount("collection_sync_outbox", 0)
+        assertLateRoomCount("private_binder_sync_outbox", 0)
+    }
+
+    private suspend fun assertLateCompletedSmallSweep() {
+        // This small 3-record fixture visits each group exactly once. These asserts
+        // are not a general claim that every FULL-pull milestone has empty cursors.
+        assertEquals("rr1|0|0", dao.metadata(PrivateFullPullMetadataStore.phaseKey(owner)))
+        for (group in 0..3) assertEquals("", dao.metadata(PrivateFullPullMetadataStore.cursorKey(owner, group)))
+    }
+
+    private fun lateExpectedBinder(id: String) = PrivateBinderEntity(
+        id = id, ownerUid = owner, name = "Synthetic $id", description = null,
+        coverStyle = "DOMIDEX", minimumPageCount = 1, createdAtEpochMillis = FIXTURE_TIME,
+        updatedAtEpochMillis = FIXTURE_TIME, lastOpenedAtEpochMillis = null,
+        syncState = SYNC_CLEAN, remoteRevision = 1, deletedAtEpochMillis = null,
+    )
+
+    private fun lateBinderPayload(id: String, timestamp: Any) = mapOf(
+        "binderId" to id, "ownerUid" to owner, "name" to "Synthetic $id", "description" to null,
+        "coverStyle" to "DOMIDEX", "minimumPageCount" to 1L, "createdAtClient" to FIXTURE_TIME,
+        "updatedAtClient" to FIXTURE_TIME, "lastOpenedAtClient" to null, "deleted" to false,
+        "revision" to 1L, "lastMutationId" to "late-parent-$runId-$id", "updatedAt" to timestamp,
+    )
+
+    private fun latePlacementPayload(timestamp: Any) = mapOf(
+        "placementId" to "late-parent-placement", "ownerUid" to owner,
+        "binderId" to "late-parent-binder", "entrySyncId" to ENTRY, "slotPosition" to 4L,
+        "holoEffectId" to "rainbow", "holoIntensity" to 0.5,
+        "createdAtClient" to FIXTURE_TIME, "updatedAtClient" to FIXTURE_TIME, "deleted" to false,
+        "revision" to 1L, "lastMutationId" to "late-parent-$runId-placement", "updatedAt" to timestamp,
+    )
+
+    private fun lateParentPayload(timestamp: Any) = mapOf(
+        "syncId" to ENTRY, "ownerUid" to owner, "revision" to 1L,
+        "lastMutationId" to "collection-session-$runId-late-parent", "updatedAt" to timestamp,
+        "updatedAtClient" to FIXTURE_TIME, "deleted" to false, "deletedAtClient" to null,
+        "name" to "Synthetic collection card", "setId" to "synthetic-set", "setName" to "Synthetic collection set",
+        "collectorNumber" to "001/001", "language" to "GERMAN", "finish" to "Normal", "variant" to "Standard",
+        "rarity" to "UNKNOWN", "quantity" to 2L, "condition" to "Near Mint", "notes" to "isolated collection session proof",
+        "acquisitionPriceMinor" to null, "acquisitionCurrency" to null, "acquisitionDateEpochDay" to null,
+        "externalProductSource" to null, "externalProductId" to null, "imageUrl" to null, "effectOverride" to null,
+        "sourceSetId" to "synthetic-set", "sourceCardId" to "synthetic-set-001", "binderId" to "inbox",
+        "binderSetKey" to "tcgdex-synthetic-set", "binderName" to "Synthetic collection set", "binderHeroAsset" to null,
+    )
 
     private suspend fun awaitOwnerEvent(events: Channel<String?>, expected: String) = withTimeout(20_000) {
         while (events.receive() != expected) { /* Await the actual SDK listener event, not currentUid alone. */ }
