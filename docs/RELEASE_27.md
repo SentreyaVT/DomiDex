@@ -2,7 +2,38 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: current-source isolated R8 verification
+### Latest local checkpoint: actual analyzer batch transition characterization
+
+Three new test-only cases exercise the real analyzer, parser, preprocessing,
+Handler deadlines and bitmap ownership with controlled per-session GMS Tasks.
+**3/3 PASS**, no skips/failures, **12.235 s** instrumentation: healthy completion;
+the original five-second probe deadline with two old and two new submitted tasks;
+and close during that overlap with bitmap leases retained until real task completion.
+Late counter-identity readings neither change the cache nor contaminate the final
+identity, and only one terminal callback is delivered. Actual ART delegate injection,
+ordered cleanup and all input-resource releases are verified, not presumed.
+
+This characterizes four unfinished submitted tasks, NOT four native threads or a
+measured slowdown. No native OCR, camera or real photo is used; no concurrency,
+timeout, recognition or product behavior changed. The scanner architecture now
+correctly documents the existing per-batch rather than per-capture two-task limit.
+Changing that limit could reduce available recognition evidence under deadlines;
+no speculative scheduling fix is included.
+
+The first test compile failed because a raw Java constructor required an explicit
+`Text.TextBlock` list type; only the test was corrected. Rebuild: **PASS 2m32s**,
+debug/test APK, release Kotlin and both lints; unchanged **912 JVM PASS / one existing
+optional SKIP** reused by Gradle. Sources/APKs remain frozen during instrumentation;
+offline/no reverse/idle cleanup verifies. Evidence:
+`artifacts/release27-engineering-20261001/scanner-batch-204516-52f5b60c/manifest.json`
+and `scanner-batch-build{,-corrected}.log` in the engineering directory.
+Source SHA256 `801e2cc655e5b8ec71f86ca8aef51fae31c4019643f928f0752aaf23abf56b33`;
+test APK `1b2c720bdf29c6621befbe8f6f30708af7fbee3c1e481dbb936044d0f56f5336`.
+App APK stays exactly `58613d94075ea30791e4996c791ed5aedd9f960f97326aea66d0d3f5ddbdf958`,
+already covered by the earlier 371-case regression. No release signing, AAB,
+production, deployment, Play or Xiaomi operation. Overall **NOT READY**.
+
+### Previous local checkpoint: current-source isolated R8 verification
 
 The same reviewed R8-only guard now verifies source commit `e9b2627`, including
 the reconnect fix. Its exact 32-task graph ends at `minifyReleaseWithR8`; no

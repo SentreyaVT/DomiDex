@@ -89,9 +89,22 @@ Konfigurierte Timeoutbudgets: 5 s Orientierungs-OCR, 9 s vollständige OCR,
 18 s Analyzer, 40 s äußerer Worker. Das sind **keine üblichen Laufzeiten oder
 harte Gesamt-Wallclock-Garantie**: Blockierende Katalog-HTTP-Zugriffe besitzen
 eigene Verbindungs-/Lese-Timeouts; Coroutine-Abbruch allein beweist deren sofortiges Ende nicht.
-Bis zu zwei OCR-Aufrufe laufen innerhalb des einzelnen Workers parallel.
+Die Zweiergrenze gilt pro OCR-Batch, nicht aufnahmeweit: Nach dem Probe-Zeitlimit
+können zwei alte Probe-Aufträge und zwei neue Full-OCR-Aufträge gleichzeitig offen sein.
+Das belegt eingereichte Tasks, nicht vier parallel rechnende native Threads.
 `app/src/main/java/com/dominik/cardvault/ui/ScanTaskResources.kt` verwaltet Ressourcen und native
 Bild-Leases; Abbruch darf von ML Kit noch verwendete Bitmaps nicht vorzeitig freigeben.
+
+Die drei tatsächlichen Analyzer-Kontrollen in `ScannerBatchTransitionInstrumentedTest`
+bestanden am 01.10.2026 im Offline-API-36-Emulator (12,235 s): gesunder Ablauf,
+regulärer Probe-Timeout mit vier offenen kontrollierten GMS-Tasks und verspäteter
+Gegenidentität sowie Abbruch während dieser Überlappung. Alte Antworten verändern
+weder den eingefrorenen Cache noch das finale Ergebnis; Leases bleiben bis zum
+wirklichen Taskabschluss gültig, und der Ergebniscallback kommt genau einmal.
+Nur der sitzungseigene Recognizer ist im Test kontrolliert; Vorbereitung, Parser,
+Handlerfristen und Ressourcenverwaltung sind echt. Keine native OCR-Geschwindigkeits-
+oder Treffgenauigkeitsmessung und keine neue Nebenläufigkeitspolicy.
+Beleg: `artifacts/release27-engineering-20261001/scanner-batch-204516-52f5b60c/`.
 
 ## Katalog-HTTP: Abbruch und tatsächliches Ressourcenende
 
