@@ -68,6 +68,9 @@ from the reproducible current-source checkpoint above.
 | Android JVM unit tests | PASS, 629 / 630, 41.40 s | one pre-existing optional live Cardmarket test skipped; fresh rerun |
 | Android local instrumentation | PASS, 83 tests, 32.574 s | fresh isolated API 36 AVD, network disabled; Room/outbox/prices/scanner |
 | Emulator camera rotations | PASS, 1 test, 10.956 s | actual emulator JPEGs at four display rotations; no recreation, portrait preserved |
+| Scanner OCR baseline | PASS harness, 60 measured samples, 571.596 s total | median 13,690.748 ms / P95 16,118.944 ms; limited flat-image catalogue, not real-camera accuracy |
+| Room scale reads | PASS, 1k / 5k / 20k entries | exact totals/IDs/owner isolation, unchanged per-column hashes; first subscription plus three warm repeats |
+| Room 12→13 scale migrations | PASS, nine fresh synthetic databases | three each at 1k/5k/20k; every prior field/ID/SQLite sequence preserved; both scale tests total 220.416 s |
 | Web primary suites | PASS, 611 tests / 48 files, 13.53 s | external network blocked, `envDir:false` |
 | Web additional suites | PASS, 76 tests / 7 files, 1.73 s | same isolation |
 | Web Node tests | PASS, 7 tests, 0.19 s | knowledge/deletion compatibility |
@@ -97,6 +100,29 @@ Synthetic geometry benchmark: PASS, 21 cases × 12 measured repetitions, 20.567 
 input pixel/luma hashes are recorded. This is not physical-camera recognition accuracy.
 Release pipeline: 39 Python tests PASS; Android's existing Functions aggregator: 3
 Node tests PASS. Those tests do not sign or publish a build.
+
+The OCR fixture results are 26 ACCEPTED, 10 AMBIGUOUS, 24 REJECTED; collector number
+correct in 36/60 samples and zero card-ID false accepts against the six-fixture
+catalogue. This does **not** prove zero printing/language errors: the old harness
+does not yet score these identities, and rejects are not recognition successes.
+The low recall remains visible and must not be hidden by the harness PASS result.
+
+Local Room warm medians (three samples, milliseconds; emulator, not UI/network):
+
+| Entries | Collection | Set summaries | Private summaries | Portfolio | Private contents |
+|---|---:|---:|---:|---:|---:|
+| 1,000 | 17.93 | 48.98 | 48.93 | 58.48 | 57.81 |
+| 5,000 | 92.39 | 141.88 | 148.23 | 205.46 | 273.92 |
+| 20,000 | 836.64 | 1,051.16 | 1,023.20 | 1,857.39 | 1,805.12 |
+
+The fixture has 5% tombstones and synthetic second-owner sentinels. Room outbox
+limit-200 queries remained below 6 ms in these samples. Larger reads expose real
+scaling cost, not an invented performance SLA. No scanner timing improvement or
+remote sync reduction is claimed from these local measurements.
+Migration+schema-validation medians were 51.23 / 48.70 / 44.29 ms at the three
+sizes. The full test also seeds and hashes the data outside these timing windows;
+this must not be advertised as end-to-end upgrade duration. Each new sidecar is
+empty as expected; old binder/outbox/tombstone fields and foreign keys remain valid.
 
 Read-only Git history pattern scan: 964 Android and 701 Web text blobs, no matches
 for the high-confidence private-key/GitHub/OAuth/Slack token patterns. Binary blobs
@@ -128,9 +154,9 @@ An 18-test pass alone is not Gate 1 approval.
 
 | Gate | Status | Required next evidence |
 |---|---|---|
-| 0 Baseline | IN PROGRESS | fresh JVM, selected isolated instrumentation, safe Web build |
+| 0 Baseline | PASS (local reproducible scope) | frozen current source, fresh JVM/instrumentation/scanner timings and isolated Web build; live limits explicit |
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
-| 2 API security | NOT TESTED | authorization, distributed limits, errors, payloads, OpenAPI |
+| 2 API security | IN PROGRESS | distributed write limits and local Auth tested; stream bounds/review in progress; public IP/token limits belong to Gate 6 |
 | 3 App Check | NOT TESTED | actual integration and monitor-first behavior, no blind enforcement |
 | 4 Collection/binder sync | NOT TESTED | initial/delta/outbox/conflict/offline/restart/multi-client scale |
 | 5 Pricing/catalog | NOT TESTED | exact-identity centralized fetch/cache/fallback/retention evidence |
@@ -142,7 +168,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 11 Observability/cost | NOT TESTED | low-cardinality safe metrics; simulation labelled, alerts prepared |
 | 12 Load/scale | NOT TESTED | 10/40/80 concurrency; 1k/5k/20k collections; no production load |
 | 13 Full regression | NOT TESTED | existing features and cross-platform contracts |
-| 14 Database migration | NOT TESTED | prior schema fixture, preserve IDs/binders/outbox/sidecars |
+| 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
 
