@@ -43,6 +43,17 @@ controls; no foreign process or app data was removed. Release 26 AAB/mapping/par
 symbols retain their Gate-0 hashes. No release signing, deployment or Xiaomi action.
 Overall **NOT READY**; remaining external and full-mission gates are not closed.
 
+The next Web-only checkpoint also verifies the actual unchanged `addExactCard`
+through real local Google/Firestore clients: exact create/increment and rejection
+of a different positive product at the same UUID with empty/stale caller state.
+The existing suite passes **33/33**, all old 31 cases retained, with complete
+independent Admin state, exact error and owned cleanup checks. No Web product or
+Rules change was required. Pure starter checks 17/17, typecheck/lint and a fresh
+1285/1285 Web regression pass. Evidence in the separate Web repository:
+`outputs/private-operations-local/2026-10-01T19-19-46-837Z-635450bc/` and
+`outputs/release-local/2026-10-01T19-21-37-030Z-13684.{json,log}`.
+This is not browser UI or automatic Android WorkManager convergence evidence.
+
 ### Previous local checkpoint: genuine pending overlay and late-parent recovery
 
 Two test-only additions extend the existing collection-session SDK harness to
@@ -735,7 +746,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest Android 899 JVM PASS/1 opt-in SKIP, 371 fixed emulator PASS and two extra full-field Room controls; latest completed Web product suite 1285 PASS plus 103 public-cache cases and 31 local backend SDK cases; seven real Android collection-session SDK cases with independent Admin readbacks; debug/test builds, release Kotlin, both lints and isolated Web build pass in their dated checkpoints; prior failures retained; complete physical/live contracts untested |
+| 13 Full regression | IN PROGRESS | latest Android 899 JVM PASS/1 opt-in SKIP, 371 fixed emulator PASS and two extra full-field Room controls; latest completed Web product suite 1285 PASS plus 103 public-cache cases and 33 local backend/Web-client SDK cases; seven real Android collection-session SDK cases with independent Admin readbacks; debug/test builds, release Kotlin, both lints and isolated Web build pass in their dated checkpoints; prior failures retained; complete physical/live contracts untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
