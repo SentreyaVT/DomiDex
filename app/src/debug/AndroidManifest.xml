@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Local Firebase SDK instrumentation only; release has no such exception. -->
+    <application android:networkSecurityConfig="@xml/debug_emulator_network_security" />
+</manifest>

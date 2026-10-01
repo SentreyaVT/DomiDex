@@ -159,6 +159,11 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.room.testing)
+    // Expose the existing Firestore 26.5.0 runtime APIs to the opt-in SDK proof only.
+    // Exact already-resolved versions; no transitive additions or APK runtime changes.
+    androidTestCompileOnly("io.grpc:grpc-api:1.62.2") { isTransitive = false }
+    androidTestCompileOnly("io.grpc:grpc-okhttp:1.62.2") { isTransitive = false }
+    androidTestCompileOnly("com.google.protobuf:protobuf-javalite:3.25.5") { isTransitive = false }
     androidTestUtil(libs.androidx.test.orchestrator)
     // Room 2.8.4's migration bundle serializers use kotlinx-serialization 1.8.1.
     // Keep core and json on the same runtime to avoid an AbstractMethodError on-device.

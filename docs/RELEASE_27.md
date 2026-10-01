@@ -158,7 +158,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; local delta-to-business Room adapter 32/32 and full sync-package 141/141; full Android/Web convergence, active delta integration and multi-client scale remain; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; local delta-to-business Room adapter 32/32; full sync-package 140 PASS/1 opt-in SKIP (later 140 PASS/4 opt-in SKIP); actual Android SDK overlay proof 3/3 with independent server readback; full Android/Web convergence, active delta integration and multi-client scale remain; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
@@ -593,11 +593,28 @@ Latest local checkpoint `30669e2` adds an **unwired** adapter between the prepar
 delta protocol/store and the existing four-type business apply function. It keeps
 payloads, generated outbox mutations, tombstone receipts, deferred markers and the
 checkpoint in one Room transaction. The new 32 cases pass in 1.836 s; the entire
-`data.sync` instrumentation package passes **141/141 in 5.348 s**, including those
-32 cases. Debug/test APK build passes in 38 s. Exact logs, hashes, rollback/reopen
+`data.sync` instrumentation package has **140 PASS / 1 opt-in SKIP / 0 FAIL in
+5.348 s**, including those 32 passed cases. Individual status recount corrects the
+earlier 141/141 claim: the runner's OK count includes the skipped placement scale
+case. Debug/test APK build passes in 38 s. Exact logs, hashes, rollback/reopen
 coverage and outstanding SDK/fence/fairness requirements are in `docs/SYNC.md`.
 This is not a Firestore worker activation, a network-read reduction or a physical
 multi-device result. The following paragraphs retain earlier checkpoint evidence.
+
+Actual Android Firestore 26.5.0 overlay proof now passes **3/3 in 2.962 s**, with
+independent host-side verification of all six synthetic documents and complete
+port/reverse/input cleanup. The current transaction primitive keeps the old bounded
+range in this fixture; synthetic optimistic writes demonstrate why a server response
+with no reported pending writes does not by itself prove bounded-query completeness.
+After rejection, an inclusive timestamp cursor alone misses the restored older
+document. No delta reader was activated. The normal offline sync-package regression
+on the same APKs reports **140 PASS / 4 opt-in SKIP / 0 FAIL in 5.590 s**; the new
+three SDK tests run only in the separately verified local-demo harness. Debug/test
+build and lint pass; the loopback HTTP exception is debug-only, absent from the
+merged release manifest. `docs/PRIVATE_PULL_SDK_PROOF.md` records all setup failures,
+precise evidence/limitations and the final isolated run
+`2026-10-01T05-46-24-017Z-354ac507` in the sibling Web repository. No current-worker,
+production-Firebase, release-signing, R8, dependency-runtime or Xiaomi change.
 
 Separate Web checkpoint `bb4bffe` now prepares an authenticated exact server-time
 anchor with a dedicated 60/minute owner quota and exact account-deletion cleanup.

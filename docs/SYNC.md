@@ -386,8 +386,11 @@ Laufprotokolle, keine Performance-SLA. Nachweise im lokalen Ordner
 `private-pull-remote-room-instrumentation.log`.
 
 Zusätzlich bestand auf denselben APKs das vollständige Instrumentierungspaket
-`com.dominik.cardvault.data.sync`: **141/141 Tests in 5,348 Sekunden**. Diese 141
-enthalten die neuen 32 Fälle; die Zählungen werden nicht addiert. Nachweis:
+`com.dominik.cardvault.data.sync`: **140 PASS / 1 opt-in SKIP / 0 FAIL in 5,348
+Sekunden**. Nachzählung der einzelnen Instrumentierungsstatus korrigiert die
+frühere Angabe „141/141“: Der Runner zählt den übersprungenen Placement-Lasttest
+in `OK (141 tests)` mit. Die 140 PASS enthalten die neuen 32 Fälle; die Zählungen
+werden nicht addiert. Nachweis:
 `private-pull-remote-room-sync-regression.log` im selben lokalen Artefaktordner.
 SHA-256 der APKs: App
 `B73F8783302651C7EA435B303F434E63C7418902DB27D550D97B1B2F5BBD3C69`,
@@ -398,3 +401,27 @@ Dies ist das lokale Sync-Instrumentierungspaket, nicht die gesamte Android-Tests
 Der Testumfang ist Room-/Protokollintegration, kein Firebase-Worker-/Geräte-E2E- oder
 Leistungsnachweis. Kein aktiver Worker wurde umgestellt; keine Release-Signierung,
 Veröffentlichung oder Nutzung des Xiaomi erfolgte dafür.
+
+### Tatsächlicher Android-SDK-Overlay-Nachweis (2026-10-01)
+
+Die drei opt-in Fälle in `PrivatePullSdkCompletenessInstrumentedTest` wurden mit
+Firestore Android 26.5.0, realem lokalen Auth-/Firestore-Emulator und unveränderten
+Rules ausgeführt: **3/3 PASS, 2,962 Sekunden**, anschließend unabhängiger Admin-
+Readback aller sechs synthetischen Dokumente. Transportfreigabe und tatsächliche
+ACK-/Rules-Antworten werden geprüft, nicht simuliert. Siehe
+`docs/PRIVATE_PULL_SDK_PROOF.md` für Ablauf, Hashes und erhaltene Aufbaufehler.
+
+Der derzeitige private `runTransaction`/Commit-Pfad behält im getesteten Fall die
+vollständige begrenzte Query während eines noch unbestätigten Commits. Eine
+absichtlich andere optimistische `set`/Write-Operation kann dagegen ein Dokument
+aus einer nach Timestamp begrenzten Query verdrängen, obwohl die Serverantwort
+und alle zurückgegebenen Dokumente `hasPendingWrites=false` melden. Nach einer
+tatsächlichen Rules-Ablehnung kehrt das Dokument mit altem Timestamp zurück;
+allein ein inklusiver Folgecursor ab dem neueren Dokument repariert dieses Loch
+nicht. Eine leere bestätigte Query ist ebenso wenig ein Vollständigkeitsbeweis.
+
+Das ist kein nachgewiesener Fehler des aktiven bounded-full-pull Workers und kein
+Grund, seinen stabilen Schreibpfad zu ersetzen. Für eine spätere Delta-Aktivierung
+bleiben Overlay-Ausschluss, faire Wiederprüfung und vollständige Reparatur nötig.
+Die drei SDK-Fälle ersetzen weder Room-Integration noch den Nachweis vollständiger
+Geräte-zu-Geräte-Konvergenz, historischer Zeitstempel oder Hard-Delete-Reparatur.
