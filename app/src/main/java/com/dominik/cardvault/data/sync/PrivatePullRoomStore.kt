@@ -35,6 +35,82 @@ internal class PrivatePullRoomStore(
         }
     }
 
+    /**
+     * Reserve one bounded, fair local batch; NOT wired into the running Firebase worker.
+     * Only a separate scheduling key changes. Markers, outbox and application checkpoint do not.
+     * A crash after reservation may delay a retry until the next sweep, but cannot ACK/lose work.
+     */
+    suspend fun reserveNextDeferredBatch(
+        lease: PrivatePullSessionLease,
+        limit: Int = PRIVATE_PULL_DEFERRED_BATCH_SIZE,
+    ): PrivatePullDeferredBatch {
+        require(limit in 0..PRIVATE_PULL_DEFERRED_BATCH_SIZE)
+        if (limit == 0) return PrivatePullDeferredBatch.NoBudget
+        val key = PrivatePullDeferredScheduleCodec.key(lease.ownerUid)
+        if (!isSessionCurrent(lease)) return PrivatePullDeferredBatch.StaleSession
+        fun requireCurrent() { if (!isSessionCurrent(lease)) throw StalePrivatePullTransaction() }
+        return try {
+            val result = database.withTransaction {
+                requireCurrent()
+                val raw = dao.metadata(key)
+                requireCurrent()
+                var schedule = PrivatePullDeferredScheduleCodec.decode(raw, lease.ownerUid)
+
+                suspend fun persistSchedule() {
+                    requireCurrent()
+                    val encoded = PrivatePullDeferredScheduleCodec.encode(schedule)
+                    if (encoded != raw) dao.putMetadata(AppMetadataEntity(key, encoded))
+                    requireCurrent() // A stale guard here rolls back the already-written selection.
+                }
+
+                for (visit in PrivatePullCollection.entries.indices) {
+                    val group = schedule.nextGroup
+                    val scope = PrivatePullScope(lease.ownerUid, group)
+                    val prefix = deferredPrefix(scope)
+                    var sweep = schedule.sweep(group)
+                    if (sweep.upperId == null) {
+                        val last = dao.metadataRangeLast(prefix, prefix + "~")
+                        requireCurrent()
+                        if (last == null) {
+                            schedule = schedule.advance(group, PrivatePullDeferredSweep())
+                            continue
+                        }
+                        // A corrupt marker is an explicit failure, never silently discarded.
+                        sweep = PrivatePullDeferredSweep(decodeMarkerRow(last, scope).documentId)
+                    }
+                    val upper = requireNotNull(sweep.upperId)
+                    val rows = dao.metadataRangePage(prefix,
+                        prefix + privatePullDeferredUpperExclusive(upper),
+                        sweep.afterId?.let { markerKey(scope, it) } ?: prefix, limit)
+                    requireCurrent()
+                    val markers = rows.map { decodeMarkerRow(it, scope) }
+                    val lastId = markers.lastOrNull()?.documentId
+                    val finished = markers.size < limit || lastId == upper
+                    schedule = schedule.advance(group,
+                        if (finished) PrivatePullDeferredSweep() else PrivatePullDeferredSweep(upper, lastId))
+                    if (markers.isNotEmpty()) {
+                        persistSchedule()
+                        return@withTransaction PrivatePullDeferredBatch.Batch(scope, markers)
+                    }
+                    // Do not reopen an exhausted sweep in the same call. At most four groups.
+                }
+                persistSchedule()
+                PrivatePullDeferredBatch.Empty
+            }
+            // A reservation committed just before an account change is not rolled back here.
+            // Withhold its batch; all markers still exist and will be revisited on a later sweep.
+            if (isSessionCurrent(lease)) result else PrivatePullDeferredBatch.StaleSession
+        } catch (_: StalePrivatePullTransaction) {
+            PrivatePullDeferredBatch.StaleSession
+        }
+    }
+
+    private fun decodeMarkerRow(row: AppMetadataEntity, scope: PrivatePullScope): PrivatePullDeferredMarker {
+        val marker = PrivatePullCodec.decodeMarker(row.value, scope) ?: throw PrivatePullMetadataException()
+        if (row.key != markerKey(scope, marker.documentId)) throw PrivatePullMetadataException()
+        return marker
+    }
+
     override suspend fun compareAndCommit(
         expected: PrivatePullCheckpoint,
         lease: PrivatePullSessionLease,

@@ -425,3 +425,56 @@ Grund, seinen stabilen Schreibpfad zu ersetzen. Für eine spätere Delta-Aktivie
 bleiben Overlay-Ausschluss, faire Wiederprüfung und vollständige Reparatur nötig.
 Die drei SDK-Fälle ersetzen weder Room-Integration noch den Nachweis vollständiger
 Geräte-zu-Geräte-Konvergenz, historischer Zeitstempel oder Hard-Delete-Reparatur.
+
+### Dauerhafte lokale Recheck-Auswahl — noch nicht aktiviert (2026-10-01)
+
+`reserveNextDeferredBatch` ergänzt den lokalen Room-Adapter um eine Auswahl von
+höchstens 50 vorhandenen Deferred-Markern. Limit `0` liefert `NoBudget`, ohne
+Session-Guard, Datenbankzugriff oder Schreiboperation. Pro Aufruf werden höchstens
+die vier bekannten Gruppen besucht; genau eine nichtleere Batch wird ausgegeben.
+Die Gruppen wechseln im Round-robin. Jede Gruppe behält während eines Durchlaufs
+eine feste Dokument-ID-Obergrenze, damit neue lexikografisch größere Marker den
+nächsten Umlauf nicht endlos verzögern. Ein zusätzlicher indexierter `LIMIT 1`-
+Metadatenabruf ermittelt diese Grenze, ohne alle Marker zu laden.
+
+Nur `private-sync-v2:<base64-owner>:deferred-schedule` wird verändert. Die kurze
+Room-Transaktion prüft die erfasste Ownergeneration vor/nach Leseoperationen und
+nach dem letzten Write. Ein Wechsel innerhalb dieser Grenze rollt die Reservierung
+zurück. Ein erst nach erfolgreichem Commit beobachteter Wechsel unterdrückt die
+Ausgabe der Batch, behauptet aber keinen nachträglichen Rollback. Die ausgegebene
+Markerliste ist kopiert und durch `Collections.unmodifiableList` geschützt.
+
+Eine Reservierung ist weder ACK noch Remote-Apply: Outbox, Nutzdaten, Marker und
+Anwendungscheckpoint bleiben unverändert. Nach Absturz oder ausgefallenem Request
+werden die Marker spätestens in einem folgenden endlichen Sweep erneut ausgewählt,
+sofern die Ausführung fortgesetzt wird und die Metadaten gültig sind. Die spätere
+Anwendung braucht weiterhin einen frischen vertrauenswürdigen Read und den
+bestehenden exakten Marker-CAS. Eine fehlende Serverantwort wird nicht zum Tombstone.
+Es gibt hier keinen Netzwerkaufruf und kein Signal für sofortige endlose APPENDs.
+
+Beschädigte Scheduling-Werte dürfen ausschließlich diese eigene Auswahlposition
+zurücksetzen (sichere Wiederholung). Beschädigte oder falsch zugeordnete Marker
+bleiben dagegen erhalten und verursachen einen expliziten Fehler mit Rollback;
+deren Reparatur ist nicht Teil dieses Bausteins. Für korrupte Marker wird keine
+Fortschrittsgarantie behauptet. Der bestehende stateless `deferredPage`-Abruf
+bleibt kompatibel. Ein Schedule-Key wird nicht über `UserBackupStore` exportiert
+oder importiert; dessen feste Business-Table-Liste schließt `app_metadata` aus.
+Ein neuer pauschaler lokaler Account-Cleanup wurde nicht eingeführt.
+
+Testquellen zuerst ergänzt: sechs JVM-Vertragsfälle und 18 echte Room-Fälle für
+Reihenfolge, feste Grenzen, Ownertrennung, Unveränderlichkeit, ACK-Abgrenzung,
+Neustart, konkurrierende Reservierungen und Cancellation/Generations-Rollback.
+Root-Ausführung auf dem isolierten API-36-AVD: **6/6 JVM und 18/18 Room PASS**;
+Room 0,992 Sekunden, keine Skips. Der volle JVM-Lauf hat 853 PASS / 1 bestehenden
+opt-in SKIP / 0 FAIL. Debug-/AndroidTest-Build und Lint bestanden im zweiten
+Buildlauf (1m 9s). Der erste Buildlauf scheiterte an einem fehlenden Anführungszeichen
+in einer neuen Testquelle; dies ist ein korrigierter Testaufbaufehler, kein historischer
+Produkt-RED. Artefakte unter `artifacts/release27-engineering-20261001/`:
+`deferred-schedule-regression-build.log`, `deferred-schedule-regression-build2.log`,
+`deferred-schedule-install.log`, `deferred-schedule-instrumentation.log`.
+Zwei unabhängige Quellenreviews fanden im engen Scope keinen konkreten Blocker.
+Reservierungen sind keine exklusiven Locks: nach einem Sweep-Wrap können parallele
+Verbraucher denselben Marker erhalten; der frische Read und exakte CAS bleiben nötig.
+Dies ist neue, noch unverdrahtete lokale
+Funktionalität, kein historischer Fehlernachweis gegen den aktiven Full-Pull und
+keine Delta-/Hard-Delete-/Geräte-E2E-Freigabe.

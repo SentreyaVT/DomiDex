@@ -590,6 +590,10 @@ interface CardVaultDao {
     @Query("SELECT * FROM app_metadata WHERE `key` >= :startInclusive AND `key` < :endExclusive AND `key` > :afterKey ORDER BY `key` LIMIT :limit")
     suspend fun metadataRangePage(startInclusive: String, endExclusive: String, afterKey: String, limit: Int): List<AppMetadataEntity>
 
+    /** One indexed upper bound for a fixed, local-only metadata sweep. */
+    @Query("SELECT * FROM app_metadata WHERE `key` >= :startInclusive AND `key` < :endExclusive ORDER BY `key` DESC LIMIT 1")
+    suspend fun metadataRangeLast(startInclusive: String, endExclusive: String): AppMetadataEntity?
+
     @Query("SELECT COUNT(*) FROM app_metadata WHERE `key` >= :startInclusive AND `key` < :endExclusive")
     suspend fun metadataRangeCount(startInclusive: String, endExclusive: String): Int
 

@@ -29,6 +29,12 @@ internal class PrivatePullRemoteRoomAdapter(
         limit: Int = 50,
     ): List<PrivatePullDeferredMarker> = store.deferredPage(scope, afterDocumentId, limit)
 
+    /** Local reservation only; caller still needs a fresh trusted read and exact-marker CAS apply. */
+    suspend fun reserveNextDeferredBatch(
+        lease: PrivatePullSessionLease,
+        limit: Int = PRIVATE_PULL_DEFERRED_BATCH_SIZE,
+    ): PrivatePullDeferredBatch = store.reserveNextDeferredBatch(lease, limit)
+
     suspend fun commitFence(
         expected: PrivatePullCheckpoint,
         lease: PrivatePullSessionLease,
