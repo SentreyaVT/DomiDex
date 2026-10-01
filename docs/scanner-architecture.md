@@ -136,8 +136,30 @@ bei Verbindung nach `users/{uid}/scanEvidence/{fingerprint}`. Diese privaten Dat
 `functions/knowledge-aggregate.js` setzt `STABLE` ab drei übereinstimmenden Beiträgen und Abstand zwei;
 bei mindestens drei konkurrierenden Beiträgen und Abstand höchstens eins gilt `DISPUTED`, sonst `CANDIDATE`.
 `firestore.rules` erlaubt Clients nur passende Einzelzugriffe; globale Aggregate schreibt der vertrauenswürdige Server.
-`app/src/main/java/com/dominik/cardvault/ui/ScannerKnowledgeEvidence.kt` verwendet Knowledge nur
-für begrenzte Bewertung vorhandener widerspruchsfreier Kandidaten, nicht als neue Identität oder Modelltraining.
+`app/src/main/java/com/dominik/cardvault/ui/ScannerKnowledgeEvidence.kt` verwendet Knowledge im
+Release-27-Entwicklungsstand nur als temporäres Sortiergewicht bereits vorhandener,
+widerspruchsfreier Kandidaten. Kandidaten-/Evidence-Objekte, Confidence und Widersprüche
+bleiben unverändert. Sowohl vor als auch nach dem Umsortieren muss die Entscheidung
+`AMBIGUOUS` bleiben; `ACCEPTED` und `REJECTED` werden nicht durch Community-Hinweise
+verändert. Knowledge ist weder eine neue Identität noch Modelltraining.
+
+Hinweise müssen dieselbe unterstützte Knowledge-Version und den erwarteten Fingerprint
+haben. Ihre echte Quellzeit darf nicht fehlen, in der Zukunft liegen oder mindestens
+sieben Tage alt sein. Diese konservative Frist betrifft ausschließlich den optionalen
+Community-Hinweis, keine OCR-Schwelle und keine ScanLab-Fotoaufbewahrung. Lesen oder
+erneuter Serverabruf erneuert die Quellzeit nicht; das Ranking prüft sie erneut.
+Bestätigte Server-Snapshots dürfen den Cache ersetzen. Bestätigt fehlende/ungültige
+Dokumente entfernen exakt diesen Cacheeintrag einschließlich AtomicFile-Nebendateien.
+Cache-Snapshots oder lokale Pending Writes sind dafür kein Löschbeweis.
+
+Eine Observation gehört zu einer Konto-/Listenergeneration. Nach dem initialen Auth-
+Callback beendet jedes beobachtete weitere Auth-Ereignis diese Generation, auch bei
+zwischenzeitlichem A→B→A. Berechtigungsfehler verwerfen den laufenden Hinweis.
+Transportfehler stoppen Firestore/Coroutine-Arbeit, können aber einen weiterhin frischen
+Offline-Hinweis behalten. Dafür bleibt allein der Authwatcher bis zum regulären
+Scanner-`finally`-Cleanup aktiv. Späte Snapshots und Registrierungen sind gesperrt.
+Wartende Evidence, Upload-Receipts, Consent und Sammlung werden nicht durch diese
+Cacheinvalidierung verändert. Lokale Tests ersetzen keinen Live-Auth-/Firebase-Test.
 Der vorhandene Aggregationstrigger ignoriert gelöschte Evidenz; eine automatische Rücknahme früherer
 Aggregatstimmen bei Löschung ist dadurch nicht nachgewiesen und bleibt ein Datenschutz-/Hardening-Prüfpunkt.
 

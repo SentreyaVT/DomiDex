@@ -5,6 +5,7 @@ import com.dominik.cardvault.data.knowledge.ScanKnowledgeEvidence
 import com.dominik.cardvault.data.knowledge.ScanKnowledgeFingerprint
 import com.dominik.cardvault.data.knowledge.ScanKnowledgeRecord
 import com.dominik.cardvault.data.knowledge.ScanKnowledgeStatus
+import com.dominik.cardvault.data.knowledge.isUsableScanKnowledge
 import com.dominik.cardvault.data.feedback.ScannerReportKnowledgeContext
 import com.dominik.cardvault.model.CatalogSearchResult
 import java.security.MessageDigest
@@ -64,20 +65,24 @@ internal fun buildScanKnowledgeEvidence(
 
 /** Community evidence only reorders already valid official candidates; it never removes contradictions. */
 internal object ScanKnowledgeCandidateRanker {
-    fun apply(candidates: List<ScanCandidate>, knowledge: ScanKnowledgeRecord?): List<ScanCandidate> {
-        if (knowledge == null || knowledge.knowledgeVersion != SCAN_KNOWLEDGE_VERSION || knowledge.status == ScanKnowledgeStatus.DISPUTED) return candidates
+    fun apply(candidates: List<ScanCandidate>, knowledge: ScanKnowledgeRecord?,
+        nowEpochMillis: Long = System.currentTimeMillis()): List<ScanCandidate> {
+        if (!isUsableScanKnowledge(knowledge, nowEpochMillis) || knowledge == null ||
+            HybridCandidateFusion.decide(candidates).decision != ScannerDecision.AMBIGUOUS) return candidates
+        if (candidates.none { it.card.scanIdentityKey() == knowledge.cardId && it.evidence?.contradictions?.isEmpty() == true }) return candidates
         val positive = when (knowledge.status) {
             ScanKnowledgeStatus.STABLE -> 5
             ScanKnowledgeStatus.CANDIDATE -> 2
             ScanKnowledgeStatus.DISPUTED -> 0
         }
-        return candidates.map { candidate ->
-            val evidence = candidate.evidence ?: return@map candidate
-            if (evidence.contradictions.isNotEmpty()) return@map candidate
-            val same = candidate.card.scanIdentityKey() == knowledge.cardId
-            val delta = if (same) positive else -minOf(positive, 3)
-            candidate.copy(evidence = evidence.copy(finalConfidence = (evidence.finalConfidence + delta).coerceIn(0, 100)))
-        }.sortedByDescending { it.evidence?.finalConfidence ?: it.score }
+        val ranked = candidates.sortedByDescending { candidate ->
+            val evidence = candidate.evidence
+            val delta = if (evidence == null || evidence.contradictions.isNotEmpty()) 0
+                else if (candidate.card.scanIdentityKey() == knowledge.cardId) positive else -minOf(positive, 3)
+            // This weight exists only during sorting. Preserve the original candidate/evidence.
+            (evidence?.finalConfidence ?: candidate.score) + delta
+        }
+        return if (HybridCandidateFusion.decide(ranked).decision == ScannerDecision.AMBIGUOUS) ranked else candidates
     }
 }
 

@@ -4,6 +4,22 @@ import java.security.MessageDigest
 import java.util.Locale
 
 internal const val SCAN_KNOWLEDGE_VERSION = 1
+/** Maximum source age of an optional ranking hint, never an OCR acceptance threshold. */
+internal const val SCAN_KNOWLEDGE_MAX_AGE_MILLIS = 7 * 24 * 60 * 60 * 1_000L
+
+internal fun isUsableScanKnowledge(
+    record: ScanKnowledgeRecord?,
+    nowEpochMillis: Long,
+    expectedFingerprint: String? = null,
+): Boolean {
+    if (record == null || record.knowledgeVersion != SCAN_KNOWLEDGE_VERSION ||
+        record.status == ScanKnowledgeStatus.DISPUTED || record.cardId.isBlank() ||
+        !record.fingerprint.matches(Regex("[a-f0-9]{64}")) ||
+        (expectedFingerprint != null && record.fingerprint != expectedFingerprint)) return false
+    // Never turn a cache read into new source evidence or accept future/unknown timestamps.
+    return record.updatedAtEpochMillis > 0 && record.updatedAtEpochMillis <= nowEpochMillis &&
+        nowEpochMillis - record.updatedAtEpochMillis < SCAN_KNOWLEDGE_MAX_AGE_MILLIS
+}
 
 internal enum class ScanKnowledgeStatus { CANDIDATE, STABLE, DISPUTED }
 

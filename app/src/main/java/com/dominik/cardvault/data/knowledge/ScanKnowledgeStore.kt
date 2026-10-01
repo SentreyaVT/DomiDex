@@ -7,9 +7,10 @@ import org.json.JSONObject
 import java.io.File
 
 /** Small app-private cache/outbox. It is deliberately separate from Collection Room state. */
-internal class ScanKnowledgeStore private constructor(private val root: File) {
-    constructor(context: Context) : this(File(context.filesDir, "scan_knowledge"))
-    internal constructor(rootDirectory: File, @Suppress("UNUSED_PARAMETER") testOnly: Boolean) : this(rootDirectory)
+internal class ScanKnowledgeStore private constructor(private val root: File, private val now: () -> Long) {
+    constructor(context: Context) : this(File(context.filesDir, "scan_knowledge"), System::currentTimeMillis)
+    internal constructor(rootDirectory: File, @Suppress("UNUSED_PARAMETER") testOnly: Boolean,
+        now: () -> Long = System::currentTimeMillis) : this(rootDirectory, now)
 
     private val knowledge = File(root, "cache")
     private val outbox = File(root, "outbox-v2")
@@ -28,15 +29,31 @@ internal class ScanKnowledgeStore private constructor(private val root: File) {
     }
 
     fun get(fingerprint: String): ScanKnowledgeRecord? = synchronized(lock) {
-        safeFile(knowledge, fingerprint)?.takeIf(File::isFile)?.let { file ->
-            runCatching { recordFromJson(JSONObject(file.readText())) }.getOrNull()
-        }
+        val target = safeFile(knowledge, fingerprint) ?: return@synchronized null
+        val record = try {
+            AtomicFile(target).openRead().bufferedReader(Charsets.UTF_8).use { recordFromJson(JSONObject(it.readText())) }
+        } catch (_: Exception) { null }
+        if (!isUsableScanKnowledge(record, now(), fingerprint)) {
+            // Remove the atomic backup/new file too, so a later restart cannot restore this hint.
+            AtomicFile(target).delete()
+            null
+        } else record
     }
 
     fun put(record: ScanKnowledgeRecord) = synchronized(lock) {
         val target = safeFile(knowledge, record.fingerprint) ?: return@synchronized
+        if (!isUsableScanKnowledge(record, now())) {
+            AtomicFile(target).delete()
+            return@synchronized
+        }
         atomicWrite(target, record.toJson().toString())
         trim(knowledge, MAX_CACHE_RECORDS)
+    }
+
+    /** Exact cache namespace only: consent, pending evidence and upload receipts are untouched. */
+    fun removeCached(fingerprint: String) = synchronized(lock) {
+        safeFile(knowledge, fingerprint)?.let { AtomicFile(it).delete() }
+        Unit
     }
 
     fun enqueue(ownerUid: String, evidence: ScanKnowledgeEvidence): Boolean = synchronized(lock) {
@@ -144,13 +161,23 @@ private fun ScanKnowledgeRecord.toJson() = JSONObject().apply {
 }
 
 private fun recordFromJson(value: JSONObject) = ScanKnowledgeRecord(
-    fingerprint = value.getString("fingerprint"), cardId = value.getString("cardId"),
+    fingerprint = value.strictString("fingerprint"), cardId = value.strictString("cardId"),
     sourceSetId = value.optNullableString("sourceSetId"), cardNumber = value.optString("cardNumber"),
-    status = runCatching { ScanKnowledgeStatus.valueOf(value.getString("status")) }.getOrDefault(ScanKnowledgeStatus.CANDIDATE),
+    status = ScanKnowledgeStatus.valueOf(value.strictString("status")),
     confidence = value.optInt("confidence").coerceIn(0, 100), confirmations = value.optInt("confirmations").coerceAtLeast(0),
-    corrections = value.optInt("corrections").coerceAtLeast(0), knowledgeVersion = value.optInt("knowledgeVersion").coerceAtLeast(1),
-    updatedAtEpochMillis = value.optLong("updatedAtEpochMillis"),
+    corrections = value.optInt("corrections").coerceAtLeast(0), knowledgeVersion = value.strictLong("knowledgeVersion")
+        .also { require(it in 1..Int.MAX_VALUE.toLong()) }.toInt(),
+    updatedAtEpochMillis = value.strictLong("updatedAtEpochMillis"),
 )
+
+private fun JSONObject.strictString(key: String): String = get(key) as? String
+    ?: throw IllegalArgumentException("Invalid cached knowledge field")
+
+private fun JSONObject.strictLong(key: String): Long = when (val value = get(key)) {
+    is Int -> value.toLong()
+    is Long -> value
+    else -> throw IllegalArgumentException("Invalid cached knowledge number")
+}
 
 private fun JSONObject.optNullableString(key: String): String? = takeIf { has(key) && !isNull(key) }?.optString(key)?.takeIf(String::isNotBlank)
 private fun JSONArray?.toStrings(maximum: Int): List<String> = this?.let { values ->

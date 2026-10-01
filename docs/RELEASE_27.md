@@ -163,7 +163,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 6 Shared binder scale | IN PROGRESS | in-flight binder deletion/ownership guarded; local regression passes, 5k scale/pagination/cache and public IP/token limits remain |
 | 7 Camera stability | NOT TESTED | synthetic/emulator regression; real hardware matrix separate |
 | 8 Recognition | NOT TESTED | multisignal, variant-aware false accepts, reproducible benchmark |
-| 9 Community knowledge | IN PROGRESS (baseline FAIL) | 15 focused safety cases reproduce 10 failures; confidence, freshness and lifecycle fixes under implementation, not yet claimed passing |
+| 9 Community knowledge | IN PROGRESS (client safety PASS locally) | reproduced confidence/freshness/lifecycle faults fixed; 48 focused JVM + 11 real-Android cache/SDK cases pass; backend ownership/replay and aggregation scale remain |
 | 10 Privacy/lifecycle | NOT TESTED | export/deletion/locks/storage/retention inventory |
 | 11 Observability/cost | NOT TESTED | low-cardinality safe metrics; simulation labelled, alerts prepared |
 | 12 Load/scale | NOT TESTED | 10/40/80 concurrency; 1k/5k/20k collections; no production load |
@@ -401,3 +401,45 @@ all dates, values, MAX and identity semantics. This could reduce fields/material
 object size, not row growth or downloads. It first needs exact result-equivalence,
 365-date, normal/reverse/null/zero, same-date correction and owner-isolation tests.
 Retention/compaction remains a separate decision with explicit history semantics.
+
+## Gate 9 client knowledge safety (local validation)
+
+Community knowledge no longer modifies confidence, candidate scores or evidence
+objects. It may reorder already plausible, contradiction-free candidates only when
+both the original and resulting decision are AMBIGUOUS. Independent ACCEPTED and
+REJECTED results remain untouched. Freshness is based on a valid supported version,
+exact fingerprint and actual source timestamp less than seven days old, not time of
+cache access. Missing, future, disputed or incompatible hints are ignored.
+
+Only confirmed server snapshots may replace/remove the exact local hint. Confirmed
+missing or malformed data deletes its AtomicFile base/backup/new files, not consent,
+evidence outbox, upload receipts or collection data. Cached/pending snapshots are not
+deletion proof. Account-generation events invalidate running hints and late callbacks.
+Transport errors retain a fresh offline hint while stopping network/scope resources;
+only its auth watcher remains until normal scanner-finally cleanup. Permission/auth
+errors fail closed instead. This explicitly avoids weakening offline operation to
+simplify cleanup. Camera, ML Kit, thresholds, ReviewedScanKnowledge and upload paths
+are unchanged.
+
+The initial 15 ranking/freshness regression cases reproduced 10 failures. Final focused
+JVM selection: 48/48 PASS. Independent review found the first adapter error cleanup
+would immediately erase the intended offline fallback: two additional tests reproduced
+that and now pass, including auth changes after transport termination. Three SDK-error
+constructor tests initially failed under plain android.jar stubs (TextUtils/SparseArray);
+the unchanged assertions were moved to real Android instrumentation, not disabled.
+
+Final root run: **795 JVM tests, 794 PASS / 1 SKIP / 0 FAIL / 0 ERROR**, across 117
+classes. The skip is the existing explicitly opt-in `CardmarketLiveSmokeTest`, not a
+newly suppressed regression. Debug/test APK builds, release Kotlin compilation and
+debug/release lint pass in 3m 40s. Lint reports zero errors, 169/170 warnings respectively
+and two hints each; this is not a warning-free claim. The final offline API-36 emulator
+run passes **89/89 tests in 5.274 s**, including all 11 knowledge store/SDK-policy tests
+and 78 existing sync/sharing/startup regressions. Only emulator-5554 was used, with
+airplane mode on and Wi-Fi off, no user account or production data.
+
+Evidence: `gate9-root-regression-build.log`, copied XML in `gate9-root-jvm/`, and
+`gate9-root-instrumentation.log` under the ignored engineering directory. Focused
+RED/GREEN and the SDK-harness failure are retained separately. No real Firebase
+listener/auth E2E, physical-device benchmark or scanner accuracy/speed improvement is
+inferred from these tests. No release signing, AAB, deployment or Xiaomi action.
+The historical signed-v26 AAB SHA-256 remains the immutable value listed above.

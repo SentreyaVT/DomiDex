@@ -12,7 +12,7 @@ class ScannerKnowledgeEvidenceTest {
         val second = candidate("sv1-002", 75)
         val record = knowledge(second.card.scanIdentityKey(), ScanKnowledgeStatus.STABLE)
 
-        val ranked = ScanKnowledgeCandidateRanker.apply(listOf(first, second), record)
+        val ranked = ScanKnowledgeCandidateRanker.apply(listOf(first, second), record, NOW)
 
         assertEquals(second.card.scanIdentityKey(), ranked.first().card.scanIdentityKey())
         assertEquals(ScannerDecision.AMBIGUOUS, HybridCandidateFusion.decide(ranked).decision)
@@ -22,10 +22,10 @@ class ScannerKnowledgeEvidenceTest {
         val contradictory = candidate("sv1-001", 80, setOf("set"))
         assertEquals(
             contradictory,
-            ScanKnowledgeCandidateRanker.apply(listOf(contradictory), knowledge(contradictory.card.scanIdentityKey(), ScanKnowledgeStatus.STABLE)).single(),
+            ScanKnowledgeCandidateRanker.apply(listOf(contradictory), knowledge(contradictory.card.scanIdentityKey(), ScanKnowledgeStatus.STABLE), NOW).single(),
         )
         val clean = candidate("sv1-002", 78)
-        assertEquals(listOf(clean), ScanKnowledgeCandidateRanker.apply(listOf(clean), knowledge(clean.card.scanIdentityKey(), ScanKnowledgeStatus.DISPUTED)))
+        assertEquals(listOf(clean), ScanKnowledgeCandidateRanker.apply(listOf(clean), knowledge(clean.card.scanIdentityKey(), ScanKnowledgeStatus.DISPUTED), NOW))
     }
 
     private fun candidate(sourceCardId: String, score: Int, contradictions: Set<String> = emptySet()): ScanCandidate {
@@ -44,6 +44,9 @@ class ScannerKnowledgeEvidenceTest {
     private fun knowledge(cardId: String, status: ScanKnowledgeStatus) = ScanKnowledgeRecord(
         fingerprint = "a".repeat(64), cardId = cardId, sourceSetId = "sv1", cardNumber = "001/198",
         status = status, confidence = 90, confirmations = 3, corrections = 0,
-        knowledgeVersion = 1, updatedAtEpochMillis = 1,
+        // Positive knowledge must have a fresh explicit source timestamp under the seven-day policy.
+        knowledgeVersion = 1, updatedAtEpochMillis = NOW,
     )
+
+    private companion object { const val NOW = 1_800_000_000_000L }
 }
