@@ -353,6 +353,37 @@ The emulator was restarted with the already proven host-GPU configuration for UI
 regression, offline and without snapshots; it still uses only an emulated camera.
 No physical Xiaomi operation, provider request, production change or push occurred.
 
+### Catalog transport cancellation and combined local checkpoint
+
+Real JVM loopback tests reproduced two old blocking catalog requests that remained
+alive after cancellation (stalled response headers and a partial JSON string).
+A structured URLConnection wrapper fixed only the headers case; its body reader
+still failed the original two-second observation gate. The final implementation
+uses the already resolved OkHttp 4.12.0, with no dependency update. Cancellation
+closes the Call on IO and joins actual reader/response cleanup before releasing
+cache/single-flight ownership. Lazy TLS/client initialization stays off UI creation.
+Existing sourceOverride constructors, request headers, timeouts and DE/EN behavior
+are preserved. Details and explicit platform/TLS limits: `docs/scanner-architecture.md`.
+
+Root focused regression: **22/22 PASS** in five classes (12 new transport/ownership/
+contract cases plus 10 existing cache cases). The unchanged real-loopback failure
+gates now pass; this is not a general scanner speed or physical-device accuracy claim.
+Full offline Gradle regression passes in **3m48s**, 104 tasks (19 executed / 85 up-to-date):
+debug/test APKs, **836 JVM PASS / 1 existing opt-in SKIP / 0 FAIL / 0 ERROR**
+(837 cases, 123 classes), debug/release lint and Release Kotlin compilation.
+Evidence: `catalog-transport-final-regression-build.log` and archived full XML under
+`artifacts/release27-engineering-20261001/catalog-transport/full-unit-results/`.
+
+The same installed APKs pass **371/371** offline API-36 emulator tests in **318.095 s**,
+including the earlier 327-case selection, all 12 manual-analysis cases and 32 actual
+delta-to-Room adapter cases. No overlap is counted twice. Evidence:
+`catalog-transport-final-regression371-instrumentation.log`. Debug APK SHA-256:
+`EDDB661FC830CA4B8188D2EB787BA0169B5A120A3EF897DB712329D67898A8A2`;
+instrumentation APK `3B3DE487F96710451B7E3FC19016D392084BC45F34260144C3DD1DB0B3571796`.
+This checkpoint excludes the subsequent reference-artwork HTTP lifetime investigation.
+Only emulator-5554 was installed. Xiaomi, production, release signing and historical
+release-26 artifacts remain untouched; the entire release is not declared ready.
+
 ### Gate 8: unchanged-input replay with additive identity observations
 
 The debug/test APK checkpoint `b8cb4ef` was replayed on the original API-36 AVD

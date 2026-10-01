@@ -11,9 +11,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import okio.BufferedSource
-import okio.buffer
-import okio.source
-import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -354,14 +351,24 @@ internal fun pokemonPrintVariantForSourceKey(key: String): PokemonPrintVariant? 
  * No images or card text are bundled into the APK: the app only requests the
  * German metadata needed by the set the collector is actively browsing/scanning.
  */
-class PokemonVisualCatalog internal constructor(
+class PokemonVisualCatalog private constructor(
     private val metadataCache: PokemonCatalogMetadataCache,
-    private val sourceOverride: ((String) -> BufferedSource)? = null,
+    private val sourceOverride: ((String) -> BufferedSource)?,
+    private val httpCalls: okhttp3.Call.Factory?,
 ) {
+    internal constructor(
+        metadataCache: PokemonCatalogMetadataCache,
+        sourceOverride: ((String) -> BufferedSource)? = null,
+    ) : this(metadataCache, sourceOverride, null)
+
     constructor() : this(sharedMetadataCache)
 
-    private companion object {
-        val sharedMetadataCache = PokemonCatalogMetadataCache()
+    internal companion object {
+        private val sharedMetadataCache = PokemonCatalogMetadataCache()
+
+        /** Internal synthetic-HTTP seam; existing constructors/trailing-lambda callers are unchanged. */
+        internal fun withHttpCalls(cache: PokemonCatalogMetadataCache, calls: okhttp3.Call.Factory) =
+            PokemonVisualCatalog(cache, null, calls)
     }
 
     val isLicensedSourceConfigured: Boolean get() = true
@@ -562,19 +569,9 @@ class PokemonVisualCatalog internal constructor(
         }.awaitAll().flatten()
     }
 
-    private fun <T> read(url: String, block: (JsonReader) -> T): T {
+    private suspend fun <T> read(url: String, block: (JsonReader) -> T): T {
         sourceOverride?.let { return JsonReader.of(it(url)).use(block) }
-        val connection = (java.net.URL(url).openConnection() as HttpURLConnection).apply {
-            useCaches = false
-            connectTimeout = 12_000; readTimeout = 20_000
-            setRequestProperty("User-Agent", "DomiDex/1.0 private Android app")
-            setRequestProperty("Cache-Control", "no-cache")
-            setRequestProperty("Pragma", "no-cache")
-        }
-        try {
-            if (connection.responseCode !in 200..299) error("Katalogdienst: HTTP ${connection.responseCode}")
-            return JsonReader.of(connection.inputStream.source().buffer()).use(block)
-        } finally { connection.disconnect() }
+        return readPokemonCatalogHttp(url, httpCalls, block)
     }
 
     private fun readArray(reader: JsonReader, item: (JsonReader) -> Unit) {

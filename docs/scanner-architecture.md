@@ -93,6 +93,45 @@ Bis zu zwei OCR-Aufrufe laufen innerhalb des einzelnen Workers parallel.
 `app/src/main/java/com/dominik/cardvault/ui/ScanTaskResources.kt` verwaltet Ressourcen und native
 Bild-Leases; Abbruch darf von ML Kit noch verwendete Bitmaps nicht vorzeitig freigeben.
 
+## Katalog-HTTP: Abbruch und tatsächliches Ressourcenende
+
+`app/src/main/java/com/dominik/cardvault/data/catalog/PokemonCatalogHttp.kt` kapselt den
+Streaming-Transport des tatsächlich verdrahteten `PokemonVisualCatalog`. Ein strukturierter
+IO-Reader besitzt Aufruf, Antwort und Moshi-Reader. Bei Coroutine-Abbruch ruft das ebenfalls
+auf IO laufende Cleanup `Call.cancel()` auf und wartet auf das **wirkliche Readerende**.
+Cache-/Single-Flight-Sperren dürfen vorher nicht freigegeben werden. Es gibt dafür keinen
+abgekoppelten Hintergrundjob. Der Standardclient wird erst im IO-Reader verzögert aufgelöst;
+Katalogkonstruktion auf dem UI-Thread und synthetische `sourceOverride`-Tests initialisieren
+keinen TLS-Client. Bestehende Konstruktoren einschließlich Trailing-Lambda-Aufrufen bleiben erhalten.
+
+Ein echter lokaler Regressionstest belegte, warum `HttpURLConnection.disconnect()` allein
+nicht genügte. Die JVM-Server verwenden ausschließlich `127.0.0.1:0`; der Reader muss im
+unveränderten Zwei-Sekunden-Beobachtungsfenster enden, **bevor** der Testserver zwangsweise
+geschlossen wird. Gewöhnliche IO-Fehler dürfen keinen erfolgreichen Abbruch vortäuschen.
+
+| Gemessener Stand am 01.10.2026 | Ergebnis |
+| --- | --- |
+| Verhaltensgleiche Ausgangsextraktion | 4 Tests: 2 PASS, 2 FAIL; Header- und JSON-Body-Stall liefen nach Abbruch weiter. |
+| Strukturierte Hülle mit weiter bestehender URLConnection | Header-Stall PASS; bereits begonnener JSON-Body-Stall weiter FAIL. |
+| Vorhandenes OkHttp 4.12.0 mit `Call.cancel()` | 22/22 PASS in fünf Klassen: 12 Transport-/Besitz-/Vertragstests und 10 bestehende Katalog-/Cachetests. |
+
+Die archivierten JUnit-Fallzeiten für Header/Body betragen ursprünglich 2,160/2,034 s,
+im Zwischenstand 0,129/2,034 s und abschließend 0,370/0,019 s. Das sind **gesamte lokale
+Testfallzeiten einschließlich Aufbau/Cleanup**, keine isolierten Abbruchlatenzen, Smartphone-
+oder Provider-Messungen. Belege: `artifacts/release27-engineering-20261001/catalog-transport/`
+mit `RED-result.xml`, `first-green-candidate/` und `okhttp-green/` (lokal, ignoriert).
+
+Es wurde keine Dependency ergänzt oder aktualisiert. Erhaltene Android-Transportpolicy:
+GET, bisherige drei Header, kein HTTP-Cache, 12 s Verbindungs-/20 s Lese-Timeout,
+kein zusätzlicher Gesamt-/Schreib-Timeout, HTTP/1.1, bestehende Redirect-Einstellung ohne
+Schemawechsel, Verbindungs-Retry, transparentes Gzip und System-Proxy-Auswahl. TLS-/Zertifikats-
+oder Cookie-Schutz wird nicht abgeschwächt; Plattform-URLConnection und App-OkHttp besitzen
+dennoch unterschiedliche interne TLS-/Poolimplementierungen. Lokale Tests prüfen außerdem
+DE-Fehler→EN-Fallback, DE-Abbruch→kein EN-Fallback und keine Cachewärmung durch den alten Aufruf.
+Nicht bewiesen sind ein allgemein schnellerer Scan, sofortiger Abbruch beliebiger DNS-/TLS-
+oder nativer Plattformarbeit und eine harte 40-s-Gesamtzeit. Erkennung, Schwellen und Bilder
+wurden durch diesen Transportblock nicht verändert; Release 26 bleibt davon getrennt.
+
 ## Identität, Varianten und Bestätigung
 
 `app/src/main/java/com/dominik/cardvault/ui/ScanProcessingQueue.kt` reduziert anhand des
