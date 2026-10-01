@@ -158,7 +158,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | reproduced ACK races: 5/7 baseline failures, now 18 helper/Room tests pass; final worker-chain adjustment and initial/delta/outbox/conflict/offline/multi-client scale remain |
+| 4 Collection/binder sync | IN PROGRESS | ACK/failure/terminal-state fixes verified: 18 helper/Room cases, final combined 31 emulator tests and 74 JVM tests pass; initial/delta/outbox/conflict/offline/multi-client scale remain; see SYNC.md |
 | 5 Pricing/catalog | NOT TESTED | exact-identity centralized fetch/cache/fallback/retention evidence |
 | 6 Shared binder scale | NOT TESTED | 5k placements, pagination, final revoke check, caching |
 | 7 Camera stability | NOT TESTED | synthetic/emulator regression; real hardware matrix separate |

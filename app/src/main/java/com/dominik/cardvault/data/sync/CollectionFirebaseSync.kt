@@ -24,6 +24,7 @@ import com.dominik.cardvault.data.local.CollectionSyncProjection
 import com.dominik.cardvault.data.local.GUEST_OWNER_UID
 import com.dominik.cardvault.data.local.SYNC_CLEAN
 import com.dominik.cardvault.data.local.SYNC_CONFLICT
+import com.dominik.cardvault.data.local.SYNC_ERROR
 import com.dominik.cardvault.data.local.SYNC_PENDING
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
 import com.dominik.cardvault.auth.currentVerifiedFirebaseEntitlementAccount
@@ -700,6 +701,22 @@ class CollectionSyncWorker(
                 dao.deleteSyncOutboxIfCurrent(mutation.entryKey, mutation.mutationId)
                 continue
             }
+            if (entry.syncState == SYNC_CONFLICT || entry.syncState == SYNC_ERROR) {
+                // Older clients could leave a terminal entry with a pending outbox after a late
+                // failure callback. Expose its existing terminal decision; never push it in a loop.
+                val normalized = normalizePendingOutboxForTerminalEntry(database, mutation) { owner ->
+                    owner == uid && shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
+                }
+                if (normalized) {
+                    Log.w("DomiDexCollectionSync", "Lokaler Syncstatus benötigt eine ausdrückliche Entscheidung.")
+                    // The terminal row is excluded from the next pending query. Do not fail
+                    // the APPEND chain and stall unrelated healthy edits/sharing jobs.
+                    processed++
+                    continue
+                }
+                // A newer mutation/account change won the race. Preserve it without retrying here.
+                return@withContext Result.success()
+            }
             // CLEAN + pending outbox is the durable "commit ACKed, server reread pending"
             // checkpoint. Resume the pull directly after process death instead of replaying the
             // old payload against a potentially newer remote revision.
@@ -733,16 +750,8 @@ class CollectionSyncWorker(
                 is PushOutcome.Ack -> {
                     // Keep this idempotent outbox row until a fresh server read succeeds.
                     // CLEAN first allows an N+2 listener/read to apply after N+1 was ACKed.
-                    val shouldReread = database.withTransaction {
-                        val current = dao.syncOutbox(mutation.entryKey)
-                        if (current?.mutationId == mutation.mutationId && current.state == SYNC_PENDING) {
-                            dao.markEntrySynced(uid, mutation.syncId, outcome.revision, SYNC_CLEAN)
-                            true
-                        } else {
-                            if (current != null) dao.advanceOutboxBaseRevision(mutation.entryKey, outcome.revision)
-                            dao.markEntrySynced(uid, mutation.syncId, outcome.revision, SYNC_PENDING)
-                            false
-                        }
+                    val shouldReread = commitCollectionAck(database, mutation, outcome.revision) { owner ->
+                        owner == uid && shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
                     }
                     if (shouldReread) {
                         if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
@@ -767,13 +776,11 @@ class CollectionSyncWorker(
                         dao.deleteSyncOutboxIfCurrent(mutation.entryKey, mutation.mutationId)
                     }
                 }
-                is PushOutcome.Conflict -> database.withTransaction {
-                    dao.markOutboxConflict(mutation.entryKey, mutation.mutationId, outcome.reason)
-                    dao.markEntryConflict(uid, mutation.syncId)
+                is PushOutcome.Conflict -> commitCollectionFailure(database, mutation, SYNC_CONFLICT, outcome.reason) { owner ->
+                    owner == uid && shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
                 }
-                is PushOutcome.Terminal -> database.withTransaction {
-                    dao.markOutboxError(mutation.entryKey, mutation.mutationId, outcome.reason)
-                    dao.markEntrySyncError(uid, mutation.syncId)
+                is PushOutcome.Terminal -> commitCollectionFailure(database, mutation, SYNC_ERROR, outcome.reason) { owner ->
+                    owner == uid && shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
                 }
                 PushOutcome.Retry -> return@withContext Result.retry()
             }
