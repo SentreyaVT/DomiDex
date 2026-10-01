@@ -149,9 +149,9 @@ class RoomCollectionRepository(
         // One indexed view replaces repeated full price-table scans for every card and every
         // history timestamp. Room already emits immutable snapshots, so this cache is local to
         // the current calculation and can never become stale.
-        // Source filtering and ownership/identity checks are enforced by the DAO query.
+        // The DAO enforces ownership/source and orders by effective timestamp;
+        // groupBy preserves that order within each product's history.
         val cardmarketPrices = prices.groupBy(OwnedPriceHistoryProjection::cardId)
-            .mapValues { (_, values) -> values.sortedBy(OwnedPriceHistoryProjection::effectiveAtEpochMillis) }
         PortfolioSummary(collectionCards(rows, selections, cardmarketPrices),
             if (includePortfolioHistory) buildHistory(rows, prices, cardmarketPrices) else emptyList())
     }.flowOn(Dispatchers.Default)
@@ -170,17 +170,17 @@ class RoomCollectionRepository(
             CollectionCard(row.entryId, row.cardId, row.name, row.setName, row.collectorNumber,
                 CardLanguage.fromStorage(row.language), row.finish, row.variant, row.condition, row.quantity,
                 (latest ?: 0L) / 100.0, change, row.priceUpdatedAtEpochMillis.takeIf { latest != null }, row.notes,
-                row.acquisitionPriceMinor?.div(100.0), row.acquisitionDateEpochDay, accentFor(row.name), imageUrl = row.imageUrl)
-                .copy(
-                    binderId = row.binderId,
-                    externalProductId = row.externalProductId,
-                    rarity = row.rarity,
-                    effectOverride = row.effectOverride,
-                    sourceSetId = row.sourceSetId,
-                    sourceCardId = row.sourceCardId,
-                    priceSelection = selectionsByEntry[row.entryId]?.selectionOrNull()
-                        ?.takeIf { row.externalProductSource == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE },
-                )
+                row.acquisitionPriceMinor?.div(100.0), row.acquisitionDateEpochDay, accentFor(row.name),
+                binderId = row.binderId,
+                externalProductId = row.externalProductId,
+                imageUrl = row.imageUrl,
+                rarity = row.rarity,
+                effectOverride = row.effectOverride,
+                sourceSetId = row.sourceSetId,
+                sourceCardId = row.sourceCardId,
+                priceSelection = selectionsByEntry[row.entryId]?.selectionOrNull()
+                    ?.takeIf { row.externalProductSource == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE },
+            )
         }
     }
 
@@ -1098,7 +1098,8 @@ class RoomCollectionRepository(
         prices: List<OwnedPriceHistoryProjection>,
         cardmarketPrices: Map<String, List<OwnedPriceHistoryProjection>>,
     ): List<PortfolioPoint> =
-        prices.map { it.effectiveAtEpochMillis }.distinct().sorted().map { timestamp ->
+        // Only portfolioFor calls this, with the DAO's chronological history.
+        prices.map { it.effectiveAtEpochMillis }.distinct().map { timestamp ->
             val total = rows.sumOf { row ->
                 if (com.dominik.cardvault.data.catalog.isQuarantinedCardmarketIdentity(row.sourceCardId ?: row.cardId, row.externalProductId)) return@sumOf 0L
                 latestPriceAtOrBefore(cardmarketPrices[row.priceCardId].orEmpty(), timestamp)

@@ -2,7 +2,46 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: duplicate source declarations must agree
+### Latest local checkpoint: equivalent collection projection, measured conservatively
+
+The Room collection mapper constructs each card once instead of constructing and
+copying it. Portfolio history no longer re-sorts the already chronologically
+ordered DAO projection; grouping/distinct preserve that order. Queries, price
+selection/source checks, owner boundaries, schemas and sync behavior are unchanged.
+
+Two new real in-memory Room tests check every projected card field, alternate-price
+to real-trend transitions, saved selection retention, wrong-source rejection,
+out-of-order insertion/history valuation and owner A -> B -> A. Both pass before
+and after (0.860 s / 0.701 s), using an independent full-field expected model.
+These are value-parity tests, not speed assertions. Evidence:
+`artifacts/release27-engineering-20261001/card-projection-review/projection-control-*`.
+
+Identical 1k/5k/20k synthetic fixtures produce 87 verified samples in each run,
+with all 15 table/column hashes unchanged and identical query counts. Three warm
+samples per size are descriptive, not a causal benchmark or SLA. For example,
+5k portfolio median is 168.69 -> 161.75 ms, but 20k is 1170.45 -> 1172.48 ms;
+20k collection is 833.19 -> 860.13 ms. **No material large-binder wall-time speedup
+is established.** The justified improvement is removal of redundant work, not a
+promised end-to-end latency gain. Full comparison and manifest references:
+`artifacts/release27-engineering-20261001/card-projection-scale-comparison.json`.
+
+Full debug/test APK build, release Kotlin and debug/release lint PASS (3m 25s);
+891 JVM PASS, one optional dated-audit SKIP, zero failures, 130 classes. The fixed
+offline emulator regression separately passes **371/371**, zero skips/failures,
+with source/APK hashes unchanged and no network/reverse mappings. Evidence:
+`artifacts/android-regression/20261001T183659Z-47b91cac/manifest.json`,
+`artifacts/release27-engineering-20261001/card-projection-final-regression.log`
+and `card-projection-final-unit/`. App SHA256:
+`b85d6a5bb0a90fbef91ecadb88c913b2a4e9282027311a8907f91b8111931cf4`;
+test APK `54e6f101694c29e71d80e2cf9562be3b7cf4b2d8f28354b6b210e87e97895e78`.
+
+Signed v26 AAB SHA256 remains
+`079608e27bcb5d440252ed727e238b162b449f3dba4b1c28986d4a4570d9b14b`.
+No signing, release bundle, deployment, Firebase production or Xiaomi action.
+Overall release remains **NOT READY**; next evidence concerns actual SDK sync
+edge cases, not activation of the unfinished delta rollout.
+
+### Previous local checkpoint: duplicate source declarations must agree
 
 The detail parser now compares all positive raw thirdParty/pricing product
 declarations within the exact source-ID/finish/full-descriptor group. Conflicts
