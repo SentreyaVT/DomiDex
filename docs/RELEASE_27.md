@@ -2,7 +2,58 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: binder metadata without unused price work
+### Latest local checkpoint: contradictory printing identities fail closed
+
+The actual Android detail parser now compares a printing's positive
+`thirdParty.cardmarket` with its positive `pricing.cardmarket.idProduct`. When
+both exist and disagree, that printing remains selectable but neither product
+can supply its price. The conflict also survives metadata-cache reuse and cannot
+be resurrected by the maintained 30th-anniversary registry. Unrelated printings
+remain usable. Root-level IDs/prices are never inherited; pricing-only acceptance,
+invalid optional-ID handling and ordinary reviewed missing-link bridges retain
+their prior policy. Existing saved collection identities are not migrated.
+
+Ten JVM methods exercise the real parser, registry and printing linker, including
+both conflict directions, cache/name reuse, valid Reverse siblings in either
+source order, exact decimal/exponent IDs and malformed optional metadata. Initial
+six-method RED: four controls PASS, two precise unsafe-link failures. Final
+**10/10 PASS**. Full debug/test builds, release Kotlin and both lints pass in
+3m 5s; **875 JVM PASS / one pre-existing optional live-source SKIP**. Fixed offline
+API-36 matrix: **371/371 PASS**, 291.079 s, no skips/failures, unchanged source/APK
+hashes and offline/no-reverse checks. Evidence:
+`artifacts/android-regression/20261001T172210Z-2e2f523c/manifest.json` and
+`artifacts/release27-engineering-20261001/printing-identity-*`.
+Tested app APK SHA-256:
+`dfae12e4b09cb98e7de979ae34b14d5362e98f79c8d55d61ce7556dfaa7d36f1`;
+test APK: `489ddb2e66cb276609975aa52b71d0711645cd449796ff977f295731fe2b0a9d`.
+
+The complete dated **25 September** public snapshot was also replayed offline
+through today's production parser/linker/binder code on 1 October. All 19,738
+manifest hashes match actual files; all 19,748 snapshot files retain the same
+before/after aggregate `9af1f37909e9c5331599655cf26befd8b97ccf6e8aaf674a623d8d24ca07b32b`.
+The executed audit method passes without a skip (11.164 s); Gradle completes in
+2m 4s. Both CSVs and every production-printing JSONL row are byte-identical to the
+25 September final audit: **144 physical index sets, 19,463 cards, 27,131 canonical
+printing slots, 17,903 exact mappings, 17,867 strictly verified priced slots,
+9,227 unverified links and one empty mapping**. Of the other 36 exact mappings,
+29 lack their matching trend field and seven have prices but lack independent
+upstream detail. Do not describe 9,227 unverified links as proven UI price failures.
+
+Snapshot: `C:/Users/Dominik/AppData/Local/Temp/domidex-v27-price-audit-20260925/`;
+new outputs: `C:/Users/Dominik/AppData/Local/Temp/domidex-v27-price-replay-20261001-1729/`
+(`runtime/` and `report/`); evidence `price-snapshot-*` in the engineering artifact
+directory above. The broader report additionally retains special printings
+outside canonical slots; its counts are not interchangeable with binder counts.
+No new network/image check was run. A successful audit means complete iteration,
+not complete price coverage or present-day provider availability. The snapshot
+contains zero positive printing-ID contradictions and zero pricing-only IDs, so
+this conflict fix has **no demonstrated historical coverage gain**. It is a
+defensive identity correction, not a claim that missing prices are all fixed.
+
+No Xiaomi, release signing/AAB, version, schema, R8, Rules or production change.
+Overall release remains **NOT READY**.
+
+### Previous local checkpoint: binder metadata without unused price work
 
 `observeBinders` now returns only the five fields its sole repository consumer
 uses. Removed are two unused price aggregates and their linked-product/latest-price

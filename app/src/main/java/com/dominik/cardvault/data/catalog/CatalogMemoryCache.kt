@@ -73,7 +73,13 @@ internal data class CatalogSetCards(
     val byCollectorNumber: Map<String, List<PokemonVisualCard>>,
 )
 
-internal data class CatalogCardDetail(val rarity: String?, val printVariants: List<PokemonPrintVariant>, val image: String? = null)
+internal data class CatalogCardDetail(
+    val rarity: String?,
+    val printVariants: List<PokemonPrintVariant>,
+    val image: String? = null,
+    /** Explicit printing conflicts must survive cache reuse and registry attachment. */
+    val blockedCardmarketVariantIds: Set<String> = emptySet(),
+)
 
 /** Metadata only: no bitmaps, prices, or collection state. */
 internal class PokemonCatalogMetadataCache {

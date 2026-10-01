@@ -183,9 +183,12 @@ internal fun verifiedCardmarketProductId(sourceCardId: String): Long? =
 private fun attachVerifiedCardmarketProduct(
     sourceCardId: String,
     variants: List<PokemonPrintVariant>,
+    blockedVariantIds: Set<String> = emptySet(),
 ): List<PokemonPrintVariant> {
     val productId = verifiedCardmarketProductId(sourceCardId)
     return variants.map { variant ->
+        // A missing link can use a reviewed bridge; contradictory evidence cannot.
+        if (variant.id in blockedVariantIds) return@map variant.copy(cardmarketProductId = null)
         // A regular product bridge is not evidence for a stamp, foil or special edition.
         // English detail fallback uses lowercase "standard". Preserve its label,
         // finish and edition; only this eligibility comparison is case-insensitive.
@@ -475,6 +478,7 @@ class PokemonVisualCatalog private constructor(
             printVariants = attachVerifiedCardmarketProduct(
                 card.id,
                 detail.printVariants.ifEmpty { card.printVariants },
+                detail.blockedCardmarketVariantIds,
             ),
             smallImageUrl = card.smallImageUrl.ifBlank { cardImageUrl(detail.image.orEmpty(), "low") },
             largeImageUrl = card.largeImageUrl.ifBlank { cardImageUrl(detail.image.orEmpty(), "high") },
@@ -685,6 +689,7 @@ class PokemonVisualCatalog private constructor(
 
     private fun parseCardDetail(reader: JsonReader): CatalogCardDetail {
         val result = mutableListOf<PokemonPrintVariant>()
+        val blockedCardmarketVariantIds = mutableSetOf<String>()
         var rarity: String? = null
         var image: String? = null
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
@@ -694,6 +699,7 @@ class PokemonVisualCatalog private constructor(
                 var id = ""; var type = ""; var subtype = ""; var size = ""; var foil = ""
                 val stamps = mutableListOf<String>()
                 var cardmarketProductId: Long? = null
+                var pricingProductId: Long? = null
                 variantReader.beginObject(); while (variantReader.hasNext()) when (variantReader.nextName()) {
                     "variantId" -> id = variantReader.nextString()
                     "type" -> type = variantReader.nextString()
@@ -721,6 +727,7 @@ class PokemonVisualCatalog private constructor(
                         }
                         variantReader.endObject()
                     } else variantReader.skipValue()
+                    "pricing" -> pricingProductId = readPrintingPricingProductId(variantReader)
                     else -> variantReader.skipValue()
                 }; variantReader.endObject()
                 val finish = when {
@@ -737,11 +744,41 @@ class PokemonVisualCatalog private constructor(
                     normalizedStamps.takeIf { it.isNotEmpty() }?.let { add("Stempel: ${it.joinToString(" + ")}") }
                     foil.trim().takeIf(String::isNotEmpty)?.let { add("Folie: $it") }
                 }.joinToString(" · ")
-                if (id.isNotBlank()) result += PokemonPrintVariant(id, finish, sourceVariant, cardmarketProductId)
+                if (id.isNotBlank()) {
+                    val conflicting = cardmarketProductId != null && pricingProductId != null && cardmarketProductId != pricingProductId
+                    if (conflicting) blockedCardmarketVariantIds += id
+                    result += PokemonPrintVariant(id, finish, sourceVariant, cardmarketProductId.takeUnless { conflicting })
+                }
             }
             else -> reader.skipValue()
         }; reader.endObject()
-        return CatalogCardDetail(rarity, result.distinctBy { it.id }, image)
+        return CatalogCardDetail(rarity, result.distinctBy { it.id }, image, blockedCardmarketVariantIds.toSet())
+    }
+
+    /** Inspect only printing-level identity; never import provider prices or root IDs. */
+    private fun readPrintingPricingProductId(reader: JsonReader): Long? {
+        if (reader.peek() != JsonReader.Token.BEGIN_OBJECT) { reader.skipValue(); return null }
+        var productId: Long? = null
+        reader.beginObject()
+        while (reader.hasNext()) {
+            if (reader.nextName() != "cardmarket" || reader.peek() != JsonReader.Token.BEGIN_OBJECT) {
+                reader.skipValue()
+                continue
+            }
+            reader.beginObject()
+            while (reader.hasNext()) {
+                if (reader.nextName() == "idProduct" && reader.peek() == JsonReader.Token.NUMBER) {
+                    // Invalid/overflowing optional metadata must not throw into the
+                    // DE→EN fallback, which could resurrect a contradictory link.
+                    val numeric = reader.nextString().toBigDecimalOrNull()
+                    productId = try { numeric?.longValueExact()?.takeIf { it > 0L } }
+                    catch (_: ArithmeticException) { null }
+                } else reader.skipValue()
+            }
+            reader.endObject()
+        }
+        reader.endObject()
+        return productId
     }
 
     /** TCGdex returns a logo asset base path; Coil needs the actual image file. */
