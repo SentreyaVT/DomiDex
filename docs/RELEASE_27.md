@@ -158,7 +158,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; latest cloud-choice account-race fixes tested; full Android/Web convergence, delta integration and multi-client scale remain; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; local delta-to-business Room adapter 32/32 and full sync-package 141/141; full Android/Web convergence, active delta integration and multi-client scale remain; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
@@ -525,6 +525,16 @@ Remaining scanner-knowledge baseline regressions are still recorded for Gate 9;
 these selected passing suites are not a claim that every gate or full suite is green.
 
 ## Gate 4 local validation (in progress)
+
+Latest local checkpoint `30669e2` adds an **unwired** adapter between the prepared
+delta protocol/store and the existing four-type business apply function. It keeps
+payloads, generated outbox mutations, tombstone receipts, deferred markers and the
+checkpoint in one Room transaction. The new 32 cases pass in 1.836 s; the entire
+`data.sync` instrumentation package passes **141/141 in 5.348 s**, including those
+32 cases. Debug/test APK build passes in 38 s. Exact logs, hashes, rollback/reopen
+coverage and outstanding SDK/fence/fairness requirements are in `docs/SYNC.md`.
+This is not a Firestore worker activation, a network-read reduction or a physical
+multi-device result. The following paragraphs retain earlier checkpoint evidence.
 
 Committed ACK/failure changes preserve successor mutations and terminal decisions;
 late responses cannot recreate a pending row without an outbox or overwrite a newer
