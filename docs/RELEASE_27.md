@@ -2,7 +2,35 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: immutable parser-pattern reuse, exact old-output parity
+### Latest local checkpoint: current parser source passes isolated R8
+
+Source commit `2dce825` now passes a fresh offline R8-only run after the parser
+pattern reuse. The reviewed guard allows exactly 32 task paths ending at
+`minifyReleaseWithR8`, requires absent release credentials/configuration and
+isolates all new build output. Dry run PASS; actual **BUILD SUCCESSFUL in 3m36s**,
+30 actionable tasks (28 executed, two up-to-date), no build/configuration cache.
+Existing lifecycle deprecations remain; no missing-class or R8 warning appears.
+No release/build/dependency setting or conservative R8 rule was changed.
+
+All five DEX headers, file lengths, SHA-1 and Adler32 checks pass. R8 9.3.16,
+minAPI26; mapping **104,555,109 bytes**, SHA256
+`1a29ff1f5b8258ccca254616c11feaa9cd4b6723714438558ccf1f399b8286fa`,
+map ID `2b1d9746619e76b65cbfdcd34f06fb9aa59c9da3b3312c35f8596e883b3788f7`.
+This diagnostic mapping is NOT for v26 or any other existing upload; a later
+authorized final artifact needs its own matching mapping and package validation.
+
+Before/after all **441 input files**, **13 schemas** and **20 existing output/
+release files** (574,422,629 bytes) match exactly. The v26 signed AAB, its mapping
+and partial native ZIP also individually match their original immutable hashes.
+The isolated output contains **zero APK/AAB files**. Evidence:
+`artifacts/release27-engineering-20261001/r8-only-parser-regex/` includes the exact
+guard, dry-run/build logs, snapshots, DEX verification and preservation report.
+
+This is current-source R8/DEX validation, not a packaged runtime, native-symbol,
+retracing or Play acceptance test. No release signing, deployment, production or
+Xiaomi operation. Overall **NOT READY**; remaining mission gates still apply.
+
+### Previous local checkpoint: immutable parser-pattern reuse, exact old-output parity
 
 Six existing constant Regex patterns are now private immutable values instead of
 being constructed at seven per-line/per-token sites. Literal patterns, flags,
@@ -42,8 +70,8 @@ test `1b2c720bdf29c6621befbe8f6f30708af7fbee3c1e481dbb936044d0f56f5336`;
 source snapshot `779e3fae28689d57d4b11823aec97fcfc9975e94409db01ff6a2c76ae6ed77d4`.
 
 Proven benefit: repeated pattern construction is removed. No measured end-to-end
-speed, allocation-byte count or accuracy gain is claimed. The previous isolated R8
-run predates this hoist; its current-source repetition is separate. No release
+speed, allocation-byte count or accuracy gain is claimed. The earlier isolated R8
+run predates this hoist; the current-source repetition is recorded above. No release
 signing/AAB, production, deployment, Play or Xiaomi action. Overall **NOT READY**.
 
 ### Previous local checkpoint: actual analyzer batch transition characterization
