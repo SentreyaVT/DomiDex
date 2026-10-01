@@ -167,7 +167,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest root 818 JVM PASS/1 opt-in SKIP, 1,050 Web, 299 emulator, release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained, host-GPU rerun successful; physical/live contracts untested |
+| 13 Full regression | IN PROGRESS | latest root 824 JVM PASS/1 opt-in SKIP, 1,104 Web, 339 distinct emulator tests (327 regression + 12 manual-analysis), release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; physical/live contracts untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
@@ -300,6 +300,58 @@ image import/manual review, and virtual shutter → queue/save under the existin
 2/4-second bounds. The OS picker itself is not automated and no user photo is read.
 The app remains signed out/offline and no collection item or upload is created.
 Evidence: `gate7-root-scanner-input.log`.
+
+### Manual-analysis generation correction (local checkpoint `e5c396d`)
+
+The production `ScannerScreen` manual-analysis effect previously caught cancellation
+as an ordinary resolver failure and launched optional artwork in the whole-screen
+scope. Late A results and `finally` writes could then overwrite a newer B state or
+queue review. The extracted actual effect now keys the complete manual context and
+checks both live UI fields and its active effect job before publishing. Artwork is
+a structured child of that effect. Ordinary resolver I/O failure still exposes
+manual review; recognition thresholds, images, transport, auto-add and uploads are
+unchanged. ACCEPTED is still applied immediately, not held for optional artwork.
+Its existing `analysis=null` intentionally ends only that old optional preview.
+
+The new current null/queue-review generation resets only the two progress flags;
+the current invalid-frame branch also clears old artwork progress. An obsolete
+generation cannot clear a newer generation's progress. This is a UI ownership fix,
+not a claim of physical recognition accuracy or immediate network cancellation.
+
+Test-first evidence was retained under `artifacts/release27-engineering-20261001/`:
+- `manual-analysis-red-instrumentation.log`: **7 FAIL / 2 PASS** before guards.
+- `manual-analysis-live-context-red-instrumentation.log`: one additional **FAIL**
+  when the queue context changes synchronously before Compose can restart an effect.
+- `manual-analysis-green10-instrumentation.log`: **10/10 PASS**, 28.681 s.
+- `manual-analysis-invalid-frame-red-instrumentation.log`: **1 FAIL / 11 PASS**;
+  only the newly demonstrated invalid-frame progress flag remains stale. The
+  original assertions remain, with genuine recompose-tick and observed A→B→A cases.
+- `manual-analysis-final-green12-instrumentation.log`: **12/12 PASS**, 29.403 s,
+  after exactly one further effect callback clears that flag; tests unchanged.
+  RED source snapshots are retained under `manual-analysis/RED-source-*`.
+
+The tests use the actual orchestration with controlled synthetic callbacks and
+2×2 bitmap presence, not live OCR/network/camera or a full manual-correction UI E2E.
+They establish observed-generation and synchronous-current-context safety, not an
+unobservable A→B→A transition entirely inside one callback.
+
+Final offline Gradle check passes in **3m44s**, 104 tasks (22 executed / 82 up-to-date):
+debug APK, instrumentation APK, **824 JVM PASS / 1 existing opt-in SKIP / 0 FAIL**
+(825 tests / 120 classes), debug/release lint and Release Kotlin compilation.
+Log: `manual-analysis-final-regression-build.log`. No R8 release artifact or signing
+was performed. Tested debug APK SHA-256:
+`6B8D5B8D0C67B561EBB5BB69952C111A769C2FCF104FBA1B4241DC9C64564DB0`;
+test APK `B29EB1859B1381ADFDC124129D1C464C3D383A0D89FE354A0A7CF461098A3BE7`.
+The separate broader run on these same installed APKs passes **327/327 tests** in
+**274.389 s**: Room/migrations/outbox, owner isolation, selected and variant prices,
+private/shared binders, backup/account boundaries, camera lifecycle and fast input.
+Together with the separate 12 manual-analysis cases this is **339 distinct emulator
+tests**, not a complete physical-device or cloud integration test. Evidence:
+`manual-analysis-final-regression327-instrumentation.log`. These results cover the
+`e5c396d` source checkpoint, not subsequent transport or incremental-sync work.
+The emulator was restarted with the already proven host-GPU configuration for UI
+regression, offline and without snapshots; it still uses only an emulated camera.
+No physical Xiaomi operation, provider request, production change or push occurred.
 
 ### Gate 8: unchanged-input replay with additive identity observations
 

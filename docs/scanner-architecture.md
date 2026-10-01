@@ -48,6 +48,25 @@ Die unten beschriebenen freiwilligen Foto-/Feedbackwege sind davon getrennt.
   Ausstehende manuelle Prüfungen werden nicht automatisch zugunsten neuer Aufnahmen verworfen.
   Aufnahme-IDs ordnen Ergebnisse dem richtigen Bild zu; Sitzungsschutz verhindert unbemerkte Dubletten.
 
+Der manuelle Nachanalysepfad ist in `ManualScannerAnalysisEffect.kt` extrahiert
+und tatsächlich in `ScannerScreen` verdrahtet. Analyse, Queue-Prüfmodus, ausgewählte
+Aufnahme und Dateipfad bilden seinen Kontext. Vor jeder verspäteten Ergebnis- oder
+Loading-Veröffentlichung werden die echten aktuellen UI-Felder und der Effect-Job
+geprüft; Coroutine-Abbruch wird nicht zu einer normalen leeren Katalogantwort.
+Optionale Artwork-Arbeit gehört demselben Effect, nicht der gesamten Bildschirmlebenszeit.
+`ACCEPTED` wird weiterhin sofort in die vorhandene Queue übernommen, ohne automatisches
+Hinzufügen. Das dabei absichtliche `analysis=null` beendet die alte optionale Vorschau;
+sie darf nicht in den nächsten Scan schreiben. Nur die neue aktuelle inaktive bzw.
+ungültige Auswahl räumt übrig gebliebene Ladeanzeigen auf.
+
+Zwölf echte Compose-Tests auf der Produktions-Orchestrierung prüfen kontrollierte
+späte Resolver-/Artwork-Rückgaben, Queue-Wechsel vor Recomposition, Schließen,
+ungültiges Folgebild, beobachtetes A→B→A und unveränderte Wiederanzeige. Sie verwenden
+synthetische Identitäten ohne Netz, Kamera oder Nutzerdaten. Nicht behauptet wird
+die Erkennung eines A→B→A-Wechsels, den Compose innerhalb desselben Main-Callbacks
+überhaupt nicht beobachten konnte, oder ein schnellerer zugrunde liegender HTTP-Abbruch.
+Messungen und erhaltene RED-Nachweise: `docs/RELEASE_27.md`.
+
 ## Normalisierung und OCR
 
 `app/src/main/java/com/dominik/cardvault/ui/CardScanPipeline.kt` berücksichtigt EXIF-Rotation und
