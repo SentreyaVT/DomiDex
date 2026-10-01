@@ -562,3 +562,26 @@ this does not establish visual rendering, real authentication or live convergenc
 No release signing, R8 execution, AAB or deployment was performed. The older
 Collection cloud-resolution path has a separate account-generation review follow-up;
 the above results do not declare that follow-up or the entire release complete.
+
+### Shared-view refresh and local concurrency checkpoint
+
+The Web large-card dialog now retains only card identity and derives display fields
+from the newest permitted binder DTO. A successful refresh that hides prices or
+removes/replaces a card no longer leaves the old private content in the open dialog.
+The existing 15-second/visibility refresh contract remains; no instant-push claim.
+Root's extended regression passes **1,013/1,013 in 63 files**, 22.05 s, including
+13 new viewer cases with recorded RED evidence. Existing harness warnings remain.
+
+The real sharing handler/cache was additionally exercised with 10/40/80 concurrent
+synthetic readers, cold/warm cycles and three repetitions: **11/11 PASS**, 12.34 s.
+The 55 measured batches contain 2,350 requests and 5,028,810 logical document reads.
+Firestore/Auth/provider are doubles, not production load or billing measurements.
+At 80 separate-page readers, 480 simultaneous fake provider calls expose that the
+64-job deduplication bound is not a global upstream limiter. O(N) placement reads
+remain. These are documented open scaling limits, not hidden by PASS assertions.
+See Web `tests/sharing-concurrency/README.md` and local raw metrics under
+`outputs/sharing-concurrency/2026-10-01T03-23-31-232Z-20888.*` for scope and numbers.
+
+The independent Android review found a further pre-lease account-switch race in
+price-conflict resolution; it is under correction together with the older two-phase
+Collection cloud-resolution path. No whole-release readiness claim is made.
