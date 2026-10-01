@@ -47,10 +47,10 @@ export function evaluatePrinting({ runtime, source, provenance, products, prices
   });
   const print = matchingPrintings[0];
   const declaredIds = new Set(matchingPrintings.map(row => positiveId(row.thirdParty?.cardmarket)).filter(id => id !== null));
-  const conflicting = declaredIds.size > 1 || matchingPrintings.some(row => {
-    const declared = positiveId(row.thirdParty?.cardmarket), priced = positiveId(row.pricing?.cardmarket?.idProduct);
-    return declared !== null && priced !== null && declared !== priced;
-  });
+  // Pricing-only metadata can contradict a link, but never establishes one.
+  const evidenceIds = new Set([...declaredIds, ...matchingPrintings
+    .map(row => positiveId(row.pricing?.cardmarket?.idProduct)).filter(id => id !== null)]);
+  const conflicting = evidenceIds.size > 1;
   if (conflicting) reasons.add('SOURCE_PRINTING_IDENTITY_CONFLICT');
   const sourceId = conflicting ? null : declaredIds.values().next().value ?? null;
   const declaredProductId = conflicting || !print ? null : sourceId ?? positiveId(runtime.localVerifiedProductId);

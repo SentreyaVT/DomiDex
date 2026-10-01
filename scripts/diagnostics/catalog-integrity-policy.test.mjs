@@ -19,6 +19,38 @@ const fixture = (override = {}) => ({
   image: { status: 'AVAILABLE', contentType: 'image/webp' }, ...override,
 });
 
+test('split provider declarations agree or conflict independent of row order', () => {
+  for (const pricedId of [805531, 900002]) {
+    const rows = [
+      { variantId: 'special', type: 'Holo', size: 'Standard', thirdParty: { cardmarket: 805531 } },
+      { variantId: 'special', type: 'Holo', size: 'Standard', pricing: { cardmarket: { idProduct: pricedId } } },
+    ];
+    for (const orderedRows of [rows, [...rows].reverse()]) {
+      const data = fixture();
+      data.source.variants_detailed = orderedRows;
+      data.runtime.localVerifiedProductId = 805531;
+      const result = evaluatePrinting(data);
+      const conflict = pricedId !== 805531;
+      assert.equal(result.cardmarketProductId, conflict ? null : 805531);
+      assert.equal(result.sourcePriceEur, conflict ? null : 1.06);
+      assert.equal(result.priceEur, conflict ? null : 1.06);
+      assert.equal(result.priceStatus, conflict ? 'NOT_AVAILABLE' : 'AVAILABLE');
+      assert.equal(result.missingReasons.includes('SOURCE_PRINTING_IDENTITY_CONFLICT'), conflict);
+    }
+  }
+});
+
+test('pricing-only evidence still cannot establish a printing link', () => {
+  const data = fixture();
+  data.source.variants_detailed = [{ variantId: 'special', type: 'Holo', size: 'Standard',
+    pricing: { cardmarket: { idProduct: 805531 } } }];
+  const result = evaluatePrinting(data);
+  assert.equal(result.cardmarketProductId, null);
+  assert.equal(result.sourcePriceEur, null);
+  assert.equal(result.priceEur, null);
+  assert.equal(result.priceStatus, 'NOT_AVAILABLE');
+});
+
 test('above-main card keeps exact set, variant and product with no denominator clamp', () => {
   const result = evaluatePrinting(fixture());
   assert.equal(result.priceEur, 1.06);

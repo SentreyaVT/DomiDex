@@ -692,6 +692,7 @@ class PokemonVisualCatalog private constructor(
     private fun parseCardDetail(reader: JsonReader): CatalogCardDetail {
         val result = mutableListOf<PokemonPrintVariant>()
         val conflictingPrintings = mutableSetOf<Triple<String, String, String>>()
+        val declaredProductsByPrinting = mutableMapOf<Triple<String, String, String>, MutableSet<Long>>()
         var rarity: String? = null
         var image: String? = null
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
@@ -747,6 +748,9 @@ class PokemonVisualCatalog private constructor(
                     foil.trim().takeIf(String::isNotEmpty)?.let { add("Folie: $it") }
                 }.joinToString(" · ")
                 if (id.isNotBlank()) {
+                    val declarations = declaredProductsByPrinting.getOrPut(Triple(id, finish, sourceVariant)) { mutableSetOf() }
+                    cardmarketProductId?.let(declarations::add)
+                    pricingProductId?.let(declarations::add)
                     val conflicting = cardmarketProductId != null && pricingProductId != null && cardmarketProductId != pricingProductId
                     if (conflicting) conflictingPrintings += Triple(id, finish, sourceVariant)
                     result += PokemonPrintVariant(id, finish, sourceVariant, cardmarketProductId.takeUnless { conflicting })
@@ -754,6 +758,13 @@ class PokemonVisualCatalog private constructor(
             }
             else -> reader.skipValue()
         }; reader.endObject()
+        // Identical raw-ID/finish/descriptor rows may disagree even when each
+        // row's own thirdParty/pricing IDs agree. Never let source order pick a
+        // market product; one unambiguous declaration can fill a missing duplicate.
+        val productsByPrinting = result.groupBy { Triple(it.sourceVariantId, it.finish, it.variant) }
+            .mapValues { (_, rows) -> rows.mapNotNull(PokemonPrintVariant::cardmarketProductId).toSet() }
+        // Pricing-only metadata is evidence of disagreement, never a new link.
+        declaredProductsByPrinting.filterValues { it.size > 1 }.keys.forEach { conflictingPrintings += it }
         // Older source payloads reuse "generated" for Normal/Holo and Reverse.
         // Preserve existing reference IDs and only disambiguate additional physical
         // printings. Reserve every real source ID before allocating local suffixes.
@@ -769,10 +780,12 @@ class PokemonVisualCatalog private constructor(
                 while (localId in reservedIds || localId in usedIds) localId = "$base~${suffix++}"
             }
             usedIds += localId
-            if (Triple(printing.sourceVariantId, printing.finish, printing.variant) in conflictingPrintings) {
+            val identity = Triple(printing.sourceVariantId, printing.finish, printing.variant)
+            if (identity in conflictingPrintings) {
                 blockedCardmarketVariantIds += localId
             }
-            printing.copy(id = localId)
+            printing.copy(id = localId, cardmarketProductId =
+                productsByPrinting[identity]?.singleOrNull().takeUnless { identity in conflictingPrintings })
         }
         return CatalogCardDetail(rarity, printings, image, blockedCardmarketVariantIds.toSet())
     }

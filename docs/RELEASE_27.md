@@ -2,7 +2,60 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: reused source IDs retain distinct physical printings
+### Latest local checkpoint: duplicate source declarations must agree
+
+The detail parser now compares all positive raw thirdParty/pricing product
+declarations within the exact source-ID/finish/full-descriptor group. Conflicts
+block that printing, its cached metadata and maintained-registry fallback. A
+single unambiguous thirdParty declaration can fill an otherwise missing duplicate
+link; pricing-only evidence can contradict but cannot establish a link. Other
+finishes, stamps and descriptors are unchanged; no stored-data migration.
+
+Six real-parser JVM methods cover both source orders, two/three products, healthy
+siblings, registry/cache, agreeing duplicates, one missing declaration and split
+provider declarations. The prior first-wins positive test now correctly uses
+agreeing products; the negative behavior has dedicated failing-before tests.
+Full current result: **891 PASS, one optional dated-audit SKIP, zero failures**,
+892 methods in 130 classes. Debug/test APKs, release Kotlin compile and debug/release
+lint pass in 3m 8s. This is not an R8/shrunk/signed release build. Evidence:
+`artifacts/release27-engineering-20261001/cross-row-printing-final-regression.log`
+and `cross-row-printing-final-unit/`; targeted RED evidence is retained separately.
+The six-method split-declaration addition reproduced one failure before the fix.
+
+Independent reporting policy applies the same raw-evidence disagreement rule
+without importing pricing-only links. **26/26** policy/report tests pass; the new
+split-declaration test failed before that correction. Snapshot replay separately
+ran the real parser/linker/binder enumeration: **one PASS, no skip**, 21.37 s test,
+2m 39s offline Gradle run. All 19,738 manifest hashes and 19,748 physical files
+still match before/after (aggregate
+`9af1f37909e9c5331599655cf26befd8b97ccf6e8aaf674a623d8d24ca07b32b`).
+
+Across **31,615** output printing rows, **31,611 are deep-field identical**.
+Exactly three ambiguous links are removed: `sv10-096` Holo/Standard,
+`sv03-125` and `sv10.5b-034` Holo/player-rewards-program. Exactly one independently
+declared link is recovered: `hgss2-82` Normal/ross-cawthorn -> **868187**. That
+product's trend is absent, so it remains unpriced rather than borrowing a value.
+All 144 physical sets, 19,463 cards and 27,349 canonical binder slots are retained;
+17,867 strictly verified priced slots remain unchanged. Both broader before/after
+reports use the same stricter current policy: **20,252 available / 11,363 unavailable**,
+zero technical price errors. No live/image/physical-camera coverage is claimed.
+Fresh runtime/before-report/report outputs:
+`C:/Users/Dominik/AppData/Local/Temp/domidex-v27-price-replay-20261001-1819/`.
+Full evidence prefix: `artifacts/release27-engineering-20261001/cross-row-*`.
+
+Web counterpart is locally committed as `e40c158`: 18 source-product regressions,
+eight actual add-transaction callback tests with a mechanical SDK double, existing
+1,285-unit/103-cache/31-local-SDK suites and isolated build PASS. These eight
+transaction-double tests are not claimed as additional real Firebase E2E coverage.
+No production write, Rules change, signing, release artifact or Xiaomi action.
+The unchanged signed v26 AAB hash was rechecked. The fixed offline emulator
+regression passes **371/371**, 341.799 s, exact inputs unchanged, no network/reverse:
+`artifacts/android-regression/20261001T181956Z-14e48a44/manifest.json`.
+APK SHA256 `f937f0d042f6a2d200ea1a93dff2958c7958b6c2a534cbe0faec4be31c027ed5`;
+test APK `489ddb2e66cb276609975aa52b71d0711645cd449796ff977f295731fe2b0a9d`.
+Overall release remains **NOT READY**.
+
+### Previous local checkpoint: reused source IDs retain distinct physical printings
 
 Android no longer deduplicates printings by raw ID alone. The existing first
 reference ID stays unchanged; additional different finish/descriptor records

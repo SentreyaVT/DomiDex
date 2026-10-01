@@ -71,9 +71,9 @@ class GeneratedPrintingIdentityTest {
         assertEquals(listOf(2.35, 4.75), matches(parsed).map { it.trendPriceEur })
     }
 
-    @Test fun identicalPhysicalDescriptorsDeduplicateFirstWinsWithoutChangingTheExistingId() = runBlocking {
+    @Test fun identicalPhysicalDescriptorsAndProductsDeduplicateWithoutChangingTheExistingId() = runBlocking {
         val first = printing("generated", "Normal", firstProduct)
-        val duplicate = printing("generated", "Normal", secondProduct)
+        val duplicate = printing("generated", "Normal", firstProduct)
         val parsed = detail(source, listOf(first, first, duplicate))
 
         assertEquals(listOf(PokemonPrintVariant("generated", "Normal", "Standard", firstProduct)), parsed.printVariants)
