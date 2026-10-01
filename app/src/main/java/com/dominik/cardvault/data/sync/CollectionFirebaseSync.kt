@@ -32,7 +32,6 @@ import com.dominik.cardvault.data.local.SYNC_PENDING
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
 import com.dominik.cardvault.auth.currentVerifiedFirebaseEntitlementAccount
 import com.dominik.cardvault.auth.effectiveFirebaseEntitlements
-import com.dominik.cardvault.data.knowledge.ScanKnowledgeScheduler
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentChange
@@ -171,12 +170,19 @@ internal fun shouldApplyCloudResolutionSnapshot(localRevision: Long, remoteRevis
  * Owns the authenticated collection namespace. Guest rows and Firebase rows never share a query.
  * The listener mirrors clean remote snapshots into Room; Room remains the only UI source.
  */
-class FirebaseCollectionSession(
-    private val context: Context,
+class FirebaseCollectionSession internal constructor(
     private val database: CardVaultDatabase,
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
-    private val firestore: FirebaseFirestore = FirebaseFirestore.getInstance(),
+    private val auth: FirebaseAuth,
+    private val firestore: FirebaseFirestore,
+    private val scheduling: CollectionSessionScheduling,
 ) : AutoCloseable {
+    constructor(
+        context: Context,
+        database: CardVaultDatabase,
+        auth: FirebaseAuth = FirebaseAuth.getInstance(),
+        firestore: FirebaseFirestore = FirebaseFirestore.getInstance(),
+    ) : this(database, auth, firestore, DefaultCollectionSessionScheduling(context))
+
     private val mutableOwnerUid = MutableStateFlow(collectionOwnerForUid(canonicalCollectionOwnerUid(auth.currentUser)))
     val ownerUid: StateFlow<String> = mutableOwnerUid
     private val localDataOwnerSession = com.dominik.cardvault.data.backup.LocalDataOwnerSession(mutableOwnerUid.value)
@@ -217,9 +223,9 @@ class FirebaseCollectionSession(
             )
             previousUid to entitlementGeneration
         }
-        if (uid == null) PrivateBinderSyncScheduler.cancelAllPeriodic(context)
+        if (uid == null) scheduling.cancelAllPrivateBinderPeriodic()
         else if (previousUid != null && previousUid != uid) {
-            PrivateBinderSyncScheduler.cancelPeriodic(context, previousUid)
+            scheduling.cancelPrivateBinderPeriodic(previousUid)
         }
         if (uid == null || user == null) return
         scope.launch {
@@ -237,7 +243,7 @@ class FirebaseCollectionSession(
                     return@launch
                 } ?: return@launch
             if (!account.entitlements.canUseAppBackend) {
-                PrivateBinderSyncScheduler.cancelPeriodic(context, uid)
+                scheduling.cancelPrivateBinderPeriodic(uid)
                 synchronized(entitlementLock) {
                     if (entitlementGeneration == generation && mutableOwnerUid.value == uid)
                         mutableCloudState.value = CollectionCloudState(CollectionCloudStatus.NO_ACCESS, uid)
@@ -257,7 +263,7 @@ class FirebaseCollectionSession(
                             if (error != null || (snapshot != null && !snapshot.metadata.isFromCache && !effectiveFirebaseEntitlements(account.entitlements, snapshot.data.orEmpty()).canUseAppBackend)) {
                                 entitledOwnerUid = null
                                 detachRemoteListenerLocked()
-                                PrivateBinderSyncScheduler.cancelPeriodic(context, uid)
+                                scheduling.cancelPrivateBinderPeriodic(uid)
                                 mutableCloudState.value = CollectionCloudState(
                                     if (error == null || error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED)
                                         CollectionCloudStatus.NO_ACCESS else CollectionCloudStatus.LOCAL_ONLY, uid,
@@ -270,7 +276,7 @@ class FirebaseCollectionSession(
             if (!activated) return@launch
             requestSync()
             // Wake any durable evidence queued while this same entitled account was offline.
-            ScanKnowledgeScheduler.schedule(context)
+            scheduling.scheduleScanKnowledge()
         }
     }
 
@@ -292,10 +298,10 @@ class FirebaseCollectionSession(
             return
         }
         if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return
-        CollectionSyncScheduler.schedule(context, uid, userInitiated = true)
+        scheduling.scheduleCollection(uid, userInitiated = true)
         // Separate bounded worker/outbox: no second full-collection listener is introduced.
-        PrivateBinderSyncScheduler.schedule(context, uid, userInitiated = true)
-        PrivateBinderSyncScheduler.ensurePeriodic(context, uid)
+        scheduling.schedulePrivateBinder(uid, userInitiated = true)
+        scheduling.ensurePrivateBinderPeriodic(uid)
         refreshCloudState()
     }
 

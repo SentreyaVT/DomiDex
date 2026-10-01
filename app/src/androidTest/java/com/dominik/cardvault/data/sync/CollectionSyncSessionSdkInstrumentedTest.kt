@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.net.ConnectivityManager
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import android.security.NetworkSecurityPolicy
 import androidx.room.Room
@@ -41,6 +42,9 @@ import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
@@ -85,6 +89,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
     private lateinit var originalMutation: CollectionSyncOutboxEntity
     private var initialRereadDocument: DocumentSnapshot? = null
     private var continuationCount = 0
+    private var diagnosticSession: FirebaseCollectionSession? = null
 
     @Before fun setup() = runBlocking(Dispatchers.IO) {
         val args = InstrumentationRegistry.getArguments()
@@ -100,6 +105,8 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "confirmedRereadCompletesCheckpoint" -> "confirmed"
             "pendingOverlayRereadRetainsCheckpointUntilActualAck" -> "pending-overlay"
             "lateParentPlacementIsRecoveredWithoutRemoteRewrite" -> "late-parent"
+            "sessionHealthyStartConfirmsAccessWithoutRunningWorkers" -> "session-healthy"
+            "offlineSessionNeedsExplicitRecheckWithinObservedReconnectWindow" -> "session-offline"
             else -> error("Unreviewed collection-session proof method")
         }
         owner = "sdk-proof-collection-$scenario"
@@ -666,6 +673,239 @@ class CollectionSyncSessionSdkInstrumentedTest {
         "binderSetKey" to "tcgdex-synthetic-set", "binderName" to "Synthetic collection set", "binderHeroAsset" to null,
     )
 
+    @Test fun sessionHealthyStartConfirmsAccessWithoutRunningWorkers() = runBlocking(Dispatchers.IO) {
+        withTimeout(120_000) {
+            check(scenario == "session-healthy")
+            requireActualEntitlement()
+            assertDiagnosticServerEmpty()
+            val before = localSnapshot()
+            val effects = SessionEffectRecorder()
+            val session = newDiagnosticSession(effects)
+            val authEvents = Channel<String?>(Channel.UNLIMITED)
+            val monitor = FirebaseAuth.IdTokenListener { changed ->
+                authEvents.trySend(canonicalCollectionOwnerUid(changed.currentUser))
+            }
+            try {
+                startWithInitialAuthCallbackFence(session, monitor, authEvents)
+                awaitDiagnosticActivation(session, effects)
+                assertDiagnosticCheckpoint(before)
+                assertDiagnosticServerEmpty()
+                assertEquals(owner, session.ownerUid.value)
+                assertEquals(owner, session.cloudState.value.ownerUid)
+                assertTrue(session.cloudState.value.accessConfirmed)
+                // PENDING is legitimate: the seam records scheduling but deliberately runs no worker.
+                assertTrue(session.cloudState.value.status in setOf(CollectionCloudStatus.LOCAL_ONLY,
+                    CollectionCloudStatus.PENDING, CollectionCloudStatus.ACTIVE))
+                closeDiagnosticSession(session, monitor, effects)
+                assertDiagnosticCheckpoint(before)
+                assertDiagnosticServerEmpty()
+            } finally {
+                subject.auth.removeIdTokenListener(monitor)
+                session.close()
+                diagnosticSession = null
+                // The actual Auth SDK may have posted a callback before removal; do not close its channel.
+            }
+        }
+    }
+
+    @Test fun offlineSessionNeedsExplicitRecheckWithinObservedReconnectWindow() = runBlocking(Dispatchers.IO) {
+        withTimeout(120_000) {
+            check(scenario == "session-offline")
+            // A genuine online entitlement before the experiment excludes missing claims/Rules as cause.
+            requireActualEntitlement()
+            assertDiagnosticServerEmpty()
+            val before = localSnapshot()
+            val effects = SessionEffectRecorder()
+            subject.firestore.disableNetwork().bounded()
+            val session = newDiagnosticSession(effects)
+            val authEvents = Channel<String?>(Channel.UNLIMITED)
+            val monitor = FirebaseAuth.IdTokenListener { changed ->
+                authEvents.trySend(canonicalCollectionOwnerUid(changed.currentUser))
+            }
+            try {
+                startWithInitialAuthCallbackFence(session, monitor, authEvents)
+                // start() invokes handleIdTokenState once itself and receives one actual initial SDK
+                // IdToken callback. LOCAL_ONLY alone could be the first attempt; generation >= 2 is
+                // the explicit fence against enabling transport before the second/current attempt.
+                withTimeout(25_000) {
+                    session.cloudState.first { state ->
+                        diagnosticGeneration(session) >= 2L && state.ownerUid == owner &&
+                            state.status == CollectionCloudStatus.LOCAL_ONLY && !state.accessConfirmed
+                    }
+                }
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                assertTrue("Initial SDK callbacks must be consumed before the reconnect experiment",
+                    authEvents.tryReceive().isFailure)
+                val settledGeneration = diagnosticGeneration(session)
+                assertTrue(settledGeneration >= 2L)
+                assertEquals(CollectionCloudState(CollectionCloudStatus.LOCAL_ONLY, owner), session.cloudState.value)
+                assertTrue(effects.snapshot().isEmpty())
+                assertDiagnosticCheckpoint(before)
+
+                subject.firestore.enableNetwork().bounded()
+                // Real Source.SERVER, not a manufactured connectivity event or a cached snapshot.
+                val access = subject.firestore.document("accountAccess/$owner").get(Source.SERVER).bounded()
+                assertFalse(access.metadata.isFromCache)
+                assertFalse(access.metadata.hasPendingWrites())
+                assertFalse(access.exists())
+                requireActualEntitlement()
+                assertDiagnosticServerEmpty()
+                assertEquals("RECONNECT_CHARACTERIZATION_NOT_REPRODUCED: a new session generation ran",
+                    settledGeneration, diagnosticGeneration(session))
+                assertTrue("RECONNECT_CHARACTERIZATION_NOT_REPRODUCED: Auth emitted a new token event",
+                    authEvents.tryReceive().isFailure)
+
+                val observationStarted = SystemClock.elapsedRealtime()
+                val observedActivation = withTimeoutOrNull(2_000) {
+                    session.cloudState.first { state ->
+                        state != CollectionCloudState(CollectionCloudStatus.LOCAL_ONLY, owner)
+                    }
+                }
+                val observedMillis = SystemClock.elapsedRealtime() - observationStarted
+                assertNull("RECONNECT_CHARACTERIZATION_NOT_REPRODUCED: state changed in bounded " +
+                    "${observedMillis}ms observation (not a permanent-block or latency claim)", observedActivation)
+                assertEquals(settledGeneration, diagnosticGeneration(session))
+                assertTrue("Auth activity makes this particular no-token-event characterization inconclusive",
+                    authEvents.tryReceive().isFailure)
+                assertTrue(effects.snapshot().isEmpty())
+                assertDiagnosticCheckpoint(before)
+                assertDiagnosticServerEmpty()
+
+                // Positive control IN THIS SAME CASE: actual production entry point, actual verification,
+                // actual listeners, scheduling requests observed, but no worker delivery/execution.
+                session.requestSync()
+                awaitDiagnosticActivation(session, effects)
+                assertTrue(diagnosticGeneration(session) > settledGeneration)
+                assertEquals(owner, session.ownerUid.value)
+                assertTrue(session.cloudState.value.accessConfirmed)
+                assertDiagnosticCheckpoint(before)
+                assertDiagnosticServerEmpty()
+                closeDiagnosticSession(session, monitor, effects)
+                assertDiagnosticCheckpoint(before)
+                assertDiagnosticServerEmpty()
+            } finally {
+                subject.auth.removeIdTokenListener(monitor)
+                session.close()
+                diagnosticSession = null
+                // No global network toggle to restore: only this named SDK was disabled. Existing
+                // @After terminates/deletes that SDK even if a preceding assertion/enable failed.
+            }
+        }
+    }
+
+    private fun newDiagnosticSession(effects: SessionEffectRecorder): FirebaseCollectionSession {
+        check(diagnosticSession == null)
+        return FirebaseCollectionSession(database = database, auth = subject.auth,
+            firestore = subject.firestore, scheduling = effects).also {
+            diagnosticSession = it
+            assertEquals(0L, diagnosticGeneration(it))
+        }
+    }
+
+    private suspend fun startWithInitialAuthCallbackFence(
+        session: FirebaseCollectionSession,
+        monitor: FirebaseAuth.IdTokenListener,
+        authEvents: Channel<String?>,
+    ) {
+        withContext(Dispatchers.Main.immediate) {
+            session.start()
+            // This observer's actual SDK initial event is registered after Session's initial event.
+            subject.auth.addIdTokenListener(monitor)
+        }
+        awaitOwnerEvent(authEvents, owner)
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        // Read-only inspection, never a fabricated token, injected completion or altered generation.
+        // The StateFlow waiter additionally checks >=2, so no SDK-posting-order assumption is needed
+        // to accept LOCAL_ONLY from the initial direct invocation alone.
+        assertTrue("Actual Session initial IdToken callback must already have run",
+            diagnosticGeneration(session) >= 2L)
+    }
+
+    private fun diagnosticGeneration(session: FirebaseCollectionSession): Long =
+        FirebaseCollectionSession::class.java.getDeclaredField("entitlementGeneration").let { field ->
+            field.isAccessible = true
+            field.getLong(session)
+        }
+
+    private suspend fun awaitDiagnosticActivation(session: FirebaseCollectionSession, effects: SessionEffectRecorder) {
+        withTimeout(25_000) {
+            session.cloudState.first { it.ownerUid == owner && it.accessConfirmed && diagnosticGeneration(session) >= 2L }
+            effects.awaitActivation(owner)
+        }
+        assertTrue(session.cloudState.value.accessConfirmed)
+        effects.assertOnlyExpectedActivation(owner)
+    }
+
+    private suspend fun assertDiagnosticCheckpoint(before: Map<String, List<List<String?>>>) {
+        assertEquals("Session observer must not ACK or mutate the pending local fixture", before, localSnapshot())
+        assertEquals(originalEntry, dao.getCollectionEntryBySyncId(owner, ENTRY))
+        assertEquals(originalMutation, dao.syncOutbox(originalMutation.entryKey))
+        assertEquals(listOf(originalMutation), dao.pendingSyncOutbox(owner, 2))
+        assertEquals(0, continuationCount)
+    }
+
+    private suspend fun assertDiagnosticServerEmpty() {
+        for (collection in listOf("collectionEntries", "privateBinders", "privateBinderPlacements",
+            "collectionLayouts", "collectionPriceSelections")) {
+            assertEquals("Session diagnostic fixture must stay empty remotely: $collection",
+                emptyMap<String, Map<String, Any>>(), lateServerRows(collection))
+        }
+        val access = control.firestore.document("accountAccess/$owner").get(Source.SERVER).bounded()
+        assertFalse(access.metadata.isFromCache)
+        assertFalse(access.metadata.hasPendingWrites())
+        assertFalse(access.exists())
+    }
+
+    private fun closeDiagnosticSession(session: FirebaseCollectionSession,
+        monitor: FirebaseAuth.IdTokenListener, effects: SessionEffectRecorder) {
+        subject.auth.removeIdTokenListener(monitor)
+        session.close()
+        diagnosticSession = null
+        val before = effects.snapshot()
+        session.requestSync() // Closed session must not revive or enqueue work.
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        assertEquals(before, effects.snapshot())
+    }
+
+    private data class SessionEffect(val kind: String, val ownerUid: String? = null, val userInitiated: Boolean? = null)
+
+    /** Recorder substitutes ONLY scheduling delivery; no Firebase/Task/entitlement callback is mocked. */
+    private class SessionEffectRecorder : CollectionSessionScheduling {
+        private val lock = Any()
+        private val recorded = mutableListOf<SessionEffect>()
+        private var overflow = false
+        private val wake = Channel<Unit>(Channel.CONFLATED)
+        private fun record(event: SessionEffect) {
+            synchronized(lock) {
+                if (recorded.size < 64) recorded.add(event) else overflow = true
+            }
+            wake.trySend(Unit)
+        }
+        fun snapshot(): List<SessionEffect> = synchronized(lock) {
+            check(!overflow) { "Unexpected scheduling storm in bounded fixture" }
+            recorded.toList()
+        }
+        private fun expected(owner: String) = setOf(
+            SessionEffect("collection", owner, true), SessionEffect("private", owner, true),
+            SessionEffect("ensure-periodic", owner), SessionEffect("scan-knowledge"),
+        )
+        suspend fun awaitActivation(owner: String) {
+            while (!snapshot().containsAll(expected(owner))) wake.receive()
+        }
+        fun assertOnlyExpectedActivation(owner: String) {
+            val found = snapshot()
+            assertTrue(found.containsAll(expected(owner)))
+            assertTrue("No foreign owner, unexpected cancellation or altered scheduling flags: $found",
+                found.all { it in expected(owner) })
+        }
+        override fun scheduleCollection(ownerUid: String, userInitiated: Boolean) = record(SessionEffect("collection", ownerUid, userInitiated))
+        override fun schedulePrivateBinder(ownerUid: String, userInitiated: Boolean) = record(SessionEffect("private", ownerUid, userInitiated))
+        override fun ensurePrivateBinderPeriodic(ownerUid: String) = record(SessionEffect("ensure-periodic", ownerUid))
+        override fun cancelPrivateBinderPeriodic(ownerUid: String) = record(SessionEffect("cancel-periodic", ownerUid))
+        override fun cancelAllPrivateBinderPeriodic() = record(SessionEffect("cancel-all-periodic"))
+        override fun scheduleScanKnowledge() = record(SessionEffect("scan-knowledge"))
+    }
+
     private suspend fun awaitOwnerEvent(events: Channel<String?>, expected: String) = withTimeout(20_000) {
         while (events.receive() != expected) { /* Await the actual SDK listener event, not currentUid alone. */ }
     }
@@ -733,6 +973,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             try { action() } catch (caught: Throwable) { if (failure == null) failure = caught else failure?.addSuppressed(caught) }
         }
         try {
+            attempt { diagnosticSession?.close(); diagnosticSession = null }
             attempt { gate?.cancelCalls() }
             firestores.asReversed().forEach { firestore -> attempt { firestore.terminate().bounded() } }
             auths.asReversed().forEach { auth -> attempt { auth.signOut() } }

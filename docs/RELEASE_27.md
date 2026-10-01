@@ -2,7 +2,40 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: isolated R8 execution without release packaging
+### Latest local checkpoint: actual offline-start session characterization
+
+A mechanical per-session scheduling adapter preserves all six existing production
+effects and makes the actual session safe to exercise with named demo SDK clients.
+It does not replace authentication, owner checks, server verification, listeners,
+Room or Rules. No connectivity fix is included in this checkpoint.
+
+All **9 actual local SDK cases PASS**, including the original seven worker cases.
+A fresh session started with its named Firestore transport disabled stays
+unconfirmed/local after transport is re-enabled and real SERVER reads succeed.
+No Auth/generation change or activation occurs in the bounded two-second window;
+the same session's explicit `requestSync()` then genuinely verifies and activates.
+This reproduces a missing session recheck in that controlled case, not a permanent
+block, Android OS connectivity delivery, process cold boot or a latency SLA.
+The healthy-session control activates without changing the pending Room fixture.
+
+Independent Admin preflight/readback checks cover all nine methods, ten nominal
+Google accounts and the complete server tree. Both diagnostic owners stay empty;
+all eight observed Room tables and exact pending entry/outbox remain unchanged.
+The owned local servers stop, ports/reverse mappings are empty, instrumentation is
+idle and frozen inputs stay unchanged. Twelve pure host validators pass separately.
+Evidence: Web `outputs/collection-sync-session-local/2026-10-01T19-53-27-370Z-c302ec6569884feb9b8e423dcb94cf5b/`.
+
+Root also verifies **899 JVM PASS / 1 existing optional SKIP**, 131 classes, debug
+and test builds, release Kotlin and both lints (**4m 17s**), plus **11/11** actual
+Room session controls. Installed APK identity and cleanup are recorded in
+`artifacts/release27-engineering-20261001/collection-session-room-195240-3b974eef/manifest.json`:
+app `259b5319722a1e3d9a949f1e21e74f8ce90666953866c3c0644593329d5acd2b`,
+test `3028b9ac412af64e76f9aa25d792d504334f8946cb8b43d5c0ce85c469f8548e`.
+Only the offline API-36 emulator was installed. No production, Xiaomi, signing,
+release APK/AAB or deployment. Automatic recovery remains the next scoped fix;
+the wider release remains **NOT READY**.
+
+### Previous local checkpoint: isolated R8 execution without release packaging
 
 On source commit `345bf63`, the existing release R8 configuration was executed
 offline in a new isolated app build directory. The reviewed init guard permits
