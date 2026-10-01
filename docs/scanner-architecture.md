@@ -82,6 +82,11 @@ gebündelten **Latin-Recognizer von ML Kit lokal**. Script-Enumwerte für Japani
 kein Nachweis eines aktiven CJK-Erkennungspfads oder einer sicher bestimmten Kartensprache.
 Original-, Kontrast-, Schwellenwert- und gegebenenfalls invertierte Ausschnitte liefern OCR-Evidenz.
 Die Parser behandeln Setcodes, Promo-Präfixe und Sammlernummern getrennt von KP-/Angriffswerten.
+Sechs konstante Suchmuster werden privat wiederverwendet; veränderliche Matcher,
+Ergebnisse und Registryantworten bleiben ungecacht. Der Vorher-/Nachhervergleich
+am echten Parser erhält alle Ergebnisse in 960 synthetischen Fällen einschließlich
+vollständiger Feld-/Listenstruktur und paralleler Auswertung. Das vermeidet
+wiederholte Musterkonstruktion, belegt aber keine kürzere Gesamtscanzeit.
 
 Der exakte OCR-Cache gilt ausschließlich innerhalb einer Aufnahme: ROI, Vorverarbeitung, Orientierung
 und Bildmaße gehören zum Schlüssel. Ergebnisse werden nicht zwischen verschiedenen Karten übernommen.

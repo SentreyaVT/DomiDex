@@ -2,7 +2,51 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: actual analyzer batch transition characterization
+### Latest local checkpoint: immutable parser-pattern reuse, exact old-output parity
+
+Six existing constant Regex patterns are now private immutable values instead of
+being constructed at seven per-line/per-token sites. Literal patterns, flags,
+contains/replace/split/matches operations and input order remain identical. No
+Matcher, result, registry response or capture is cached. Reversing only those
+declarations and uses in memory reproduces the complete original file SHA256
+`2efb2b0cec6ad50e93cb6e3ec9bdc676f27c1292eb42f2c4281959e9ba7df0a8`;
+new file SHA256 `48718d226c03fcfcadaada6bba4b302e75d0fe46fb65a7d2650e56deec34f356`.
+No callback, pixel, threshold, timeout, SDK, synchronization or permission changed.
+
+The actual old parser was captured BEFORE the product edit, then independently
+passed its frozen control before the hoist (test commit `991e99b`). The deliberate
+initial missing-golden failure is a capture step, not a product RED. All **960**
+ordered synthetic inputs and full results retain the same **1,198,843-byte** framed
+snapshot and SHA256 `b39195cd95eaff9566b0b7c866831b0a3fd5e97273b92509d61bfa695bda5a4f`.
+Null/empty, map/list element boundaries, float bits and all remaining default fields
+are checked. A bounded four-thread control also compares every full result directly
+against its sequential counterpart. No second parser implementation or mutable
+registry reset is used. This is finite behavioral parity, not OCR accuracy.
+
+Root verification: **914 JVM PASS / one existing optional live-test SKIP**,
+134 classes, zero failures/errors. Full debug/test build, release Kotlin and both
+lints **PASS in 3m32s** (104 tasks, 24 executed); lint reports 167 debug/170 release
+warnings and two hints each, not warning-free. The unchanged actual analyzer
+characterization passes **3/3 in 12.304 s**; fixed emulator regression passes
+**371/371 in 304.598 s**, no skips/failures. Exact sources/APKs are frozen, installed
+identity matches, and final offline/no-reverse/idle checks all verify.
+
+Evidence: engineering `parser-regex-{baseline-capture,baseline-control,after-parity}.xml`,
+`parser-regex-full-build.log`, `verify-parser-regex-diff.mjs`, and archived full JVM
+results `parser-regex-jvm-results.zip` (SHA256
+`e12d7415c85209ca604dd0fa90fe90120b274171d37fee8b568fde63d5ed0fb2`).
+Emulator manifests: engineering `scanner-batch-205955-c5b8eb80/manifest.json` and
+`artifacts/android-regression/20261001T210045Z-8fdd4467/manifest.json`.
+App SHA256 `64d40b75180873a339413460b5af1455a32c32ac24096577777d3a725ec822d3`;
+test `1b2c720bdf29c6621befbe8f6f30708af7fbee3c1e481dbb936044d0f56f5336`;
+source snapshot `779e3fae28689d57d4b11823aec97fcfc9975e94409db01ff6a2c76ae6ed77d4`.
+
+Proven benefit: repeated pattern construction is removed. No measured end-to-end
+speed, allocation-byte count or accuracy gain is claimed. The previous isolated R8
+run predates this hoist; its current-source repetition is separate. No release
+signing/AAB, production, deployment, Play or Xiaomi action. Overall **NOT READY**.
+
+### Previous local checkpoint: actual analyzer batch transition characterization
 
 Three new test-only cases exercise the real analyzer, parser, preprocessing,
 Handler deadlines and bitmap ownership with controlled per-session GMS Tasks.

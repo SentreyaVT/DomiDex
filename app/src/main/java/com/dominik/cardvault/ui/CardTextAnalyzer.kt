@@ -131,6 +131,7 @@ private val ruleWordSetCodeCollisions = setOf("UND", "VON", "ALS")
 /** Parses only lower-border-like number pairs; HP/KP and attack damage are excluded. */
 internal object CardNumberParser {
     internal data class Evidence(val value: String, val confidence: Float, val supportingReads: Int = 1)
+    private val hitPointWordPattern = Regex("(?i)\\b(?:hp|kp)\\b")
     // The lower border is the only place where these additional OCR repairs are
     // accepted. Z/2 and G/6 are common on foiled German cards; accepting them
     // in ordinary body text would make attack damage unsafe evidence.
@@ -147,7 +148,7 @@ internal object CardNumberParser {
     fun find(text: String): Evidence? {
         val lines = text.lineSequence()
         .map { it.trim() }
-        .filterNot { line -> line.contains(Regex("(?i)\\b(?:hp|kp)\\b")) }
+        .filterNot { line -> line.contains(hitPointWordPattern) }
         .toList()
         val pairEvidence = pairCandidates(lines)
         // Multiple independent ROI/preprocessing reads are evidence. A single early OCR mistake
@@ -244,6 +245,12 @@ internal fun selectIdentityNumberText(readings: List<IdentityNumberReading>): St
 }
 
 internal object CardTextParser {
+    // Reuse immutable patterns, never a mutable Matcher or card/registry result.
+    private val whitespacePattern = Regex("\\s+")
+    private val borderSeparatorPattern = Regex("[-_]+\\s*")
+    private val setCodeSeparatorPattern = Regex("[- ]")
+    private val borderTokenSeparatorPattern = Regex("[^A-Z0-9/]+")
+    private val completeNumberPairPattern = Regex("\\d{1,4}/\\d{1,4}")
     private val collectorNumberPattern = Regex("(?i)(?<![A-Z0-9])(?:[A-Z0-9]{2,6}\\s+)?(\\d{1,4})\\s*/\\s*(\\d{1,4})")
     private val noisePattern = Regex("(?i)^(?:hp|kp|stage|basic|basis|trainer|energy|energie|pokemon)\\s*\\d*$")
     private val rulesOrAttackPattern = Regex("(?i)^(?:ability|fähigkeit|attacke|schwäche|resistenz|rückzug|retreat|illus\\.?|regel|damage|schaden|draw|discard|heal|switch|search|choose|once during).*")
@@ -296,7 +303,7 @@ internal object CardTextParser {
         val selectedTexts = likelyScript?.let { listOf(textByScript[it].orEmpty()) } ?: textByScript.values
         val lines = selectedTexts.asSequence()
             .flatMap { it.lineSequence() }
-            .map { it.trim().replace(Regex("\\s+"), " ") }
+            .map { it.trim().replace(whitespacePattern, " ") }
             .filter { it.length in 2..80 }
             .distinct()
             .toList()
@@ -321,8 +328,8 @@ internal object CardTextParser {
             // as the language marker in all three forms; no missing marker is an
             // error because the app's scan scope is German by design.
             val lowerBorder = germanMarkerPattern.replace(line, " ")
-                .replace(Regex("[-_]+\\s*"), " ")
-                .replace(Regex("\\s+"), " ")
+                .replace(borderSeparatorPattern, " ")
+                .replace(whitespacePattern, " ")
                 .trim()
             fun unambiguousWeakCode(code: String?) = code?.takeUnless { it.uppercase() in ruleWordSetCodeCollisions }
             val printedCandidates = listOfNotNull(
@@ -343,7 +350,7 @@ internal object CardTextParser {
         val setRoiLines = preferredSetText.orEmpty().lineSequence().filter(String::isNotBlank).toList()
         val numberRoiLines = preferredNumberText.orEmpty().lineSequence().filter(String::isNotBlank).toList()
         fun mostFrequentCode(lines: List<String>): String? = lines.mapNotNull(::setCodeFrom)
-            .map { it.replace(Regex("[- ]"), "").uppercase() }
+            .map { it.replace(setCodeSeparatorPattern, "").uppercase() }
             .groupingBy { it }
             .eachCount()
             .maxWithOrNull(compareBy<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
@@ -393,8 +400,8 @@ internal object CardTextParser {
      * associated with the collector number is accepted.
      */
     private fun printedSetCodeBeforeNumber(line: String): String? {
-        val tokens = line.uppercase().split(Regex("[^A-Z0-9/]+"))
-        val numberIndex = tokens.indexOfFirst { Regex("\\d{1,4}/\\d{1,4}").matches(it) }
+        val tokens = line.uppercase().split(borderTokenSeparatorPattern)
+        val numberIndex = tokens.indexOfFirst { completeNumberPairPattern.matches(it) }
         if (numberIndex < 0) return null
         return tokens.take(numberIndex).takeLast(5).asReversed()
             .firstOrNull { token ->
