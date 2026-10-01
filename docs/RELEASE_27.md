@@ -159,8 +159,8 @@ An 18-test pass alone is not Gate 1 approval.
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
 | 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply protection and bounded single-flight full pulls active; 189 selected JVM and 78 emulator tests pass; synthetic 1k/5k/20k runner cycles; delta integration and multi-client scale remain; see SYNC.md |
-| 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes and seven verified mappings tested; full coverage, incremental loading and centralized delivery remain |
-| 6 Shared binder scale | NOT TESTED | 5k placements, pagination, final revoke check, caching |
+| 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
+| 6 Shared binder scale | IN PROGRESS | in-flight binder deletion/ownership guarded; local regression passes, 5k scale/pagination/cache and public IP/token limits remain |
 | 7 Camera stability | NOT TESTED | synthetic/emulator regression; real hardware matrix separate |
 | 8 Recognition | NOT TESTED | multisignal, variant-aware false accepts, reproducible benchmark |
 | 9 Community knowledge | IN PROGRESS (baseline FAIL) | 15 focused safety cases reproduce 10 failures; confidence, freshness and lifecycle fixes under implementation, not yet claimed passing |
@@ -343,3 +343,23 @@ builds and release Kotlin compilation. Evidence: `gate5-cardmarket-import-*` and
 
 Full all-set price coverage, shared dataset versions and a rights-approved central
 delivery strategy remain open Gate 5 work. No production import was triggered.
+
+### Web price reuse and sharing consistency follow-up
+
+Web commit `b3a5d43` preserves unchanged collection price results only within the
+original public-card cache deadline and current owner/listener/retry generation.
+An 18-card quantity edit now leaves resolver calls at 18 rather than 36. A 601-card
+edit no longer triggers 601 additional resolver/loader/fetch calls through the
+600-card FIFO cache. These are local invocation counts, not wire-byte or billed-read
+measurements. Fifty new tests cover every price input, true TTL, pending reuse,
+account/regrant/old-callback/unmount boundaries; cache size/TTL and price policy stay
+unchanged. Root rerun passes 962/962 Web tests in 60 files plus typecheck and lint.
+
+Web commit `75bf30e` rechecks the owned binder after catalog resolution, in addition
+to the existing final share/owner checks. Four reproduced races now return 404 when
+the binder is deleted, removed or has mismatched ownership/identity. This costs an
+additional document read and is not a performance optimization. Root's overlapping
+sharing selection passes 87/87 tests in nine files and 4/4 separate archived-deletion
+compatibility tests. No production read, deployment, schema, private sidecar exposure
+or change to share options. See the Web handoff for detailed evidence and remaining
+pagination/price-parity constraints.
