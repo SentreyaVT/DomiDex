@@ -58,6 +58,18 @@ The combined tree includes the separately scoped four-error-log minimization.
 No Xiaomi action, release signing/AAB, production change or deployment. Overall
 release remains **NOT READY**; the wider documented gates are not closed by this fix.
 
+### Narrow error-log privacy hardening
+
+Four `CardVaultApp.kt` error sites (master-set index, master-set variants, exact
+product link and manual-card persistence) now emit their existing fixed message
+and exception class only. They no longer pass a Throwable to Android logging.
+Tags/levels, cancellation handling, user messages, retries and return paths remain
+unchanged. This prevents those sites from inadvertently forwarding provider,
+parser or database exception messages/causes/stacktraces into logs; no actual
+production secret disclosure was established. It is not a whole-app log-retention
+or observability proof. The combined build, lint, JVM, two live Room tests and
+371-case emulator checkpoint immediately above include these exact four changes.
+
 ### Previous local checkpoint: confirmed rereads and bounded shared-view refresh
 
 The separately reproduced missing/malformed collection reread no longer removes

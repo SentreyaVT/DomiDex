@@ -1081,7 +1081,7 @@ private fun isOnline(context: Context): Boolean {
         repository.clearGeneratedGermanMasterSetBinders()
         runCatching { catalog.sets() }
             .onSuccess { loaded -> Log.i("DomiDexMasterSets", "Loaded ${loaded.size} German master-set definitions"); catalogSets = loaded }
-            .onFailure { error -> Log.w("DomiDexMasterSets", "German master-set index could not be loaded", error) }
+            .onFailure { error -> Log.w("DomiDexMasterSets", "German master-set index could not be loaded (${error.javaClass.simpleName}).") }
     }
     fun coverFor(name: String): String? {
         resolveBinderSourceSet(name, grouped[name].orEmpty(), catalogSets)?.logoUrl?.takeIf(String::isNotBlank)?.let { return it }
@@ -1418,7 +1418,7 @@ private fun isOnline(context: Context): Boolean {
         } catch (error: Exception) {
             // Preserve any explicit local catalogue fallback when offline. Never
             // erase an already rendered reference wall because one refresh failed.
-            Log.w("DomiDexBinder", "German master-set variants could not be refreshed", error)
+            Log.w("DomiDexBinder", "German master-set variants could not be refreshed (${error.javaClass.simpleName}).")
         } finally {
             referencesLoading = false
         }
@@ -2904,7 +2904,7 @@ internal fun collectionCardsByDisplayedMarketValue(cards: List<CollectionCard>):
             matches.singleOrNull()?.takeIf { card.entryId > 0L && card.externalProductId == null }?.let { product ->
                 try { repository.linkCatalogProduct(card.entryId, product.productId) }
                 catch (cancelled: CancellationException) { throw cancelled }
-                catch (error: Exception) { android.util.Log.w("DomiDexPrices", "Exact source price link could not be saved", error) }
+                catch (error: Exception) { android.util.Log.w("DomiDexPrices", "Exact source price link could not be saved (${error.javaClass.simpleName}).") }
             }
             matches
         }
@@ -3580,7 +3580,7 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
-                    Log.e("DomiDexCollection", "Manual card persistence failed", error)
+                    Log.e("DomiDexCollection", "Manual card persistence failed (${error.javaClass.simpleName}).")
                     saving = false
                     saveError = "Karte konnte nicht gespeichert werden. Bitte erneut versuchen."
                 }
