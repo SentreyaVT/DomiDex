@@ -45,15 +45,12 @@ internal class CollectionSyncSessionCommits(
 
     /**
      * Reread application and the captured mutation's conditional deletion share one session fence.
-     * A null decode deliberately retains the prior no-apply/conditional-delete policy; changing
-     * malformed/missing server-read handling is a separate fix, not part of this session guard.
+     * Only a successfully decoded, confirmed server read may complete this checkpoint.
      */
-    suspend fun finishReread(mutation: CollectionSyncOutboxEntity, remote: RemoteCollectionEntry?): Unit = commit {
+    suspend fun finishReread(mutation: CollectionSyncOutboxEntity, remote: RemoteCollectionEntry): Unit = commit {
         if (mutation.ownerUid != ownerUid) return@commit
-        if (remote != null) {
-            if (remote.syncId != mutation.syncId) return@commit
-            applyRemoteCollectionEntryToRoom(database, ownerUid, remote, isCurrent)
-        }
+        if (remote.syncId != mutation.syncId) return@commit
+        applyRemoteCollectionEntryToRoom(database, ownerUid, remote, isCurrent)
         database.cardVaultDao().deleteSyncOutboxIfCurrent(mutation.entryKey, mutation.mutationId)
     }
 

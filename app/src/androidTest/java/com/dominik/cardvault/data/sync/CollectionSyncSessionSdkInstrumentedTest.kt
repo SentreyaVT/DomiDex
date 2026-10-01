@@ -78,6 +78,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
     private lateinit var runId: String
     private lateinit var originalEntry: CollectionEntryEntity
     private lateinit var originalMutation: CollectionSyncOutboxEntity
+    private var initialRereadDocument: DocumentSnapshot? = null
     private var continuationCount = 0
 
     @Before fun setup() = runBlocking(Dispatchers.IO) {
@@ -89,6 +90,9 @@ class CollectionSyncSessionSdkInstrumentedTest {
         scenario = when (testName.methodName) {
             "healthyCollectionPushAcknowledgesAndRereads" -> "healthy"
             "staleSessionCannotAcknowledgeCommittedMutation" -> "stale"
+            "missingRereadRetainsCheckpoint" -> "missing"
+            "malformedRereadRetainsCheckpoint" -> "malformed"
+            "confirmedRereadCompletesCheckpoint" -> "confirmed"
             else -> error("Unreviewed collection-session proof method")
         }
         owner = "sdk-proof-collection-$scenario"
@@ -110,8 +114,19 @@ class CollectionSyncSessionSdkInstrumentedTest {
             control = client("control")
             signIn(subject.auth, owner)
             signIn(control.auth, owner)
-            assertFalse("Host must supply an empty, fresh collection fixture", remote().exists())
-            seedLocalPendingMutation()
+            if (scenario in setOf("missing", "malformed", "confirmed")) {
+                // Verify the actual independently readable server fixture BEFORE constructing
+                // a synthetic process-resume checkpoint. This is not an invented actual ACK.
+                initialRereadDocument = assertRereadFixture(remote())
+                seedLocalPendingMutation()
+                originalEntry = originalEntry.copy(syncState = SYNC_CLEAN, remoteRevision = 1)
+                dao.updateCollectionEntry(originalEntry)
+                assertEquals(originalEntry, dao.getCollectionEntryBySyncId(owner, ENTRY))
+                assertEquals(originalMutation, dao.syncOutbox(originalMutation.entryKey))
+            } else {
+                assertFalse("Host must supply an empty, fresh collection fixture", remote().exists())
+                seedLocalPendingMutation()
+            }
         }
     }
 
@@ -242,6 +257,89 @@ class CollectionSyncSessionSdkInstrumentedTest {
             } finally {
                 subject.auth.removeIdTokenListener(listener)
                 // Do not close the channel: an already posted listener callback may still run.
+            }
+        }
+    }
+
+    @Test fun missingRereadRetainsCheckpoint() = runBlocking(Dispatchers.IO) {
+        assertResumeCheckpointBehavior(confirmed = false)
+    }
+
+    @Test fun malformedRereadRetainsCheckpoint() = runBlocking(Dispatchers.IO) {
+        assertResumeCheckpointBehavior(confirmed = false)
+    }
+
+    @Test fun confirmedRereadCompletesCheckpoint() = runBlocking(Dispatchers.IO) {
+        assertResumeCheckpointBehavior(confirmed = true)
+    }
+
+    private suspend fun assertResumeCheckpointBehavior(confirmed: Boolean) = withTimeout(120_000) {
+        check((scenario == "confirmed") == confirmed)
+        val seeded = checkNotNull(initialRereadDocument)
+        val before = localSnapshot()
+        assertEquals(SYNC_CLEAN, originalEntry.syncState)
+        assertEquals(1L, originalEntry.remoteRevision)
+        assertEquals(SYNC_PENDING, originalMutation.state)
+        assertEquals(0L, originalMutation.expectedRemoteRevision)
+        // Each call captures a new real auth session. A second retry must not silently
+        // acknowledge a checkpoint or rewrite the seeded remote document either.
+        repeat(2) {
+            requireActualEntitlement()
+            val result = runPass()
+            val observed = assertRereadFixture(remote())
+            assertEquals("Worker must not create or remove a remote document during checkpoint reread", seeded.exists(), observed.exists())
+            assertEquals("Worker must preserve every remote field and the exact server timestamp", seeded.data, observed.data)
+            if (confirmed) {
+                // Same-revision reread does not replace the local timestamp/payload: only
+                // the durable pending checkpoint disappears after a confirmed read.
+                assertEquals(before + ("collection_sync_outbox" to emptyList<List<String?>>()), localSnapshot())
+                assertEquals(originalEntry, dao.getCollectionEntryBySyncId(owner, ENTRY))
+                assertNull(dao.syncOutbox(originalMutation.entryKey))
+                assertEquals(ListenableWorker.Result.success(), result)
+            } else {
+                assertEquals("UNCONFIRMED_REREAD_DISCARDED_CHECKPOINT: $scenario must retain the full Room snapshot",
+                    before, localSnapshot())
+                assertEquals(originalEntry, dao.getCollectionEntryBySyncId(owner, ENTRY))
+                assertEquals(originalMutation, dao.syncOutbox(originalMutation.entryKey))
+                assertEquals(ListenableWorker.Result.retry(), result)
+            }
+            assertEquals(0, continuationCount)
+        }
+    }
+
+    /** Admin seeds only this local fixture; production decoder and real SDK read are not mocked. */
+    private fun assertRereadFixture(snapshot: DocumentSnapshot): DocumentSnapshot = snapshot.also {
+        check(scenario in setOf("missing", "malformed", "confirmed"))
+        assertEquals("users/$owner/collectionEntries/$ENTRY", snapshot.reference.path)
+        if (scenario == "missing") {
+            assertFalse(snapshot.exists())
+            assertNull(snapshot.data)
+            assertNull("Actual production decoder must reject the absent document", RemoteCollectionEntry.from(snapshot, owner))
+        } else {
+            assertTrue(snapshot.exists())
+            val timestamp = checkNotNull(snapshot.getTimestamp("updatedAt"))
+            assertTrue(timestamp.seconds > 1_700_000_000L)
+            val expected = mapOf(
+                "syncId" to ENTRY, "ownerUid" to owner, "revision" to 1L,
+                "lastMutationId" to "collection-session-$runId-$scenario", "updatedAt" to timestamp,
+                "updatedAtClient" to FIXTURE_TIME, "deleted" to false, "deletedAtClient" to null,
+                "name" to "Synthetic collection card", "setId" to "synthetic-set", "setName" to "Synthetic collection set",
+                "collectorNumber" to "001/001", "language" to "GERMAN", "finish" to "Normal", "variant" to "Standard",
+                "rarity" to "UNKNOWN", "quantity" to 2L, "condition" to "Near Mint", "notes" to "isolated collection session proof",
+                "acquisitionPriceMinor" to null, "acquisitionCurrency" to null, "acquisitionDateEpochDay" to null,
+                "externalProductSource" to null, "externalProductId" to null, "imageUrl" to null, "effectOverride" to null,
+                "sourceSetId" to "synthetic-set", "sourceCardId" to "synthetic-set-001", "binderId" to "inbox",
+                "binderSetKey" to "tcgdex-synthetic-set", "binderName" to "Synthetic collection set", "binderHeroAsset" to null,
+            )
+            assertEquals(if (scenario == "malformed") expected - "name" else expected, snapshot.data)
+            if (scenario == "malformed") {
+                assertFalse(snapshot.contains("name"))
+                assertNull("Actual production decoder must reject the missing required name", RemoteCollectionEntry.from(snapshot, owner))
+            } else {
+                val decoded = checkNotNull(RemoteCollectionEntry.from(snapshot, owner))
+                assertEquals(ENTRY, decoded.syncId)
+                assertEquals(1L, decoded.revision)
+                assertEquals("Synthetic collection card", decoded.name)
             }
         }
     }

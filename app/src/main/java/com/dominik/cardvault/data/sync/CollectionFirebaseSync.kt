@@ -791,9 +791,13 @@ private class CollectionSyncRun(
             val fresh = guardedConflictActionRead(session::isCurrent) {
                 firestore.document(collectionEntryPath(uid, mutation.syncId)).get(Source.SERVER).awaitSyncTask()
             }
-            // Keep the existing decoder/revision policy; the apply and conditional checkpoint
-            // deletion now commit together, with a final lease check inside the Room boundary.
-            commits.finishReread(mutation, RemoteCollectionEntry.from(fresh, uid))
+            // SERVER can still fail to provide a usable document. An absent, local-overlay or
+            // malformed read is not confirmation: retain the durable checkpoint for retry.
+            check(fresh.exists() && !fresh.metadata.isFromCache && !fresh.metadata.hasPendingWrites())
+            val remote = checkNotNull(RemoteCollectionEntry.from(fresh, uid))
+            // Keep the existing revision/tombstone policy and exact mutation deletion. A newer
+            // legitimate remote mutation is valid too; do not require our lastMutationId.
+            commits.finishReread(mutation, remote)
         }
         var processed = 0
         while (processed < MAX_MUTATIONS_PER_RUN) {

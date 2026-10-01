@@ -2,7 +2,33 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: collection-worker session and cancellation guards
+### Latest local checkpoint: confirmed rereads and bounded shared-view refresh
+
+The separately reproduced missing/malformed collection reread no longer removes
+its durable checkpoint. Both actual worker reread paths require an existing,
+non-cache/non-pending, successfully decoded server document. Normal revision,
+tombstone, M2 and session semantics remain. Local SDK RED had three controls PASS
+and two exact checkpoint-loss failures; GREEN is **5/5 actual SDK cases**, five
+independent full Admin readbacks, unchanged accounts/payloads and clean final
+ports/reverse/instrumentation. Eleven real Room cases also pass. Exact evidence
+and installed APK identities are in `docs/SYNC.md`; Web harness commit `4e0b74e`.
+
+Final Android regression: **371/371**, no skips/failures, 281.081 s on the fixed
+offline API-36 emulator. Evidence:
+`artifacts/android-regression/20261001T161521Z-75af8b11/manifest.json`.
+JVM **865 PASS / one pre-existing optional live-source SKIP**; debug/test APKs,
+release Kotlin compilation and both lints pass (3m 13s). No release signing/AAB.
+
+Web commit `6782c59` fixes automatic-refresh starvation: unfinished fetch/JSON is
+not superseded by the 15-second tick, and a per-request 30-second local deadline
+clears old content and permits retry. Explicit retry/visibility and context
+cancellation remain latest-wins. RED: 1,204 PASS / four targeted failures; GREEN
+**1,208/1,208**, typecheck/lint PASS, isolated build PASS (13.181 s), root dist and
+config unchanged. This is not a server-abort/cost guarantee or instant revocation.
+No deployment, production Firebase, Xiaomi or signed Release-26 changes. Invalid
+permanent server data still needs repair. Overall release remains **NOT READY**.
+
+### Previous local checkpoint: collection-worker session and cancellation guards
 
 A real local SDK RED proved that observed A→B→A let the old collection worker
 accept its delayed transaction ACK and delete its outbox. Its healthy control
@@ -23,8 +49,8 @@ The existing M1/M2, conflict, revision, listener, entitlement, outbox, schema,
 Rules, sharing-priority and scheduling policies remain. No production service,
 Xiaomi, release signing/AAB or deployment changed; signed Release 26 remains
 byte-identical. These are local worker/Room proofs, not WorkManager/physical-device
-scale or a production speed claim. Missing/null-decoded reread acknowledgment
-remains a separately documented follow-up. Overall release remains **NOT READY**.
+scale or a production speed claim. The missing/null-decoded reread follow-up was
+subsequently corrected as documented above. Overall release remains **NOT READY**.
 
 ### Previous local checkpoint: FULL-pull fairness and viewer cancellation
 

@@ -5,6 +5,52 @@ The current application remains Room-first. Auth, entitlements, owner isolation,
 optimistic revisions, tombstones and the existing private-sharing readiness gate
 must remain authoritative. No production data migration is authorized here.
 
+## Confirmed collection reread before removing checkpoints (2026-10-01)
+
+Follow-up to the session guard below: a missing document or null decoder result
+previously removed the CLEAN-entry/PENDING-outbox reread checkpoint without a
+usable server result. The actual worker now requires existence, non-cache and
+non-pending metadata, and successful decoding at its common reread edge. Only
+then can the session-bound Room transaction apply it and conditionally delete the
+captured mutation. `finishReread` requires a non-null decoded entry. Both resumed
+and just-ACKed paths retain their existing Retry handling.
+
+Strict newer-revision apply, valid tombstones, same-revision completion, M2
+protection and all owner/session guards remain. Do not require matching remote
+lastMutationId: a newer valid server update is legitimate. No schema, scheduler,
+Rules or release configuration changed. Permanently invalid server data still
+needs repair; its retained checkpoint can delay later work for that owner.
+
+Three new real-SDK cases first prove actual server/decoder state, then seed an
+explicit interrupted-reread checkpoint in isolated Room (not a claimed real prior
+ACK). Missing and malformed cases reproduced `UNCONFIRMED_REREAD_DISCARDED_CHECKPOINT`;
+valid control and both genuine-commit/session cases passed. Final **5/5 SDK PASS**
+includes second fresh passes, five independent complete Admin readbacks, exact six
+synthetic Google accounts/claims, unchanged prior owners and unchanged fixture
+timestamps. Missing stays absent; malformed is missing only the required name.
+
+Sibling Web evidence:
+- RED: `outputs/collection-sync-session-local/2026-10-01T16-08-16-317Z-2c0111a4b9854e4b8b70a9713f5f1c94/`.
+- GREEN: `outputs/collection-sync-session-local/2026-10-01T16-14-27-332Z-2bb445eca6ca4938ad10e6abaa8e2e33/`.
+- Both runs retain input hashes, free final ports, empty reverse maps and idle
+  instrumentation. RED remains failure despite valid independent readbacks.
+- Seven pure host-validator cases and focused lint also pass.
+
+Root installed-file verification and **11/11 actual Room regressions** pass:
+`artifacts/release27-engineering-20261001/collection-session-room-161337-013e8ad7/`.
+App APK SHA-256 `a2d4f35e2ed0882d6f2bbc4dcb7e3a761f6f7c7832b42f6097673eb22170a699`;
+test APK `155424e7a49d534fb45b4288744110137f16f6fc4200e5034e2d283fe034f9df`.
+Debug/test builds, release Kotlin, both lints and JVM tests pass (3m 13s;
+865 PASS / one existing optional live-source SKIP / no failures, 127 suites).
+Evidence: `collection-reread-green-regression.log` and `collection-reread-green-unit/`
+in the same Android artifact parent. No release AAB/signing/deployment/Xiaomi.
+Pending-write/tombstone guards are source-reviewed here, not new SDK overlay or
+tombstone scenarios. Full release and live-scale gates remain open.
+
+Final fixed offline API-36 regression: **371/371 PASS**, no skips/failures,
+281.081 s; exact same APK/source hashes, inputs unchanged, offline/no reverse.
+Evidence: `artifacts/android-regression/20261001T161521Z-75af8b11/manifest.json`.
+
 ## Collection-worker session and final-commit protection (2026-10-01)
 
 The inspected worker compared only the current UID after suspensions. A real local
@@ -68,9 +114,9 @@ Source/APK inputs remain unchanged and the emulator stays offline without revers
 Scope: named Google-linked demo clients, unchanged local Rules, isolated in-memory
 Room, fixed offline API-36 emulator. No production accounts, Xiaomi, release
 signing, AAB or deployment. This does not prove WorkManager scheduling, all network
-races, multi-device scale or lower production latency. A **separate open finding**
-is that a missing/null-decoded reread still follows the old no-apply/conditional-
-delete policy; this session fix deliberately does not disguise that policy change.
+races, multi-device scale or lower production latency. At this earlier checkpoint,
+missing/null-decoded rereads still followed the old conditional-delete policy;
+the separately reproduced and tested correction is documented above.
 
 ## Actual Android/Web stale-price conflict proof (2026-10-01)
 
