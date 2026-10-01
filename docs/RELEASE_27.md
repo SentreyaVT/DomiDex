@@ -258,8 +258,22 @@ Debug/test build, debug lint and 853 JVM tests pass (one existing opt-in skip).
 Exact-installed emulator regression: 371/371 in 258.802s; existing SDK proof 3/3 in
 3.803s. Six harness-validator tests, Web typecheck and focused lint pass. A separate
 full Web regression found two shared-view empty-dialog timing failures (1195/1197
-pass); these remain explicitly open for investigation, not silently retried away.
+pass). A deterministic commit-phase regression reproduced the closing delay;
+Web `e2662f2` fixes only that layout-effect timing. A later owner-form test failure
+was an early click while the separate shares GET still disabled creation; its
+readiness/invalid-email assertions are now independently proved. No owner-form
+product behavior changed. Both UI files pass 22/22; full Web runs pass 1199/1199
+twice. Original failures and the RED/GREEN evidence remain in the Web handoff.
 The narrow roundtrip does not close scheduling/UI/scale/full-convergence coverage.
+
+Web `e787553` also bounds each decoded DE/EN catalog-card response to 1 MiB and
+disposes rejected/aborted bodies without awaiting a hung cancellation. Fourteen
+new default-loader cases first produced 4 PASS / 10 FAIL, then all pass; the
+complete public-cache selection is 83/83. Exact price/image fallback, private
+authorization, guide downloads and existing cache/deadline/concurrency policies
+remain. This is not a global heap/transport/concurrency limit. Typecheck, focused
+lint and an isolated production-mode build pass (13.973s, 303 source files, demo
+environment, root dist/config integrity unchanged). No deployment was performed.
 
 | Gate | Status | Required next evidence |
 |---|---|---|
@@ -268,15 +282,15 @@ The narrow roundtrip does not close scheduling/UI/scale/full-convergence coverag
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
 | 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; local delta-to-business Room adapter 32/32; full sync-package 140 PASS/1 opt-in SKIP (later 140 PASS/4 opt-in SKIP); actual Android SDK overlay proof 3/3; actual Android repository/worker-pass and Web save/clear roundtrip 3+2 phases twice with independent server readbacks; unwired fair deferred reservation 6 JVM +18 Room PASS; full scheduling/UI convergence, active delta integration and multi-client scale remain; see SYNC.md |
-| 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
-| 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
+| 5 Pricing/catalog | IN PROGRESS | bounded Android import with 3 actual Room persistence/rollback cases, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
+| 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card decoded-body cap/cancellation proven 14/14, cache/package regression 83/83; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
 | 8 Recognition | IN PROGRESS (limited replay PASS) | additive identity oracle 12/12; 60 observations with matching input hashes and unchanged historical outputs, 42/42 geometry outputs unchanged; no demonstrated overall speed/recall gain or physical-printing accuracy |
 | 9 Community knowledge | IN PROGRESS (local safety/aggregation tests PASS) | confidence/freshness/lifecycle faults fixed; 48 focused JVM + 11 Android cases; counter/key hardening and 61 synthetic concurrency tests pass; actual trigger contention/live evidence remain |
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest root 853 JVM PASS/1 opt-in SKIP, Web rerun 1195 PASS/2 shared-dialog timing FAIL under investigation (prior 1197 PASS retained), reproducible 371 emulator cases +18 new Room cases, 24 runner contract tests, 84 current Rules and 30 local backend SDK cases; release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; complete physical/live contracts untested |
+| 13 Full regression | IN PROGRESS | latest root 853 JVM PASS/1 opt-in SKIP; Web 1199/1199 twice after explicit dialog fix and owner-test readiness correction (earlier failures retained), reproducible 371 emulator cases +18 new Room cases, 24 runner contract tests, 84 current Rules and 30 local backend SDK cases; release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; complete physical/live contracts untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
@@ -843,6 +857,50 @@ builds and release Kotlin compilation. Evidence: `gate5-cardmarket-import-*` and
 
 Full all-set price coverage, shared dataset versions and a rights-approved central
 delivery strategy remain open Gate 5 work. No production import was triggered.
+
+### Actual Room import persistence proof (2026-10-01)
+
+The real importer now calls the verbatim extracted internal `persistCardmarketImport`
+transaction. Product/price mappings, 1,000-row chunks, source timestamps and SUCCESS
+write are unchanged. No injectable failure hook, Room schema, dependency, scheduling
+or network change. The existing outer RUNNING/ERROR handling remains outside this
+transaction, as before; this proof does not execute a real provider download.
+
+Three new `CardmarketImportRoomInstrumentedTest` cases pass against a fresh private
+in-memory Room database and actual DAO/repository APIs, **3/3 in 0.882s**:
+
+- Missing normal/reverse trend stays null; all seven normal/reverse alternatives,
+  exact product, EUR and original guide time survive import. No invented printing.
+- Correcting the same source timestamp replaces values without another history
+  row; null fields are genuinely cleared and an unrelated product remains intact.
+- A test-only TEMP AFTER INSERT trigger aborts only after 1,001 incoming product/
+  price rows and the SUCCESS status are observable inside the real transaction.
+  Every column of products, raw prices and sync state matches the prior snapshot
+  afterward. The identical import succeeds after removing the isolated trigger.
+
+This adds a real atomic-persistence proof to the earlier parser/stream helper tests,
+not an all-cards coverage, full importer catch/worker, network or production test.
+Two independent source reviews found no blocker in the narrow extraction/test.
+
+Root debug/test build and debug lint pass in 3m17s; all JVM results: **853 PASS,
+one existing live-download opt-in SKIP, zero failures/errors**, 125 suites.
+The exact-installed offline API-36 regression passes **371/371 in 309.666s**;
+its manifest confirms unchanged APK/source inputs and offline/no reverse afterward.
+The three additional Room cases use those same installed APKs with separate strict
+identity/count validation and unchanged input hashes. No Xiaomi was accessed.
+
+Evidence under `artifacts/release27-engineering-20261001/`:
+`cardmarket-room-proof-build.log`, copied `cardmarket-room-proof-jvm-results/`,
+and `cardmarket-room-proof/{instrumentation.log,manifest.json}`. Installation receipt:
+`artifacts/android-regression/20261001T135408Z-cbd27130/manifest.json`.
+Debug APK SHA-256: `CBD7CDB28A26939ED70A7F115A15949344C21D52508D01013ABEF7ECD7221E39`.
+Test APK SHA-256: `04A27622924C110387B8BEE60E45529FB9105AC29B3A1EDF75AD4D81B116321A`.
+The separate release-source compilation/lint invocation was interrupted on the
+user's pause; that partial log is not a successful release-validation result.
+After the explicit resume, the same compile/lint-only tasks pass in **1m50s**:
+`cardmarket-room-proof-release-compile-resumed.log`. Release Kotlin was already
+up-to-date; release lint completed. This is not R8 execution or an AAB validation.
+No release APK/AAB, signing, upload or deployment was performed.
 
 ### Web price reuse and sharing consistency follow-up
 

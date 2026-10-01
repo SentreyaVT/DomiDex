@@ -142,8 +142,15 @@ server/input/cleanup checks: Web `outputs/private-pull-sdk-local/
 The broader Web unit rerun is **1195 PASS / 2 FAIL**, not a green release result:
 two existing shared-view refresh assertions observed an empty dialog before its
 passive closing effect. Evidence: Web `outputs/release-local/
-2026-10-01T13-30-26-015Z-13648.{json,log}`. That separate UI/timing finding is under
-investigation; it does not invalidate the distinct five-phase price proof.
+2026-10-01T13-30-26-015Z-13648.{json,log}`. This separate finding did not invalidate
+the distinct five-phase price proof. Follow-up Web commit `e2662f2` closes the
+invalid native dialog in the layout commit; a deterministic Profiler test was RED
+before the change and GREEN afterward. A later owner-form test failure exposed an
+early click before the separate shares GET completed, not an observed failed POST.
+That test now proves loading/ready states and the email restriction independently.
+Both UI files pass 22/22; the complete Web selection then passes 1199/1199 twice.
+The original failures remain in the evidence history; precise paths and limits
+are in the Web handoff. No production/UI permission policy was relaxed.
 
 This remains one synthetic printing, not real-card price coverage, initial parent
 upload, all conflicts/retries, UI/WorkManager E2E, live latency, delta integration
