@@ -5,6 +5,24 @@ The current application remains Room-first. Auth, entitlements, owner isolation,
 optimistic revisions, tombstones and the existing private-sharing readiness gate
 must remain authoritative. No production data migration is authorized here.
 
+## Deferred point-read / persistent Room integration (2026-10-01)
+
+The eleventh actual local SDK case proves the existing unwired Room adapter can
+persist a Collection-dependency marker across a real file close/reopen, retain it
+through a fresh blocked placement recheck, and consume it only after real parent
+delivery followed by another confirmed placement read. Parent and binder already
+exist remotely; this is not the earlier legacy orphan case. Genuine Auth lease,
+SERVER metadata, exact known-fixture payload and existing production decoders/apply
+remain authoritative. All three remote seeds and prior owners stay unchanged in
+complete independent Admin observations; twelve nominal accounts stay exact.
+
+11 SDK / 11 Room controls and 14 pure host validators PASS. Exact evidence and
+APKs are in the latest `RELEASE_27.md` checkpoint. No production code changed.
+Checkpoint revision intentionally advances, but cursor phase/scope/epoch do not.
+This known isolated singleton does not establish general timestamp provenance or
+query completeness. File reopen is not process death; marker consumption is not
+an upload ACK. Delta is still not active and the wider Gate-4 gate remains open.
+
 ## Event-driven recheck after offline session start (2026-10-01)
 
 The bounded SDK characterization reproduced unconfirmed LOCAL_ONLY state after

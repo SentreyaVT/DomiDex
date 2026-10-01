@@ -2,6 +2,7 @@ package com.dominik.cardvault.data.sync
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.database.sqlite.SQLiteDatabase
 import android.net.ConnectivityManager
 import android.os.Build
 import android.os.SystemClock
@@ -16,6 +17,7 @@ import com.dominik.cardvault.auth.canUseFirebaseAppBackend
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
 import com.dominik.cardvault.auth.currentVerifiedFirebaseEntitlementAccount
 import com.dominik.cardvault.data.local.CardVaultDatabase
+import com.dominik.cardvault.data.local.AppMetadataEntity
 import com.dominik.cardvault.data.local.CatalogCardEntity
 import com.dominik.cardvault.data.local.CollectionEntryEntity
 import com.dominik.cardvault.data.local.CollectionSyncOutboxEntity
@@ -36,6 +38,7 @@ import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.MemoryCacheSettings
 import com.google.firebase.firestore.Source
 import java.net.InetSocketAddress
+import java.io.File
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -90,6 +93,10 @@ class CollectionSyncSessionSdkInstrumentedTest {
     private var initialRereadDocument: DocumentSnapshot? = null
     private var continuationCount = 0
     private var diagnosticSession: FirebaseCollectionSession? = null
+    private var deferredRoomName: String? = null
+    private var deferredRoomFile: File? = null
+    private var deferredRoomOwnerMarker: String? = null
+    private var deferredInitialSeed: Map<String, Map<String, Any>>? = null
 
     @Before fun setup() = runBlocking(Dispatchers.IO) {
         val args = InstrumentationRegistry.getArguments()
@@ -108,6 +115,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "sessionHealthyStartConfirmsAccessWithoutRunningWorkers" -> "session-healthy"
             "offlineSessionNeedsExplicitRecheckWithinObservedReconnectWindow" -> "session-offline"
             "usableConnectivitySignalRechecksActualEntitlementWithoutManualSync" -> "session-reconnect"
+            "deferredPlacementPointReadSurvivesRoomReopenUntilParentDelivery" -> "deferred-point-read"
             else -> error("Unreviewed collection-session proof method")
         }
         owner = "sdk-proof-collection-$scenario"
@@ -123,12 +131,18 @@ class CollectionSyncSessionSdkInstrumentedTest {
             for (port in listOf(PrivatePullDemoGrpcGate.AUTH_PORT, PrivatePullDemoGrpcGate.FIRESTORE_PORT)) {
                 Socket().use { it.connect(InetSocketAddress(PrivatePullDemoGrpcGate.HOST, port), 3_000) }
             }
-            room = Room.inMemoryDatabaseBuilder(context, CardVaultDatabase::class.java).build()
+            if (scenario == "deferred-point-read") createDeferredRoomFixture()
+            else room = Room.inMemoryDatabaseBuilder(context, CardVaultDatabase::class.java).build()
             gate = PrivatePullDemoGrpcGate().also { it.verifyForeignDatabaseFailsBeforeStart() }
             subject = client("subject")
             control = client("control")
             signIn(subject.auth, owner)
             signIn(control.auth, owner)
+            if (scenario == "deferred-point-read") {
+                deferredInitialSeed = assertDeferredServerSeed()
+                assertDeferredLocalCounts(parent = 0, binder = 0, placement = 0)
+                return@withTimeout
+            }
             if (scenario == "late-parent") {
                 // Genuine remote orphan recovery: no invented local parent or checkpoint.
                 assertFalse(remote().exists())
@@ -1166,6 +1180,293 @@ class CollectionSyncSessionSdkInstrumentedTest {
         ), data)
     }
 
+    @Test fun deferredPlacementPointReadSurvivesRoomReopenUntilParentDelivery() = runBlocking(Dispatchers.IO) {
+        withTimeout(120_000) {
+            check(scenario == "deferred-point-read")
+            requireActualEntitlement()
+            val originalServer = checkNotNull(deferredInitialSeed)
+            assertEquals(originalServer, assertDeferredServerSeed())
+            assertDeferredLocalCounts(parent = 0, binder = 0, placement = 0)
+            PrivatePullAuthSession.use(subject.auth, owner) { session ->
+                val scope = PrivatePullScope(owner, PrivatePullCollection.PLACEMENTS)
+                val binderDocument = deferredConfirmedPoint("privateBinders", "deferred-binder", session)
+                assertEquals(originalServer["privateBinders/deferred-binder"], binderDocument.data)
+                database.withPrivateSyncSession(session::isCurrent) {
+                    assertEquals(PrivateRemoteApplyOutcome.Completed, applyPrivateRemoteRecord(
+                        dao, owner, PRIVATE_SYNC_BINDER, binderDocument.id,
+                        checkNotNull(binderDocument.data), confirmedServer = true))
+                }
+                val expectedBinder = PrivateBinderEntity(
+                    id = "deferred-binder", ownerUid = owner, name = "Synthetic deferred binder",
+                    description = null, coverStyle = "DOMIDEX", minimumPageCount = 1,
+                    createdAtEpochMillis = FIXTURE_TIME, updatedAtEpochMillis = FIXTURE_TIME,
+                    lastOpenedAtEpochMillis = null, syncState = SYNC_CLEAN, remoteRevision = 1,
+                    deletedAtEpochMillis = null,
+                )
+                assertEquals(expectedBinder, dao.privateBinder("deferred-binder", owner))
+                assertNull(dao.getCollectionEntryBySyncId(owner, ENTRY))
+
+                var adapter = PrivatePullRemoteRoomAdapter(database, session::isCurrent)
+                val placementDocument = deferredConfirmedPoint("privateBinderPlacements", "deferred-placement", session)
+                assertEquals(originalServer["privateBinderPlacements/deferred-placement"], placementDocument.data)
+                val initialPayload = deferredEnvelope(placementDocument)
+                val fresh = adapter.checkpoint(scope)
+                assertNull(fresh.raw)
+                assertEquals(PrivatePullPhase.NeedsBootstrapFence, fresh.state.phase)
+                // This is an explicitly known, isolated Admin-seeded singleton, not a general
+                // timestamp-provenance or query-completeness adapter. No real delta query runs.
+                assertEquals(PrivatePullCommitResult.COMMITTED, adapter.commitFence(fresh, session.lease,
+                    PrivatePullFenceRead(initialPayload.cursor(), PrivatePullReadTrust.CONFIRMED_SERVER)))
+                val fenced = adapter.checkpoint(scope)
+                assertEquals(PrivatePullPhase.Bootstrap(initialPayload.stamp, null), fenced.state.phase)
+                val page = PrivatePullPage(PrivatePullPlan.BootstrapPage(fenced.state, 1),
+                    listOf(initialPayload), PrivatePullReadTrust.CONFIRMED_SERVER)
+                assertEquals(PrivatePullCommitResult.COMMITTED, adapter.commitPage(fenced, session.lease, page))
+                val checkpoint = adapter.checkpoint(scope)
+                assertEquals(PrivatePullPhase.Bootstrap(initialPayload.stamp, "deferred-placement"), checkpoint.state.phase)
+                assertEquals(fenced.state.revision + 1L, checkpoint.state.revision)
+                val marker = adapter.deferredPage(scope).single()
+                assertEquals(PrivatePullDeferredMarker(scope, "deferred-placement", checkpoint.state.revision,
+                    PrivatePullDeferReason.COLLECTION_DEPENDENCY, ENTRY, checkpoint.state.epoch), marker)
+                assertDeferredLocalCounts(parent = 0, binder = 1, placement = 0)
+                val persisted = localSnapshot()
+
+                // A genuine SQLite close/reopen, not an in-memory adapter or a recreated checkpoint.
+                // This proves file persistence, not an Android process death/relaunch.
+                closeAndReopenDeferredRoom()
+                session.requireCurrent()
+                adapter = PrivatePullRemoteRoomAdapter(database, session::isCurrent)
+                assertEquals(persisted, localSnapshot())
+                assertEquals(checkpoint, adapter.checkpoint(scope))
+                assertEquals(listOf(marker), adapter.deferredPage(scope))
+                assertEquals(expectedBinder, dao.privateBinder("deferred-binder", owner))
+                val selected = adapter.reserveNextDeferredBatch(session.lease, 1)
+                assertTrue(selected is PrivatePullDeferredBatch.Batch)
+                val batch = selected as PrivatePullDeferredBatch.Batch
+                assertEquals(scope, batch.scope)
+                assertEquals(listOf(marker), batch.markers)
+                assertEquals(checkpoint, adapter.checkpoint(scope))
+                assertEquals(listOf(marker), adapter.deferredPage(scope))
+                assertEquals(persisted - "app_metadata", localSnapshot() - "app_metadata")
+
+                val stillBlocked = deferredConfirmedPoint("privateBinderPlacements", "deferred-placement", session)
+                assertEquals(placementDocument.data, stillBlocked.data)
+                assertEquals(PrivatePullCommitResult.COMMITTED, adapter.commitRecheck(checkpoint, session.lease,
+                    batch.markers.single(), deferredEnvelope(stillBlocked), PrivatePullReadTrust.CONFIRMED_SERVER))
+                val blockedCheckpoint = adapter.checkpoint(scope)
+                assertDeferredCursorUnchanged(checkpoint, blockedCheckpoint, revisionDelta = 1L)
+                val retained = adapter.deferredPage(scope).single()
+                assertEquals(marker.copy(version = blockedCheckpoint.state.revision), retained)
+                assertDeferredLocalCounts(parent = 0, binder = 1, placement = 0)
+                assertEquals(persisted - "app_metadata", localSnapshot() - "app_metadata")
+                assertEquals(originalServer, assertDeferredServerSeed())
+
+                // The remote parent has been valid from the start; ONLY local delivery was delayed.
+                // Use a fresh actual SDK point read and the existing product decoder/application,
+                // never insert a fake local parent or manually clear an outbox/marker.
+                val parentDocument = deferredConfirmedPoint("collectionEntries", ENTRY, session)
+                assertEquals(originalServer["collectionEntries/$ENTRY"], parentDocument.data)
+                assertNotNull(RemoteCollectionEntry.from(parentDocument, owner))
+                database.withPrivateSyncSession(session::isCurrent) {
+                    applyRemoteDocumentToRoom(database, owner, parentDocument, session::isCurrent)
+                }
+                val parent = checkNotNull(dao.getCollectionEntryBySyncId(owner, ENTRY))
+                val serverTime = checkNotNull(parentDocument.getTimestamp("updatedAt")).toDate().time
+                val cardId = "cloud-${UUID.nameUUIDFromBytes("$owner:$ENTRY".toByteArray(StandardCharsets.UTF_8))}"
+                assertTrue(parent.id > 0)
+                assertEquals(CollectionEntryEntity(
+                    id = parent.id, cardId = cardId, quantity = 2, condition = "Near Mint",
+                    acquisitionPriceMinor = null, acquisitionCurrency = null, acquisitionDateEpochDay = null,
+                    notes = "isolated collection session proof", frontPhotoUri = null, backPhotoUri = null,
+                    createdAtEpochMillis = serverTime, updatedAtEpochMillis = serverTime,
+                    externalProductSource = null, externalProductId = null, binderId = "inbox",
+                    ownerUid = owner, syncId = ENTRY, syncState = SYNC_CLEAN, remoteRevision = 1,
+                    deletedAtEpochMillis = null, finishOverride = "Normal", variantOverride = "Standard",
+                    effectOverride = null, sourceSetId = "synthetic-set", sourceCardId = "synthetic-set-001",
+                ), parent)
+                // Parent delivery is not itself a marker ACK or cursor change.
+                assertEquals(blockedCheckpoint, adapter.checkpoint(scope))
+                assertEquals(listOf(retained), adapter.deferredPage(scope))
+                assertDeferredLocalCounts(parent = 1, binder = 1, placement = 0)
+
+                val delivered = deferredConfirmedPoint("privateBinderPlacements", "deferred-placement", session)
+                assertEquals("No new placement revision, payload or timestamp is required", placementDocument.data, delivered.data)
+                assertEquals(PrivatePullCommitResult.COMMITTED, adapter.commitRecheck(blockedCheckpoint, session.lease,
+                    retained, deferredEnvelope(delivered), PrivatePullReadTrust.CONFIRMED_SERVER))
+                val completedCheckpoint = adapter.checkpoint(scope)
+                assertDeferredCursorUnchanged(blockedCheckpoint, completedCheckpoint, revisionDelta = 1L)
+                assertTrue(adapter.deferredPage(scope).isEmpty())
+                assertNull(dao.metadata(PrivatePullRoomStore.markerKey(scope, "deferred-placement")))
+                assertEquals(PrivateBinderPlacementEntity(
+                    id = "deferred-placement", ownerUid = owner, binderId = "deferred-binder",
+                    collectionEntryId = parent.id, slotPosition = 4, holoEffectId = "rainbow", holoIntensity = 0.5f,
+                    createdAtEpochMillis = FIXTURE_TIME, updatedAtEpochMillis = FIXTURE_TIME,
+                    syncState = SYNC_CLEAN, remoteRevision = 1, deletedAtEpochMillis = null,
+                ), dao.privateBinderPlacement("deferred-placement", owner))
+                assertEquals(parent, dao.getCollectionEntryBySyncId(owner, ENTRY))
+                assertEquals(expectedBinder, dao.privateBinder("deferred-binder", owner))
+                assertDeferredLocalCounts(parent = 1, binder = 1, placement = 1)
+                assertEquals(PrivatePullDeferredBatch.Empty, adapter.reserveNextDeferredBatch(session.lease, 1))
+                assertEquals(completedCheckpoint, adapter.checkpoint(scope))
+                assertEquals(originalServer, assertDeferredServerSeed())
+                session.requireCurrent()
+                assertEquals(0, continuationCount)
+            }
+        }
+    }
+
+    private fun assertDeferredCursorUnchanged(
+        before: PrivatePullCheckpoint,
+        after: PrivatePullCheckpoint,
+        revisionDelta: Long,
+    ) {
+        assertEquals(before.state.scope, after.state.scope)
+        assertEquals(before.state.phase, after.state.phase)
+        assertEquals(before.state.epoch, after.state.epoch)
+        assertEquals(before.state.revision + revisionDelta, after.state.revision)
+        assertFalse(after.recovered)
+        assertEquals(PrivatePullCodec.encode(after.state), after.raw)
+    }
+
+    private suspend fun deferredConfirmedPoint(
+        collection: String,
+        id: String,
+        session: PrivatePullAuthSession,
+    ): DocumentSnapshot = withTimeout(20_000) {
+        check("$collection/$id" in setOf("collectionEntries/$ENTRY", "privateBinders/deferred-binder",
+            "privateBinderPlacements/deferred-placement"))
+        session.requireCurrent()
+        subject.firestore.document("users/$owner/$collection/$id").get(Source.SERVER)
+            .awaitPrivateBinderTask(session).also { snapshot ->
+                session.requireCurrent()
+                assertEquals("users/$owner/$collection/$id", snapshot.reference.path)
+                assertTrue(snapshot.exists())
+                assertFalse(snapshot.metadata.isFromCache)
+                assertFalse(snapshot.metadata.hasPendingWrites())
+                val timestamp = checkNotNull(snapshot.getTimestamp("updatedAt"))
+                assertTrue(timestamp.seconds > 1_700_000_000L)
+                assertEquals(deferredPayload("$collection/$id", timestamp), snapshot.data)
+            }
+    }
+
+    private fun deferredEnvelope(snapshot: DocumentSnapshot): PrivatePullDocument<Map<String, Any?>> {
+        assertTrue(snapshot.exists())
+        assertFalse(snapshot.metadata.isFromCache)
+        assertFalse(snapshot.metadata.hasPendingWrites())
+        assertEquals("users/$owner/privateBinderPlacements/deferred-placement", snapshot.reference.path)
+        val timestamp = checkNotNull(snapshot.getTimestamp("updatedAt"))
+        return PrivatePullDocument(snapshot.id, PrivatePullStamp(timestamp.seconds, timestamp.nanoseconds),
+            checkNotNull(snapshot.data).toMap(), hasPendingWrites = snapshot.metadata.hasPendingWrites())
+    }
+
+    private suspend fun assertDeferredServerSeed(): Map<String, Map<String, Any>> {
+        check(scenario == "deferred-point-read")
+        val observed = linkedMapOf<String, Map<String, Any>>()
+        for (collection in listOf("collectionEntries", "privateBinders", "privateBinderPlacements",
+            "collectionLayouts", "collectionPriceSelections")) {
+            for ((id, payload) in lateServerRows(collection)) observed["$collection/$id"] = payload
+        }
+        assertEquals(setOf("collectionEntries/$ENTRY", "privateBinders/deferred-binder",
+            "privateBinderPlacements/deferred-placement"), observed.keys)
+        for ((key, payload) in observed) {
+            assertEquals(deferredPayload(key, checkNotNull(payload["updatedAt"])), payload)
+        }
+        val access = control.firestore.document("accountAccess/$owner").get(Source.SERVER).bounded()
+        assertFalse(access.metadata.isFromCache)
+        assertFalse(access.metadata.hasPendingWrites())
+        assertFalse(access.exists())
+        return observed.toMap()
+    }
+
+    private fun deferredPayload(key: String, timestamp: Any): Map<String, Any?> = when (key) {
+        "collectionEntries/$ENTRY" -> lateParentPayload(timestamp) +
+            ("lastMutationId" to "collection-session-$runId-deferred-point-read")
+        "privateBinders/deferred-binder" -> mapOf(
+            "binderId" to "deferred-binder", "ownerUid" to owner, "name" to "Synthetic deferred binder",
+            "description" to null, "coverStyle" to "DOMIDEX", "minimumPageCount" to 1L,
+            "createdAtClient" to FIXTURE_TIME, "updatedAtClient" to FIXTURE_TIME, "lastOpenedAtClient" to null,
+            "deleted" to false, "revision" to 1L, "lastMutationId" to "deferred-$runId-binder", "updatedAt" to timestamp,
+        )
+        "privateBinderPlacements/deferred-placement" -> mapOf(
+            "placementId" to "deferred-placement", "ownerUid" to owner, "binderId" to "deferred-binder",
+            "entrySyncId" to ENTRY, "slotPosition" to 4L, "holoEffectId" to "rainbow", "holoIntensity" to 0.5,
+            "createdAtClient" to FIXTURE_TIME, "updatedAtClient" to FIXTURE_TIME, "deleted" to false,
+            "revision" to 1L, "lastMutationId" to "deferred-$runId-placement", "updatedAt" to timestamp,
+        )
+        else -> error("Unreviewed deferred SDK fixture path")
+    }
+
+    private fun assertDeferredLocalCounts(parent: Int, binder: Int, placement: Int) {
+        assertLateRoomCount("collection_entries", parent)
+        assertLateRoomCount("catalog_cards", parent)
+        assertLateRoomCount("private_binders", binder)
+        assertLateRoomCount("private_binder_placements", placement)
+        assertLateRoomOutboxesEmpty()
+        assertEquals(0, continuationCount)
+    }
+
+    private suspend fun createDeferredRoomFixture() {
+        check(scenario == "deferred-point-read" && room == null && deferredRoomName == null)
+        val nonce = UUID.randomUUID().toString()
+        val name = "domidex-deferred-sdk-$runId-$nonce.db"
+        val file = context.getDatabasePath(name).canonicalFile
+        check(file.name == name && file.parentFile == context.getDatabasePath("fixed-deferred-proof-parent").canonicalFile.parentFile)
+        val files = listOf(file, File(file.path + "-wal"), File(file.path + "-shm"), File(file.path + "-journal"))
+        check(files.none(File::exists)) { "New deferred proof requires an entirely fresh named Room fixture" }
+        // Record only this fresh validated name; an incomplete marker causes fail-closed cleanup.
+        deferredRoomName = name
+        deferredRoomFile = file
+        deferredRoomOwnerMarker = "v1|$owner|$runId|$nonce"
+        room = Room.databaseBuilder(context, CardVaultDatabase::class.java, name).build()
+        dao.putMetadata(AppMetadataEntity("deferred-sdk-fixture-owner", checkNotNull(deferredRoomOwnerMarker)))
+        assertEquals(deferredRoomOwnerMarker, dao.metadata("deferred-sdk-fixture-owner"))
+    }
+
+    private suspend fun closeAndReopenDeferredRoom() {
+        val name = checkNotNull(deferredRoomName)
+        val previous = database
+        previous.close()
+        check(!previous.isOpen)
+        room = null
+        verifyDeferredRoomOwnerOnDisk()
+        room = Room.databaseBuilder(context, CardVaultDatabase::class.java, name).build()
+        assertEquals(deferredRoomOwnerMarker, dao.metadata("deferred-sdk-fixture-owner"))
+    }
+
+    private fun deferredRoomFiles(): List<File> {
+        val file = checkNotNull(deferredRoomFile)
+        return listOf(file, File(file.path + "-wal"), File(file.path + "-shm"), File(file.path + "-journal"))
+    }
+
+    private fun verifyDeferredRoomOwnerOnDisk() {
+        val name = checkNotNull(deferredRoomName)
+        val file = checkNotNull(deferredRoomFile)
+        check(name.matches(Regex("domidex-deferred-sdk-[0-9a-f]{32}-[0-9a-f-]{36}\\.db")))
+        check(file == context.getDatabasePath(name).canonicalFile && file.name == name)
+        check(file.parentFile == context.getDatabasePath("fixed-deferred-proof-parent").canonicalFile.parentFile)
+        check(file.isFile) { "Refusing reopen/cleanup without the owned primary Room file" }
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { sqlite ->
+            sqlite.rawQuery("SELECT value FROM app_metadata WHERE `key` = ?", arrayOf("deferred-sdk-fixture-owner")).use { cursor ->
+                check(cursor.moveToFirst() && cursor.getString(0) == deferredRoomOwnerMarker && !cursor.moveToNext()) {
+                    "Deferred proof file ownership does not match this exact owner/run/UUID"
+                }
+            }
+        }
+    }
+
+    private fun cleanupDeferredRoomFixture() {
+        val name = deferredRoomName ?: return
+        check(room?.isOpen != true) { "Owned Room must close before its exact fixture cleanup" }
+        if (deferredRoomFiles().any(File::exists)) {
+            verifyDeferredRoomOwnerOnDisk()
+            check(context.deleteDatabase(name)) { "Unable to remove the exact verified deferred proof fixture" }
+        }
+        check(deferredRoomFiles().none(File::exists)) { "Owned SQLite sidecar remains after fixture cleanup" }
+        deferredRoomName = null
+        deferredRoomFile = null
+        deferredRoomOwnerMarker = null
+    }
+
     private fun localSnapshot(): Map<String, List<List<String?>>> = listOf(
         "catalog_cards", "collection_entries", "collection_sync_outbox", "binders",
         "private_binders", "private_binder_placements", "private_binder_sync_outbox", "app_metadata",
@@ -1189,6 +1490,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             auths.asReversed().forEach { auth -> attempt { auth.signOut() } }
             apps.asReversed().forEach { app -> attempt { app.delete() } }
             attempt { room?.close(); check(room?.isOpen != true) }
+            attempt { cleanupDeferredRoomFixture() }
         } finally {
             attempt { gate?.close() }
             attempt { check(FirebaseApp.getApps(context).none { it.name in appNames }) { "Named test app cleanup failed" } }

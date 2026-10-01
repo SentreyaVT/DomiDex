@@ -2,7 +2,42 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: bounded event-driven session recheck
+### Latest local checkpoint: real deferred point read across Room reopen
+
+A test-only addition joins real named SDK SERVER point reads and the existing
+unwired private-pull Room adapter. Admin seeds a valid parent/binder/placement;
+only local Collection delivery is delayed. The actual adapter records its typed
+dependency marker, closes/reopens a uniquely owned SQLite file, reserves that
+same marker and retains it after another blocked recheck. The existing SDK decoder
+and Room apply then deliver the real parent. A fresh unchanged placement read
+applies exact slot/holo/identity/revision and atomically removes the marker.
+Checkpoint revision advances; scope, epoch and cursor phase remain unchanged.
+No dummy parent, remote write, outbox ACK or active delta rollout is introduced.
+
+**11/11 actual SDK cases PASS** (87.789 s complete harness; new case 3.213 s),
+including all previous ten, with eleven complete Admin preflights/readbacks and
+twelve exact nominal Google accounts. All three new seed payloads/timestamps and
+previous owners remain unchanged. Exact marked test DB/sidecars are removed only
+after close and read-only ownership verification. Sources/APKs and cleanup checks
+all pass. This proves file close/reopen, not process death, general query/time
+provenance, active worker scheduling or end-to-end multi-device convergence.
+
+Evidence: Web `outputs/collection-sync-session-local/2026-10-01T20-25-48-822Z-ccab0ba13ece438187f1e58ac19444e3/`;
+Android `artifacts/release27-engineering-20261001/collection-session-room-202521-6b8fb4ba/manifest.json`.
+Debug/test build, release Kotlin, JVM selection and both lints PASS (1m30; unchanged
+912 PASS/1 optional SKIP JVM results reused by Gradle), 11 Room controls PASS,
+14 host validators/focused lint PASS. App APK remains exactly
+`58613d94075ea30791e4996c791ed5aedd9f960f97326aea66d0d3f5ddbdf958`,
+already covered by the prior 371-case regression; it was not rerun for this
+test-only change. New test APK
+`230d51dff73bd2e52d308c0e98b3f03ccf8f19dcbba29690c649b2bc5fc2dd46`;
+source snapshot `10553f87faccf3ace1d974a9e5f4b23678c4913788e245e6baa2995b3fc5a485`.
+Before installation the earlier completed/cached own test process was identified
+by exact APK hash and idle instrumentation, then stopped; no unrelated process or
+user data was touched. No product/rules/release/signing/deployment/Xiaomi change.
+Overall **NOT READY**, including the wider Gate-4 matrix.
+
+### Previous local checkpoint: bounded event-driven session recheck
 
 An unconfirmed LOCAL_ONLY session now requests the existing real SERVER
 entitlement verification when its current Android default network becomes both
