@@ -243,13 +243,31 @@ Existing actual local SDK overlay/transaction cases pass 3/3 in 2.813 s with
 independent server verification and complete cleanup. Paths, hashes and limitations
 are in `docs/SYNC.md`. This does not close the full Android/Web convergence gate.
 
+### 2026-10-01: actual Android / Web price-choice integration proof
+
+The actual worker pass is shared without replacing its authentication, server
+entitlements, session/ACK/conflict guards or scheduling decisions. Two independent
+local runs pass all five phases: real Android repository/push/ACK, real Web
+subscription/save, Android pull, Web clear, Android pull. Five full Admin readbacks
+per run confirm the sidecar and unchanged parent. Same marked Room file across
+Android phases; isolated Google-linked synthetic owner, unchanged Rules, no default
+Firebase repointing. Separate verified owned-fixture cleanup is not counted as a
+price success. Detailed evidence, exact APK hashes and boundaries are in SYNC.md.
+
+Debug/test build, debug lint and 853 JVM tests pass (one existing opt-in skip).
+Exact-installed emulator regression: 371/371 in 258.802s; existing SDK proof 3/3 in
+3.803s. Six harness-validator tests, Web typecheck and focused lint pass. A separate
+full Web regression found two shared-view empty-dialog timing failures (1195/1197
+pass); these remain explicitly open for investigation, not silently retried away.
+The narrow roundtrip does not close scheduling/UI/scale/full-convergence coverage.
+
 | Gate | Status | Required next evidence |
 |---|---|---|
 | 0 Baseline | PASS (local reproducible scope) | frozen current source, fresh JVM/instrumentation/scanner timings and isolated Web build; live limits explicit |
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; local delta-to-business Room adapter 32/32; full sync-package 140 PASS/1 opt-in SKIP (later 140 PASS/4 opt-in SKIP); actual Android SDK overlay proof 3/3 with independent server readback; unwired fair deferred reservation 6 JVM +18 Room PASS; full Android/Web convergence, active delta integration and multi-client scale remain; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; local delta-to-business Room adapter 32/32; full sync-package 140 PASS/1 opt-in SKIP (later 140 PASS/4 opt-in SKIP); actual Android SDK overlay proof 3/3; actual Android repository/worker-pass and Web save/clear roundtrip 3+2 phases twice with independent server readbacks; unwired fair deferred reservation 6 JVM +18 Room PASS; full scheduling/UI convergence, active delta integration and multi-client scale remain; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
@@ -258,7 +276,7 @@ are in `docs/SYNC.md`. This does not close the full Android/Web convergence gate
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest root 853 JVM PASS/1 opt-in SKIP, 1,197 Web, reproducible 371 emulator cases +18 new Room cases, 24 runner contract tests, 84 current Rules and 30 local backend SDK cases; release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; complete physical/live contracts untested |
+| 13 Full regression | IN PROGRESS | latest root 853 JVM PASS/1 opt-in SKIP, Web rerun 1195 PASS/2 shared-dialog timing FAIL under investigation (prior 1197 PASS retained), reproducible 371 emulator cases +18 new Room cases, 24 runner contract tests, 84 current Rules and 30 local backend SDK cases; release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; complete physical/live contracts untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |

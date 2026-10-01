@@ -87,6 +87,68 @@ copied JVM XML are retained as `cloud-queue-status-*` / `cloud-queue-status/`
 under `artifacts/release27-engineering-20261001/`. Only the isolated emulator was
 installed. No Xiaomi, release signing, AAB, Play, production or deployment action.
 
+## Actual Android repository / worker pass and Web price roundtrip (2026-10-01)
+
+`PrivateBinderSyncWorker` now invokes the same extracted `runPrivateBinderSync`
+pass used by the isolated integration proof. Its per-invocation Auth/Firestore,
+lazy Room provider and continuation callbacks are explicit; Google ownership,
+server entitlement checks, session generation, transaction/payload/ACK/conflict
+logic, current ID-ASC pull, limits and scheduling decisions remain inside the
+actual product path. No global override, bypass, schema or Rule change was added.
+This does not exercise WorkManager's constraints, input delivery or scheduling.
+
+The opt-in `AndroidWebPriceRoundTripInstrumentedTest` uses a fresh, marked Room
+file across three separate Android invocations. With real named Auth/Firestore
+SDKs and unchanged Rules on the fixed local demo project, the exact sequence is:
+
+1. Real Android repository selects a synthetic 532-minor-EUR alternative; actual
+   worker push/ACK produces revision 1 and clears only its current outbox.
+2. Actual Web subscription observes it; actual Web save selects 450 minor EUR,
+   revision 2. Android reopens the same Room file and pulls that precise choice.
+3. Actual Web clear writes revision 3 with all twelve nullable fields null;
+   Android pulls that clear without rewriting it or fabricating a trend/history.
+
+The source date, set/card/above-main collector identity, variant, currency and
+synthetic product ID remain exact. Parent collection documents remain unchanged.
+Five separate Admin server readbacks verify complete fields, not just counts.
+The real Web subscription is compared with separately confirmed server snapshots;
+its callback does not expose snapshot metadata. Only named SDK initialization is
+substituted on Web; no RPC, transaction, codec, Auth or product function is mocked.
+
+Root ran the five-phase proof twice in fresh emulator lifetimes: both **3 Android
++ 2 Web phases PASS**, no skipped cases, plus separately verified owned Room
+cleanup. Evidence in the Web repository:
+
+- `outputs/android-web-price-local/2026-10-01T13-29-15-824Z-8fbfb9a811e14451a6c771905fdf8a10/`
+- `outputs/android-web-price-local/2026-10-01T13-32-46-840Z-e6d81587f03b4f59bde4e14393d41c58/`
+
+Both manifests confirm exit 0, independent server verification, unchanged inputs,
+ports released, no remaining reverse mappings/instrumentation and owned fixture
+cleanup. The synthetic Google-linked owner has only appAccess, never admin. The
+API-36 emulator is offline; no default client is repointed or user account used.
+The six negative/positive host validator cases, Web typecheck and focused lint
+pass. Initial lint-only harness findings were fixed before the first SDK run.
+
+Root debug/test APK build and debug lint pass (2m25s); JVM compilation/tests pass
+(57s): **853 PASS / 1 existing opt-in SKIP / 0 errors/failures**. The fixed emulator
+matrix passes **371/371 in 258.802s**; exact installation and unchanged hashes are
+recorded in `artifacts/android-regression/20261001T132345Z-a78547af/manifest.json`.
+Debug APK SHA-256: `54BE5295D58BE8435BBCC805E96E76BD8498F4CBE4CED1AE1C50DB2AC2F1EA3C`.
+Test APK SHA-256: `ACFC335FAAF87C80EBA3756250A01AB229BC006F33C8284276B4A700BACCDB5D`.
+The unchanged three-case SDK overlay proof also passes, 3.803s, with complete
+server/input/cleanup checks: Web `outputs/private-pull-sdk-local/
+2026-10-01T13-30-16-009Z-0af6d225/`.
+
+The broader Web unit rerun is **1195 PASS / 2 FAIL**, not a green release result:
+two existing shared-view refresh assertions observed an empty dialog before its
+passive closing effect. Evidence: Web `outputs/release-local/
+2026-10-01T13-30-26-015Z-13648.{json,log}`. That separate UI/timing finding is under
+investigation; it does not invalidate the distinct five-phase price proof.
+
+This remains one synthetic printing, not real-card price coverage, initial parent
+upload, all conflicts/retries, UI/WorkManager E2E, live latency, delta integration
+or Gate-4 completion. No production/deployment, Xiaomi, release build or signing.
+
 ## Rejected ID-horizon experiment (2026-10-01; not active)
 
 A deterministic regression reproduced a remaining fairness limit: continuously

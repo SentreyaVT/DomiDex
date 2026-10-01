@@ -7,6 +7,8 @@ import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ListenableWorker
+import androidx.work.ListenableWorker.Result
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
@@ -225,8 +227,52 @@ class PrivateBinderSyncWorker(
         val sharingBinderId = inputData.getString(SHARING_BINDER_ID)
         if (sharingBinderId != null && !validSharingBinderId(sharingBinderId)) return@withContext Result.failure()
         val auth = FirebaseAuth.getInstance()
+        // Previously the first guarded entitlement call resolved its default Firestore here.
+        val firestore = runCatching { FirebaseFirestore.getInstance() }
+            .getOrElse { return@withContext Result.retry() }
+        runPrivateBinderSync(
+            ownerUid = uid,
+            sharingBinderId = sharingBinderId,
+            auth = auth,
+            firestore = firestore,
+            database = { CardVaultDatabase.get(applicationContext) },
+            appendPrivate = { owner -> PrivateBinderSyncScheduler.schedule(applicationContext, owner) },
+            continueSharing = { owner, binder -> BinderSharingSyncScheduler.continueBatch(applicationContext, owner, binder) },
+        )
+    }
+}
+
+/**
+ * The worker's actual authenticated sync pass, also callable with isolated SDK/Room instances.
+ * No access predicate is injectable: Google ownership, server entitlements and session guards
+ * remain inside this path. The database is opened only after those initial checks, as before.
+ * Callbacks retain the existing scheduling decisions; invoking this function is not a test of
+ * WorkManager constraints, input delivery or execution timing.
+ */
+internal suspend fun runPrivateBinderSync(
+    ownerUid: String,
+    sharingBinderId: String?,
+    auth: FirebaseAuth,
+    firestore: FirebaseFirestore,
+    database: () -> CardVaultDatabase,
+    appendPrivate: (String) -> Unit,
+    continueSharing: suspend (String, String) -> Unit,
+): ListenableWorker.Result = PrivateBinderSyncRun(auth, firestore, database, appendPrivate, continueSharing)
+    .run(ownerUid, sharingBinderId)
+
+/** Per-invocation dependencies only; no global override and no independent test implementation. */
+private class PrivateBinderSyncRun(
+    private val auth: FirebaseAuth,
+    private val firestore: FirebaseFirestore,
+    private val databaseProvider: () -> CardVaultDatabase,
+    private val appendPrivate: (String) -> Unit,
+    private val continueSharing: suspend (String, String) -> Unit,
+) {
+    suspend fun run(uid: String, sharingBinderId: String?): Result = withContext(Dispatchers.IO) {
+        if (uid.isBlank()) return@withContext Result.success()
+        if (sharingBinderId != null && !validSharingBinderId(sharingBinderId)) return@withContext Result.failure()
         suspend fun accessStillCurrent(): Boolean {
-            val account = auth.currentVerifiedFirebaseEntitlementAccount(forceRefresh = false) ?: return false
+            val account = auth.currentVerifiedFirebaseEntitlementAccount(firestore, forceRefresh = false) ?: return false
             return account.uid == uid &&
                 canonicalCollectionOwnerUid(auth.currentUser) == uid &&
                 canUseFirebaseAppBackend(uid, canonicalCollectionOwnerUid(auth.currentUser), account.entitlements)
@@ -253,18 +299,17 @@ class PrivateBinderSyncWorker(
     ): Result = withContext(Dispatchers.IO) {
         suspend fun accessStillCurrent(): Boolean {
             session.requireCurrent()
-            val account = auth.currentVerifiedFirebaseEntitlementAccount(forceRefresh = false) ?: return false
+            val account = auth.currentVerifiedFirebaseEntitlementAccount(firestore, forceRefresh = false) ?: return false
             session.requireCurrent()
             return account.uid == uid &&
                 canUseFirebaseAppBackend(uid, canonicalCollectionOwnerUid(auth.currentUser), account.entitlements)
         }
         session.requireCurrent()
 
-        val database = CardVaultDatabase.get(applicationContext)
+        val database = databaseProvider()
         val dao = database.cardVaultDao()
-        val firestore = FirebaseFirestore.getInstance()
         if (sharingBinderId != null && dao.pendingSharingCollectionOutbox(uid, sharingBinderId, 1).isNotEmpty()) {
-            BinderSharingSyncScheduler.continueBatch(applicationContext, uid, sharingBinderId)
+            continueSharing(uid, sharingBinderId)
             return@withContext Result.success()
         }
         var processed = 0
@@ -383,13 +428,13 @@ class PrivateBinderSyncWorker(
         if (sharingBinderId != null) {
             if (dao.pendingSharingCollectionOutbox(uid, sharingBinderId, 1).isNotEmpty() ||
                 dao.pendingSharingPrivateBinderOutbox(uid, sharingBinderId, 1).isNotEmpty()) {
-                BinderSharingSyncScheduler.continueBatch(applicationContext, uid, sharingBinderId)
+                continueSharing(uid, sharingBinderId)
             }
             // No unrelated binder/layout pull on this foreground sharing path.
             return@withContext Result.success()
         }
         val pullFlight = try {
-            privateFullPullFlights.tryRun(uid) { pullBoundedSnapshot(database, firestore, uid, session) }
+            privateFullPullFlights.tryRun(uid) { pullBoundedSnapshot(database, firestore, auth, uid, session) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
@@ -413,7 +458,7 @@ class PrivateBinderSyncWorker(
             pullResult == PrivateFullPullRunResult.MORE_DOCUMENTS,
             dao.pendingPrivateBinderSyncOutbox(uid, 1).isNotEmpty())) {
             PrivateSyncContinuation.RETRY -> return@withContext Result.retry()
-            PrivateSyncContinuation.APPEND -> PrivateBinderSyncScheduler.schedule(applicationContext, uid)
+            PrivateSyncContinuation.APPEND -> appendPrivate(uid)
             PrivateSyncContinuation.COMPLETE -> Unit
         }
         Result.success()
@@ -498,6 +543,7 @@ private val privateFullPullFlights = PrivateFullPullSingleFlight()
 private suspend fun pullBoundedSnapshot(
     database: CardVaultDatabase,
     firestore: FirebaseFirestore,
+    auth: FirebaseAuth,
     uid: String,
     session: PrivatePullAuthSession,
 ): PrivateFullPullRunResult {
@@ -538,7 +584,7 @@ private suspend fun pullBoundedSnapshot(
         }
 
         override suspend fun resolveDependency(dependency: PrivateRemoteApplyResult.RetryDependency) {
-            resolveRemoteDependency(database, firestore, uid, dependency, session)
+            resolveRemoteDependency(database, firestore, auth, uid, dependency, session)
         }
 
         override suspend fun saveCursor(phase: Int, documentId: String) {
@@ -571,12 +617,13 @@ private class RemotePullGroup(
 private suspend fun resolveRemoteDependency(
     database: CardVaultDatabase,
     firestore: FirebaseFirestore,
+    auth: FirebaseAuth,
     uid: String,
     dependency: PrivateRemoteApplyResult.RetryDependency,
     session: PrivatePullAuthSession,
 ) {
     session.requireCurrent()
-    if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(FirebaseAuth.getInstance().currentUser))) {
+    if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
         throw IllegalStateException("Private-Binder-Synchronisationskonto hat gewechselt.")
     }
     when (dependency.type) {
@@ -584,7 +631,7 @@ private suspend fun resolveRemoteDependency(
             val document = firestore.document(privateBinderPath(uid, dependency.id))
                 .get(Source.SERVER)
                 .awaitPrivateBinderTask(session)
-            if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(FirebaseAuth.getInstance().currentUser))) {
+            if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
                 throw IllegalStateException("Private-Binder-Synchronisationskonto hat gewechselt.")
             }
             if (document.exists()) database.withPrivateSyncSession(session::isCurrent) {
@@ -595,7 +642,7 @@ private suspend fun resolveRemoteDependency(
             val document = firestore.document(collectionEntryPath(uid, dependency.id))
                 .get(Source.SERVER)
                 .awaitPrivateBinderTask(session)
-            if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(FirebaseAuth.getInstance().currentUser))) {
+            if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
                 throw IllegalStateException("Private-Binder-Synchronisationskonto hat gewechselt.")
             }
             applyConfirmedPrivateDependency(
@@ -649,7 +696,7 @@ internal suspend fun <T> Task<T>.awaitPrivateBinderTask(session: PrivatePullAuth
     val result = suspendCancellableCoroutine<T> { continuation ->
         addOnCompleteListener { task ->
             if (!continuation.isActive) return@addOnCompleteListener
-            if (task.isSuccessful) continuation.resumeWith(Result.success(task.result))
+            if (task.isSuccessful) continuation.resumeWith(kotlin.Result.success(task.result))
             else continuation.resumeWithException(task.exception ?: IllegalStateException("Firebase private-binder task failed"))
         }
     }
