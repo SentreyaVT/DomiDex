@@ -158,16 +158,16 @@ An 18-test pass alone is not Gate 1 approval.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply protection and bounded full pulls active; real local two-SDK matrix 25/25; Android conflict/UI follow-ups under validation; delta integration and multi-client scale remain; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; latest cloud-choice account-race fixes tested; full Android/Web convergence, delta integration and multi-client scale remain; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
-| 6 Shared binder scale | IN PROGRESS | in-flight binder deletion/ownership guarded; 5k pagination correctness and bounded catalog cache tested; O(N) reads/private price parity and trusted-ingress public IP/token limits remain |
-| 7 Camera stability | NOT TESTED | synthetic/emulator regression; real hardware matrix separate |
-| 8 Recognition | NOT TESTED | multisignal, variant-aware false accepts, reproducible benchmark |
-| 9 Community knowledge | IN PROGRESS (client safety PASS locally) | confidence/freshness/lifecycle faults fixed; 48 focused JVM + 11 Android cases; canonical trigger/deploy ownership tested; aggregation scale/live evidence remain |
-| 10 Privacy/lifecycle | IN PROGRESS | local lifecycle audit and 102 focused Web tests; cross-account local feedback export finding under correction; no production deletion test |
+| 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
+| 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
+| 8 Recognition | IN PROGRESS (limited replay PASS) | additive identity oracle 12/12; 60 observations with matching input hashes and unchanged historical outputs, 42/42 geometry outputs unchanged; no demonstrated overall speed/recall gain or physical-printing accuracy |
+| 9 Community knowledge | IN PROGRESS (local safety/aggregation tests PASS) | confidence/freshness/lifecycle faults fixed; 48 focused JVM + 11 Android cases; counter/key hardening and 61 synthetic concurrency tests pass; actual trigger contention/live evidence remain |
+| 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest root checkpoint 800 JVM PASS/1 opt-in SKIP, 151 emulator, 1,013 Web; new session/backup fixes need final combined rerun; physical/live contracts untested |
+| 13 Full regression | IN PROGRESS | latest root 818 JVM PASS/1 opt-in SKIP, 1,050 Web, 299 emulator, release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained, host-GPU rerun successful; physical/live contracts untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
@@ -212,6 +212,231 @@ contracts and separate workspace responsibilities as those gates are implemented
 Final delivery must contain all 29 requested report sections and an evidence-based
 READY FOR INTERNAL VALIDATION / READY FOR CLOSED TEST / NOT READY classification.
 This ledger does not declare the mission complete.
+
+## Latest local checkpoint: account boundaries and regression (2026-10-01)
+
+Android `058ddbf` isolates local scan-feedback metadata by the captured owner and
+observed account-session generation. Legacy records without an owner remain
+unassigned rather than silently being exported or assigned to the current user.
+Explicit import binds records to the captured target session; foreign/legacy ID
+collisions fail closed. Export/import callbacks check the session around IO and
+repository awaits. Same-UID refresh or offline sync state alone does not invalidate
+that local session. Room schema, cloud permissions and manual upload consent are
+unchanged. File-copy cancellation cannot retract bytes already written to an
+external destination; the existing pre-editor scanner queue is not newly modeled
+as owner-specific storage. These limits remain documented, not hidden.
+
+Focused verification passes 8 JVM session tests and 47 offline instrumentation
+tests, including feedback owner, backup restore/journal and privacy UI cases.
+Earlier RED cases reproduce cross-owner export/collision, late callbacks and the
+initial same-UID self-invalidation problem. The separate `18bf60f` cloud-conflict
+resolution fix revalidates captured ownership around both remote and local phases;
+it does not reinterpret temporary lack of cloud access as permission to drop local
+pending data. No destructive migration or new remote-wins default was introduced.
+
+Web `801591a` and `e6d9e29` bind account-deletion consent and async callbacks to the
+observed auth session. A UID A→B→A transition invalidates old consent even if React
+has not rendered B. Checkbox revocation, unmount and stale completions cannot
+initiate a replacement account's request or sign out that replacement session.
+A request already sent to the server is not retroactively cancelled by switching
+accounts; server token UID remains authoritative. The final 19 cases against the
+original component produce 15 failures / 4 passes; the corrected component passes
+19/19. A focused real-component/status/routes/auth-provider selection passes 50/50.
+
+Root's final combined Android Gradle checkpoint passes in **3m 4s**: debug app/test
+APK builds, debug unit tests, debug/release lint and release Kotlin compilation.
+There are **819 JVM tests: 818 PASS, 1 existing opt-in SKIP, 0 failures/errors** in
+120 classes. The skip remains the deliberate external Cardmarket smoke test.
+Release Kotlin/lint are not R8 execution, signing or an AAB verification.
+Evidence: `artifacts/release27-engineering-20261001/gate10-root-regression.log`.
+
+The independent durable Web regression passes **1,050/1,050 in 66 files**, 33.73 s,
+with external Node/JSDOM network blocked and environment-file loading disabled.
+Existing React-act/Canvas harness warnings remain. Evidence:
+Web `outputs/release-local/2026-10-01T03-46-31-932Z-16420.{json,log}`.
+The offline release-pipeline verifier rerun passes **39/39 Python tests**, 0.318 s;
+the release-26 AAB, mapping and partial-symbol archive hashes above remain identical.
+No production key, release artifact, deployment, push or Xiaomi was used.
+
+### Expanded emulator run: retained infrastructure failure
+
+The offline API-36 run selected 287 existing tests across data, backup, price,
+sharing, auth/UI and binder visuals. After 54 successful cases it stopped during
+`PrivateBinderVisualSelectorsInstrumentedTest#holoSelectorKeepsInteractivePreviewPinnedWhenSelectingLowerEffects`.
+The Windows Application log records `qemu-system-x86_64-headless.exe` exception
+`0xc0000005` at 05:53:57 local time. An isolated repeat on the same AVD/APKs and
+SwiftShader configuration reproduced a host-process crash at 05:58:37. No Android
+assertion result or final instrumentation summary was returned. Therefore this is
+**INCOMPLETE / infrastructure failure**, never a 287-test PASS and not evidence of
+a proven DomiDex Java/Kotlin crash. A graphics/driver cause is not yet established.
+
+Emulator version is 37.1.11 / build 15917651; AVD
+`DomiDex_R27_Baseline_API36`, API 36, x86_64, 4 GiB, `-no-snapshot -gpu swiftshader`.
+The `swangle` launch alternative still reports SwiftShader GLES in this installed
+runtime and also did not complete the isolated test. A separate host-GPU diagnostic
+was then performed; changing test rendering is not an app-code fix or permission to omit
+the assertion. No AVD wipe or Xiaomi action was performed. Original run and recovery
+logs remain under the engineering artifact directory as `gate13-*.log`.
+
+The **same failing selector** passes unchanged with `-gpu host` in 6.005 s; startup
+confirms the AMD Radeon host-GLES path rather than the prior SwiftShader path.
+This supports a renderer-dependent emulator problem, not a proven particular
+driver defect. After installing the rebuilt test-only APK, the full original 287
+tests plus 12 new scanner identity-oracle tests pass **299/299 in 218.819 s**.
+No assertions were removed, relaxed or skipped. Evidence:
+`gate13-selector-host.log`, `gate13-root-expanded-host-instrumentation.log`.
+Renderer changes make these UI timings unsuitable as an app-performance A/B claim.
+
+An additional **25/25** scanner tests pass in 39.587 s: cancellation/watchdog,
+cleanup races (including 512 close/finish iterations), actual bundled native OCR
+followed by another synthetic identity, orientation/cache bitmap consistency,
+status UI, auto-mode opt-in and camera JPEG/EXIF at four display rotations without
+Activity recreation. AVD back-camera is `emulated`, front-camera `none`; no laptop
+webcam or physical phone is captured. Evidence: `gate7-root-scanner-lifecycle-camera.log`.
+These tests do not establish physical-card accuracy, permission-revocation behavior,
+or background/foreground camera stability. A separate **3/3** MainActivity input
+selection passes in 22.559 s: cancelled injected gallery result, synthetic blank
+image import/manual review, and virtual shutter → queue/save under the existing
+2/4-second bounds. The OS picker itself is not automated and no user photo is read.
+The app remains signed out/offline and no collection item or upload is created.
+Evidence: `gate7-root-scanner-input.log`.
+
+### Gate 8: unchanged-input replay with additive identity observations
+
+The debug/test APK checkpoint `b8cb4ef` was replayed on the original API-36 AVD
+with `-gpu swiftshader`, 4 GiB, no snapshot, airplane mode on and Wi-Fi off. The
+same six cached public fixtures, five transforms and two repeats produce **60/60**
+observations in **583.094 s**. No corpus download or physical device was involved.
+The fixture manifest SHA-256 is
+`833af2352737baf2141afd42d70e1ef62faf31038128f3033fa758b3d6de2ed4`.
+
+The strict comparator confirms 60 matching keys, 60 matching input-image hashes
+and **zero changes in the nine historical recognition output fields**. Results
+remain 26 ACCEPTED / 10 AMBIGUOUS / 24 REJECTED, 36 correct local/full numbers,
+zero analyzer failures and zero accepted wrong card IDs in the finite catalogue.
+The new identity oracle observes all 26 accepted catalogue identities consistently;
+two incorrect OCR numbers are rejected, not counted as recognition successes.
+Printed-set-code truth and physical printing accuracy remain NOT TESTED. Language
+is catalogue metadata, not a verified photographed-language classifier. The old
+report has no corresponding identity fields or manifest hash, so those new fields
+are not retroactively claimed as two-sided baseline observations.
+
+| Limited debug observation | Gate-0 baseline | Current checkpoint |
+|---|---:|---:|
+| Overall median analysis | 13,690.748 ms | 14,130.560 ms |
+| P95 (nearest rank) | 16,118.944 ms | 15,850.321 ms |
+| Worst analysis | 16,622.423 ms | 16,480.944 ms |
+| Median process CPU (all threads) | 47,491.5 ms | 47,549.5 ms |
+
+This is **not an overall speed improvement**: the median is about 3.2% higher,
+while P95 is about 1.7% lower. One sequential emulator pair cannot establish a
+causal device regression or gain. No concurrent heavy Gradle/Web build was run
+during these measurements; light source review and focused small tests continued.
+No OCR threshold, analysis pixel size or recognition policy was weakened to pass.
+
+The separate generated geometry replay passes in **21.995 s**: 21 cases × 12
+measured repetitions, matching pixel/luma inputs and **42/42 identical detector/
+normalizer output hashes**. Original reused-detector observations are preserved
+where recorded; the comparator does not invent missing baseline data.
+Evidence under `artifacts/release27-engineering-20261001/`:
+`gate8-identity-ocr-instrumentation.log`, `gate8-identity-current.json`,
+`gate8-current-geometry-instrumentation.log`, `gate8-current-geometry.json`,
+`gate8-current-comparison.json`. These results precede the separate manual-analysis
+session regression investigation and must not be attributed to its later fix.
+
+The current Web source also builds in a fresh isolated temp copy in **22.867 s**
+(298 copied files, synthetic demo configuration, Node network guard, no deployment).
+The separate legal-source consistency check passes. Evidence: Web baseline-harness
+`build-gate13-current.log` and `build-gate13-current-result.json`. The runner's
+`originalConfigUnmodified` flag is a declared harness property, not a complete
+before/after hash verification; an attempted full root-dist hash listing was
+truncated and is deliberately not treated as an integrity proof.
+
+### Knowledge aggregate and real local privacy services
+
+Web `4cf0c52` validates every aggregate count as a nonnegative safe integer, uses
+own-key access and prevents inherited-object keys from corrupting counts. The
+installed Firestore serializer drops a literal `__proto__` map key; that input is
+explicitly rejected instead of pretending a null-prototype map alone preserves it.
+Malformed old counts fail closed rather than being guessed or silently reset.
+Root rerun of the actual-handler/optimistic-conflict harness passes **61/61**,
+including 10/40/80 synthetic writers. This is not production Firestore contention,
+and the documented retry/contention limits remain. See Web
+`docs/RELEASE_27_KNOWLEDGE_CONCURRENCY.md`.
+
+The existing private-operations suite was independently run against real **local**
+Auth/Firestore/Storage emulators: **27/27**, 41.76 s Vitest / 76.94 s runner. It uses
+only `demo-domidex-privacy`, synthetic accounts and loopback services. Seven share,
+twelve image/access and eight deletion cases pass. Provider retention/soft-delete
+behavior and clock progression are fixtures, not evidence of real cloud purging
+or a full Android/Web account-deletion user journey. All six reserved ports were
+free after shutdown. Evidence: Web
+`outputs/release27-engineering-20261001/security-gate10-deletion/run-20261001-054852-250c84e7/`.
+The ignored original runner is machine-specific. Its independently reviewed
+replacement is now versioned in Web `tests/private-operations-local/` (`af61aaa`).
+Root reran **13/13 safety tests** and **27/27 real local service tests**, 26.35 s
+Vitest / 40.89 s runner. Evidence:
+Web `outputs/private-operations-local/2026-10-01T04-02-26-501Z-4a2dea50/manifest.json`.
+It verifies already installed CLI 15.28.2 and JAR versions/sizes/SHA-256, creates an
+allowlisted child environment and fresh credential/config directories, binds only
+loopback, refuses occupied ports, and never downloads or kills foreign processes.
+All six ports are free after shutdown. The manifest's input-hash check covers the
+explicitly listed rules/tests/harness, not every transitive backend product module.
+The new Node guard also handles already-normalized Socket arguments; historical
+guarded runs must not be advertised as having identical network-isolation coverage.
+Neither guard is an OS/Java firewall. Deprecation/metadata-lookup warnings remain
+visible in the logs and are not disguised as a warning-free run.
+
+### Gate 6 cross-platform price parity checkpoint
+
+The Web share path now uses the existing exact supplement/anniversary enrichment
+and an explicitly saved alternative metric only if a valid trend is absent. It
+preserves price/total visibility consent, owner/entry/printing/product identity and
+the final authorization/revocation check. Sidecars are request-local, read only
+for needed entries in batches of at most 100, never put in the public card cache.
+The two public `raw`/`prices` modes share one bounded cache budget but intentionally
+need separate first fetches. This is correctness work, not a claim of fewer reads.
+
+Android commit `b7d6f7e` adds six test-only wire regressions: optional selection
+basis, exact and exceeded amount ceilings, omitted overflowing totals and invalid
+total/count combinations. **16/16 SharedBinderClientTest cases pass** in 0.585 s;
+the existing production Android parser is unchanged. This synthetic contract check
+is not an end-to-end Android/Web account test. Evidence:
+`manual-analysis-red-build.log` and the corresponding Gradle XML.
+
+The independent root Web regression passes **1,104/1,104 tests in 68 files**,
+24.72 s; `tests/release-local/selection` includes both new parity files. Evidence:
+Web `outputs/release-local/2026-10-01T04-22-32-835Z-21860.{json,log}`.
+Focused parity coverage is 103/103 (overlapping, not additive), and the public
+cache harness passes 69/69 including 20 cache cases. Fresh real local service
+tests pass **27/27**, with **13/13 harness safety tests** and all six ports free
+after shutdown. Sources listed by the manifest remain unchanged. Evidence:
+Web `outputs/private-operations-local/2026-10-01T04-28-36-922Z-a113a180/manifest.json`
+and `outputs/public-catalog-cache/2026-10-01T04-29-26-723Z-10596.log`.
+
+The repeated concurrency harness passes **12/12**, retaining the earlier **10 PASS /
+1 FAIL** from an outdated mixed-mode expectation. The deliberate mode partition
+needs 18 cold fetches for two different modes, versus nine for two owners using
+the same mode; both have zero additional warm fetches. Private reads and Auth/DTO
+checks remain in both cycles. Ten other scenarios are unchanged. Evidence: Web
+`outputs/sharing-concurrency/2026-10-01T04-31-30-334Z-2832.{log,metrics.json}` and
+its versioned README. Those counts are synthetic, not cloud billing observations.
+
+Normal Web lint and TypeScript checks pass after nine test-harness-only findings
+were corrected without suppressions. Cost-model 6/6, sharing-scale 9/9 and clean
+standalone-package import 1/1 also pass. Logs: Web baseline
+`gate6-harness-{cost,scale,package,lint,typecheck}-final.log`.
+
+An isolated Web build passes in **14.944 s**, using 299 copied source files,
+synthetic demo configuration and the existing Node network guard. Legal-source
+checks pass. A compact before/after SHA-256 verifies the root `dist` tree and nine
+listed build/deployment metadata files unchanged: 3,267 files / 70,962,371 bytes,
+digest `fbc3b489d56287d0dd84b2a4bedcbf0b17113621f5d3e74872fcc76e95fdf95f`.
+This excludes `node_modules` and private env files, and is not a deployment check.
+Evidence: Web baseline `build-gate6-final.log`, `build-gate6-final-result.json`
+and `build-gate6-final-integrity.json`. Runtime timings with concurrent local work
+are not performance comparisons. No production settings, release signing or device
+installations outside the isolated emulator were performed.
 
 ## Gate 2 local validation
 

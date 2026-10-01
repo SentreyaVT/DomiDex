@@ -23,10 +23,11 @@ external catalog/price processing, distributed API limits, aggregation and accou
 deletion. Neither UI replaces server authorization. Monitoring is cross-cutting,
 low-cardinality technical evidence, not a second store of user collections.
 
-An existing drift needs explicit resolution in Gate 9: `functions/index.js` here
-and `DomiDex-Web/backend/scan-knowledge/index.js` deploy the same function name and
-`default` codebase. The latter has an additional current-evidence/deletion-lock
-guard. No indiscriminate `firebase deploy` from either workspace is authorized.
+Gate 9 now designates `DomiDex-Web/backend/scan-knowledge` as the canonical
+Functions source. The historical Android copy uses the same function name and
+`default` codebase but lacks current-evidence/deletion-lock protection. Its checked-in
+Functions predeploy hook now refuses deployment; details and limits are below.
+No indiscriminate `firebase deploy` from either workspace is authorized.
 
 ## Shared invariants (already implemented unless explicitly marked pending)
 
@@ -63,30 +64,46 @@ remain; private notes and owner identifiers never enter the public DTO. Both
 Android and Web use the same backend, with a final revocation/access recheck after
 slow work. Existing links and the Android app-link route must remain compatible.
 
-Pending Gate 6: current implementation loads up to 5,000 placements before selecting
-the nine visible slots and performs additional catalog work when totals are shown.
-It does not yet have true server-side page-only reads. Its price resolver also
-differs from normal collection enrichment; unify only with exact identity and
-visibility consent preserved, not by publishing arbitrary client-entered prices.
+Gate 6 now locally reuses the existing exact supplement/anniversary enrichment and
+honors a valid persisted alternative only when the exact printing has no trend and
+the owner enabled prices or totals. Private selections are read in bounded batches
+for needed entries only, never cached with public card metadata. The optional
+`price.basis: "selection"` is backward-compatible with Android; Web labels the
+chosen metric separately. Public amounts respect the existing Android wire limit;
+unrepresentable complete totals are omitted, never clamped or assigned fake counts.
+These changes are locally tested, not deployed.
+
+Still pending: the handler loads up to 5,000 placements before selecting nine
+visible slots and resolves all needed entries when totals are shown. There are no
+true server-side page-only reads or verified anonymous ingress/IP limits yet.
+The public `raw`/`prices` cache modes intentionally do not share unresolved results;
+switching mode can require an additional first provider fetch, not a private-data
+cache hit. Detailed scope and read costs are in the Web handoff.
 
 ### Scanner knowledge and reports
 
 Community votes are supporting evidence, not automatic truth. Private evidence is
 separate from optional photographic reports. Photo uploads stay explicit/manual;
-neither App Check nor metrics enables them. Gate 8/9 must address stale hints and
-hint-only automatic acceptance, and keep variants/uncertainty explicit.
+neither App Check nor metrics enables them. The current Android knowledge path
+rejects expired/unknown-time hints and scopes observations to an auth generation.
+Ranking may reorder existing contradiction-free candidates only while both the
+before/after decisions remain ambiguous; it cannot manufacture acceptance.
+Physical printing/language accuracy and live aggregation still require validation.
 
-## Contracts being prepared, not yet claimed implemented
+## Implemented local contracts versus remaining work
 
-- Gate 2: distributed server-side budgets for costly authenticated operations;
+- Gate 2, implemented and locally tested: distributed server-side budgets for costly authenticated operations;
   UID only after authorization, atomic shared store, distinct revocation/deletion
   policy, sanitized 429 with integer `Retry-After`, no automatic unsafe POST retry.
   Anonymous IP-based limits require a verified proxy trust boundary first.
-- Gate 3: App Check Play Integrity in release, debug provider only in development,
-  monitor-first integration. No immediate enforcement or replacement of Auth/Rules.
-- Gate 5: versioned exact price/catalog endpoint, conditional delivery, last-valid
+- Gate 3, implemented but default-off: App Check Play Integrity in release, debug
+  provider only in development, monitor-first backend integration. Live attestation
+  and worker startup ordering remain unverified. No enforcement or replacement of
+  Auth/Rules; see `RELEASE_27_APP_CHECK.md`.
+- Gate 5, still pending: versioned exact price/catalog endpoint, conditional delivery, last-valid
   local fallback; no fabricated prices. Define schema before both clients change.
-- Gate 11: operation/status/duration/cache counters, no token, email, UID label,
+- Gate 11, audit/model prepared, live monitoring still unverified:
+  operation/status/duration/cache counters, no token, email, UID label,
   share URL, raw scan or collection payload in telemetry. Cost assumptions must be
   labelled as simulations; no billing or scaling changes without authorization.
 

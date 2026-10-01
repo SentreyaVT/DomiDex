@@ -2,10 +2,13 @@
 
 Stand: **01.10.2026**, technische Bestandsaufnahme des lokalen Arbeitsverzeichnisses.
 Dieses Dokument beschreibt keine neue Veröffentlichung und keine zugesicherte Erkennungsquote.
-Der lokale Entwicklungsstand (`versionCode 27`, `1.0-closed-alpha.6`) enthält uncommittete Änderungen.
-Er ist weder mit dem GitHub-Default-Branch `master` (Konfiguration 16), dem GitHub-Entwicklungsbranch
-`codex/ui-v3` (Konfiguration 19), dem lokalen HEAD `096aa35` (Konfiguration 21)
-noch mit dem archivierten signierten Release 26 gleichzusetzen.
+Der lokale Entwicklungsstand (`versionCode 27`, `1.0-closed-alpha.6`) wird auf
+`codex/release-27-hardening` bearbeitet. Der Ausgangscheckpoint `53b4e40d` bewahrt
+die zuvor vorhandenen lokalen Änderungen; `096aa35` war der ältere Audit-HEAD.
+Dieser Stand ist weder mit den beim Audit gelesenen GitHub-Branches
+`master` (Konfiguration 16) und `codex/ui-v3` (Konfiguration 19) noch mit dem
+archivierten signierten Release 26 gleichzusetzen. Aktuelle Gate-Nachweise stehen
+in `docs/RELEASE_27.md`; lokale Tests sind keine Veröffentlichungsfreigabe.
 Versions- und Testnachweise sind in `docs/PROJECT_STATUS.md` und `docs/TESTING.md` getrennt dokumentiert.
 
 ## Datenfluss
@@ -63,8 +66,10 @@ Die Parser behandeln Setcodes, Promo-Präfixe und Sammlernummern getrennt von KP
 
 Der exakte OCR-Cache gilt ausschließlich innerhalb einer Aufnahme: ROI, Vorverarbeitung, Orientierung
 und Bildmaße gehören zum Schlüssel. Ergebnisse werden nicht zwischen verschiedenen Karten übernommen.
-Budgets: 5 s Orientierungs-OCR, 9 s vollständige OCR, 18 s Analyzer, 40 s äußerer Worker;
-diese Obergrenzen sind **keine üblichen Laufzeiten oder Geschwindigkeitsgarantie**.
+Konfigurierte Timeoutbudgets: 5 s Orientierungs-OCR, 9 s vollständige OCR,
+18 s Analyzer, 40 s äußerer Worker. Das sind **keine üblichen Laufzeiten oder
+harte Gesamt-Wallclock-Garantie**: Blockierende Katalog-HTTP-Zugriffe besitzen
+eigene Verbindungs-/Lese-Timeouts; Coroutine-Abbruch allein beweist deren sofortiges Ende nicht.
 Bis zu zwei OCR-Aufrufe laufen innerhalb des einzelnen Workers parallel.
 `app/src/main/java/com/dominik/cardvault/ui/ScanTaskResources.kt` verwaltet Ressourcen und native
 Bild-Leases; Abbruch darf von ML Kit noch verwendete Bitmaps nicht vorzeitig freigeben.
@@ -132,9 +137,15 @@ verspricht aber nicht die Löschung bereits übertragener Daten.
 und kontogetrennte Outboxen mit jeweils höchstens 128 Einträgen unter `filesDir/scan_knowledge` (SHA-256-Kontonamensräume).
 `app/src/main/java/com/dominik/cardvault/data/knowledge/FirebaseScanKnowledge.kt` überträgt Evidenz nach Konto-/Berechtigungsprüfung mit WorkManager
 bei Verbindung nach `users/{uid}/scanEvidence/{fingerprint}`. Diese privaten Daten sind kontozuordenbar.
-`functions/index.js` aggregiert transaktional, mit einem Beitrag pro gehashter UID und Fingerprint.
-`functions/knowledge-aggregate.js` setzt `STABLE` ab drei übereinstimmenden Beiträgen und Abstand zwei;
+Maßgebliche Functions-Quelle ist inzwischen das getrennte Web-Repository:
+`DomiDex-Web/backend/scan-knowledge/index.js` aggregiert transaktional mit einem
+Beitrag pro gehashter UID und Fingerprint sowie aktueller Evidenz-/Löschsperrenprüfung.
+Sein `knowledge-aggregate.js` setzt `STABLE` ab drei übereinstimmenden Beiträgen und Abstand zwei;
 bei mindestens drei konkurrierenden Beiträgen und Abstand höchstens eins gilt `DISPUTED`, sonst `CANDIDATE`.
+Die historische Android-Kopie unter `functions/` bleibt erhalten; ihr eingecheckter
+Functions-Predeploy-Hook verweigert ein Deployment, damit sie den neueren Schutz
+nicht versehentlich ersetzt. Das belegt weder den produktiven Triggerstand noch
+eine IAM-Sperre. Details: `docs/WEBAPP_RELEASE_27_HANDOFF.md`.
 `firestore.rules` erlaubt Clients nur passende Einzelzugriffe; globale Aggregate schreibt der vertrauenswürdige Server.
 `app/src/main/java/com/dominik/cardvault/ui/ScannerKnowledgeEvidence.kt` verwendet Knowledge im
 Release-27-Entwicklungsstand nur als temporäres Sortiergewicht bereits vorhandener,
@@ -165,7 +176,7 @@ Aggregatstimmen bei Löschung ist dadurch nicht nachgewiesen und bleibt ein Date
 
 ## Lokaler Entwicklungsstand, Offline-Grenzen und Nachweise
 
-Uncommittete Optimierungen betreffen verzögerte Kontrastvorbereitung, identische zeilenweise Qualitätssamples,
+Im lokalen Entwicklungsstand enthaltene Optimierungen betreffen verzögerte Kontrastvorbereitung, identische zeilenweise Qualitätssamples,
 OCR-Bitmap-Wiederverwendung, Sitzungs-Cleanup und Schutz vor gewöhnlichen Wörtern als schwachen Setcodes.
 Die lokale Ergänzung `app/src/main/java/com/dominik/cardvault/data/knowledge/FirebaseReviewedScanKnowledge.kt`
 liest ScanLab-Prüfhinweise parallel mit 1,5-s-Budget und ohne persistenten Cache.
