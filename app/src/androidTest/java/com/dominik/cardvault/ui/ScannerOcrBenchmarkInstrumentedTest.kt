@@ -73,7 +73,10 @@ class ScannerOcrBenchmarkInstrumentedTest {
         assumeTrue("Opt in with scannerBenchmark=true", args.getString("scannerBenchmark") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val folder = File(context.cacheDir, "scanner-public-fixtures")
-        val manifest = JSONObject(File(folder, "manifest.json").readText())
+        val manifestFile = File(folder, "manifest.json")
+        val manifestBytes = manifestFile.readBytes()
+        val manifest = JSONObject(manifestBytes.toString(Charsets.UTF_8))
+        val manifestSha256 = MessageDigest.getInstance("SHA-256").digest(manifestBytes).joinToString("") { "%02x".format(it) }
         val entries = manifest.getJSONArray("fixtures")
         val fixtures = (0 until entries.length()).map { index -> Fixture(entries.getJSONObject(index), folder) }
         fixtures.forEach(Fixture::verifyHash)
@@ -101,6 +104,9 @@ class ScannerOcrBenchmarkInstrumentedTest {
         val report = JSONObject().apply {
             put("label", label)
             put("schemaVersion", 1)
+            put("identityEvaluationVersion", 1)
+            put("fixtureManifestSha256", manifestSha256)
+            put("identityEvaluationScope", "Observed finite-catalogue candidates; metadata language is not language detection; physical foil/edition and printed set-code truth remain NOT_TESTED")
             put("scope", "Public flat artwork on synthetic frames; finite fixture catalogue, not live catalogue or physical foil/camera validation")
             put("recognitionWidth", recognitionWidth)
             put("experiment", if (recognitionWidth == 1200) "none" else "test_only_analysis_plane_resize")
@@ -205,6 +211,15 @@ class ScannerOcrBenchmarkInstrumentedTest {
                                 put("fixtureCatalogueRankingMillis", rankingMillis)
                                 put("fixtureCatalogueFalseAccept", decision.decision == ScannerDecision.ACCEPTED &&
                                     (case == "blank" || ranked.firstOrNull()?.card?.sourceCardId != fixture.id))
+                                // Additive diagnostics only, after all historical timing/memory windows close.
+                                put("identityEvaluation", ScannerFixtureIdentityEvaluator.evaluate(
+                                    fixture.identityReference(),
+                                    ranked.map { candidate -> candidate.card.let { card -> ScannerFixtureObservedCandidate(
+                                        card.sourceCardId, card.sourceSetId, card.collectorNumber, card.finish, card.variant, card.language,
+                                    ) } },
+                                    decision.decision, analysis?.collectorNumber, analysis?.setIdentifier,
+                                    analysis?.likelyScript?.name, case,
+                                ).toJson())
                             }
                             samples.put(sample)
                             output.writeText(report.toString(2))
@@ -218,6 +233,8 @@ class ScannerOcrBenchmarkInstrumentedTest {
             report.put("summary", summarize(samples))
             output.writeText(report.toString(2))
             fixtures.forEach(Fixture::verifyHash)
+            assertEquals("Fixture manifest must remain unchanged", manifestSha256,
+                MessageDigest.getInstance("SHA-256").digest(manifestFile.readBytes()).joinToString("") { "%02x".format(it) })
             Log.i("DomiDexOcrBenchmark", "Report: ${output.absolutePath}")
         }
         assertEquals("No false accepts in the finite fixture catalogue", 0, (0 until samples.length()).count {
@@ -310,6 +327,14 @@ class ScannerOcrBenchmarkInstrumentedTest {
                     )
                 }
         }
+        fun identityReference() = ScannerFixtureIdentityReference(
+            id, sourceSetId, collectorNumber, json.getString("language"), buildSet {
+                val variants = json.getJSONObject("variants")
+                if (variants.optBoolean("normal")) add("Normal" to "Standard")
+                if (variants.optBoolean("holo")) add("Holo" to "Standard")
+                if (variants.optBoolean("reverse")) add("Reverse Holo" to "Reverse Holo")
+            },
+        )
     }
 
     private fun createFrame(fixture: Fixture, case: String): Bitmap {
@@ -432,6 +457,24 @@ class ScannerOcrBenchmarkInstrumentedTest {
             put("fullNumberCorrectCount", items.count { it.getBoolean("fullNumberCorrect") })
             put("falseAcceptsFiniteCatalogue", items.count { it.getBoolean("fixtureCatalogueFalseAccept") })
             ScannerDecision.entries.forEach { decision -> put(decision.name, items.count { it.getString("fixtureCatalogueDecision") == decision.name }) }
+            val evaluations = items.map { it.getJSONObject("identityEvaluation") }
+            put("identityEvaluation", JSONObject().apply {
+                put("version", 1); put("measuredSamples", evaluations.size)
+                put("physicalPrintingAccuracy", JSONObject.NULL)
+                put("physicalPrintingScope", "NOT_TESTED: no verified physical foil/edition labels")
+                put("acceptedCatalogueIdentity", JSONObject().apply {
+                    listOf("NOT_ACCEPTED", "CORRECT_MEASURED_IDENTITY", "INCORRECT_MEASURED_IDENTITY", "INCOMPLETE_MEASURED_IDENTITY").forEach { outcome ->
+                        put(outcome, evaluations.count { it.getString("acceptedCatalogueIdentity") == outcome })
+                    }
+                })
+                put("dimensions", JSONObject().apply {
+                    evaluations.firstOrNull()?.getJSONObject("dimensions")?.keys()?.forEach { dimension ->
+                        put(dimension, JSONObject().apply { ScannerFixtureIdentityStatus.entries.forEach { status ->
+                            put(status.name, evaluations.count { it.getJSONObject("dimensions").getJSONObject(dimension).getString("status") == status.name })
+                        } })
+                    }
+                })
+            })
         }
     }
 

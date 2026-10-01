@@ -45,10 +45,66 @@ function Statistics($Values) {
     [ordered]@{ n = $ordered.Count; median = $median; p95 = $ordered[[int][Math]::Ceiling($ordered.Count * .95) - 1]; worst = $ordered[-1] }
 }
 
+$identityDimensions = @('cardId', 'sourceSetId', 'candidateCollectorLocalId', 'ocrCollectorLocalId',
+    'ocrFullCollectorNumber', 'catalogueLanguage', 'cataloguePrintingCompatibility', 'printedSetCode', 'physicalPrinting', 'decisionSafety')
+$identityStatuses = @('MATCH', 'MISMATCH', 'NO_OUTPUT', 'NOT_TESTED')
+$identityOutcomes = @('NOT_ACCEPTED', 'CORRECT_MEASURED_IDENTITY', 'INCORRECT_MEASURED_IDENTITY', 'INCOMPLETE_MEASURED_IDENTITY')
+function Validate-Identity($Identity, $Sample, [string]$Description) {
+    if ((Field $Identity 'version') -ne 1) { throw "$Description unsupported identity evaluation version" }
+    if ((Field $Identity 'decision') -cne $Sample.fixtureCatalogueDecision) { throw "$Description inconsistent identity decision" }
+    if ((Field $Identity 'targetCardPresent') -isnot [bool]) { throw "$Description missing target-card flag" }
+    if ($identityOutcomes -cnotcontains (Field $Identity 'acceptedCatalogueIdentity')) { throw "$Description invalid identity outcome" }
+    foreach ($dimension in $identityDimensions) {
+        $value = Field (Field $Identity 'dimensions') $dimension
+        if ($identityStatuses -cnotcontains (Field $value 'status') -or [string]::IsNullOrWhiteSpace((Field $value 'reason'))) {
+            throw "$Description invalid identity dimension $dimension"
+        }
+    }
+}
+function Identity-ComparableFields($Identity) {
+    $fields = [ordered]@{}
+    foreach ($name in @('decision', 'targetCardPresent', 'observedScript', 'acceptedCatalogueIdentity', 'top3CandidateCardIdRecall')) {
+        $fields[$name] = Field $Identity $name
+    }
+    foreach ($dimension in $identityDimensions) {
+        $value = Field (Field $Identity 'dimensions') $dimension
+        foreach ($name in @('status', 'reason', 'expected', 'observed')) { $fields["dimensions.$dimension.$name"] = Field $value $name }
+    }
+    # Canonical property order; raw JSON object member order is not an output difference.
+    $candidates = @(foreach ($candidate in @(Field $Identity 'observedCandidates')) {
+        $entry = [ordered]@{}
+        foreach ($name in @('cardId', 'sourceSetId', 'collectorNumber', 'finish', 'variant', 'language')) { $entry[$name] = Field $candidate $name }
+        $entry
+    })
+    $fields['observedCandidates'] = ConvertTo-Json -InputObject $candidates -Depth 5 -Compress
+    return $fields
+}
+function Identity-Summary($Samples) {
+    $evaluations = @($Samples | ForEach-Object { Field $_ 'identityEvaluation' } | Where-Object { $null -ne $_ })
+    $outcomes = [ordered]@{}
+    foreach ($outcome in $identityOutcomes) { $outcomes[$outcome] = @($evaluations | Where-Object acceptedCatalogueIdentity -CEQ $outcome).Count }
+    $dimensions = [ordered]@{}
+    foreach ($dimension in $identityDimensions) {
+        $counts = [ordered]@{}
+        foreach ($status in $identityStatuses) {
+            $counts[$status] = @($evaluations | Where-Object { (Field (Field $_ 'dimensions') $dimension).status -ceq $status }).Count
+        }
+        $dimensions[$dimension] = $counts
+    }
+    [ordered]@{ measuredSamples = $evaluations.Count; unmeasuredSamples = @($Samples).Count - $evaluations.Count
+        physicalPrintingAccuracy = $null; acceptedCatalogueIdentity = $outcomes; dimensions = $dimensions
+        scope = 'Finite catalogue identity consistency; NOT physical printing or language-classifier accuracy. Missing historical observations are NOT TESTED, never reconstructed from bestId.' }
+}
+
 function Validate-Ocr($Report, [string]$Name) {
     Require-True (Field $Report 'complete') "$Name OCR report is not explicitly complete; interrupted/combined reports require verified complete=true and expectedSamples"
     Require-Integer (Field $Report 'expectedSamples') 1 "$Name has no valid expectedSamples"
     Require-Integer (Field $Report 'repeats') 1 "$Name has no valid repeats"
+    $identityVersion = Field $Report 'identityEvaluationVersion'
+    if ($null -ne $identityVersion) {
+        if ($identityVersion -ne 1) { throw "$Name unsupported identityEvaluationVersion" }
+        Require-Hash (Field $Report 'fixtureManifestSha256') "$Name missing/invalid fixtureManifestSha256"
+    }
     $samples = @(Field $Report 'samples')
     if ($samples.Count -ne $Report.expectedSamples) { throw "$Name OCR count differs from expectedSamples ($($samples.Count) / $($Report.expectedSamples))" }
     $caseIndex = New-Index
@@ -78,6 +134,8 @@ function Validate-Ocr($Report, [string]$Name) {
             Require-Number (Field $sample $metric) "$Name invalid/missing metric $metric at $key"
         }
         if ($null -ne (Field $sample 'inputSha256')) { Require-Hash $sample.inputSha256 "$Name invalid inputSha256 at $key" }
+        if ($null -ne $identityVersion) { Validate-Identity (Field $sample 'identityEvaluation') $sample "$Name at $key" }
+        elseif ($null -ne (Field $sample 'identityEvaluation')) { throw "$Name identity evaluation has no declared version at $key" }
     }
     $expectedRectangle = [long]$fixtureIndex.Count * $caseIndex.Count * $Report.repeats
     if ($samples.Count -ne $expectedRectangle) { throw "$Name missing fixture/case/iteration combinations ($($samples.Count) / $expectedRectangle)" }
@@ -108,6 +166,7 @@ function Ocr-SamplesSummary($Samples) {
         rejected = @($all | Where-Object fixtureCatalogueDecision -CEQ REJECTED).Count
         falseAccepts = @($all | Where-Object { $_.fixtureCatalogueFalseAccept -eq $true }).Count
         failures = @($all | Where-Object { -not [string]::IsNullOrEmpty($_.failure) }).Count
+        identityEvaluation = Identity-Summary $all
         observedAfterOperationPssKiB = Statistics $pss
         maximumObservedAfterOperationPssKiB = if ($pss.Count) { ($pss | Measure-Object -Maximum).Maximum } else { $null }
         observedNativeAllocatedBytes = Statistics @($all | ForEach-Object { Field $_.memoryAfter 'nativeAllocatedBytes' })
@@ -231,6 +290,10 @@ Require-SameSet $beforeOcr.cases $afterOcr.cases 'Declared OCR case sets differ'
 if ($beforeOcr.repeats -ne $afterOcr.repeats -or $beforeOcr.expectedSamples -ne $afterOcr.expectedSamples) { throw 'OCR repeats/expected sample counts differ' }
 $verifiedInputs = 0
 $unverifiedInputs = 0
+$comparedIdentitySamples = 0
+$uncomparedIdentitySamples = 0
+$manifestHashesCompared = $null -ne (Field $beforeOcr 'fixtureManifestSha256') -and $null -ne (Field $afterOcr 'fixtureManifestSha256')
+if ($manifestHashesCompared -and $beforeOcr.fixtureManifestSha256 -cne $afterOcr.fixtureManifestSha256) { throw 'Fixture manifest hashes differ; new ground truth is not comparable' }
 $changes = foreach ($before in $beforeOcr.samples) {
     $key = Sample-Key $before
     $after = $afterIndex[$key]
@@ -246,12 +309,24 @@ $changes = foreach ($before in $beforeOcr.samples) {
             $differences[$field] = [ordered]@{ before = Field $before $field; after = Field $after $field }
         }
     }
+    if ($null -ne (Field $before 'identityEvaluation') -and $null -ne (Field $after 'identityEvaluation')) {
+        $comparedIdentitySamples++
+        $beforeIdentity = Identity-ComparableFields $before.identityEvaluation
+        $afterIdentity = Identity-ComparableFields $after.identityEvaluation
+        foreach ($field in $beforeIdentity.Keys) {
+            if ($beforeIdentity[$field] -cne $afterIdentity[$field]) {
+                $differences["identityEvaluation.$field"] = [ordered]@{ before = $beforeIdentity[$field]; after = $afterIdentity[$field] }
+            }
+        }
+    } else { $uncomparedIdentitySamples++ }
     if ($differences.Count) { [ordered]@{ fixture = $before.fixtureId; case = $before.case; iteration = $before.iteration; changes = $differences } }
 }
 [ordered]@{
     note = 'Emulator debug measurements only. Finite public-fixture catalogue, not complete production-catalogue accuracy. p95 uses nearest-rank and is weak with small samples. PSS/heap observations are not true peak or leak proof; CPU is process-wide/coarsely sampled. Bitmap preparation bytes are cumulative, not simultaneous RAM. Geometry pixel hashes cover the first measured output; repeat checks cover structure/quality.'
     validation = [ordered]@{ completeReports = $true; matchingOcrSampleKeys = $beforeIndex.Count; matchingGeometryCases = $beforeGeometryIndex.Count
         matchingOcrInputHashes = $verifiedInputs; ocrInputsWithoutTwoSidedHash = $unverifiedInputs
+        comparedIdentitySamples = $comparedIdentitySamples; identitySamplesWithoutTwoSidedObservation = $uncomparedIdentitySamples
+        fixtureManifestHashesCompared = $manifestHashesCompared
         inputHashLimitation = if ($unverifiedInputs) { 'Some historical samples have no two-sided input hash; identity/case/iteration match is verified but exact input bytes are not independently proven for those samples.' } else { $null } }
     baseline = Ocr-Summary $beforeOcr
     optimized = Ocr-Summary $afterOcr
