@@ -2,7 +2,32 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: real deferred point read across Room reopen
+### Latest local checkpoint: current-source isolated R8 verification
+
+The same reviewed R8-only guard now verifies source commit `e9b2627`, including
+the reconnect fix. Its exact 32-task graph ends at `minifyReleaseWithR8`; no
+signing input/configuration, package/bundle/install task or release artifact is
+allowed. Offline, no build/configuration cache, fresh isolated output directory:
+**BUILD SUCCESSFUL in 3m44s**, 30 actionable tasks (28 executed, two up-to-date
+profile/generated-rule merge tasks). Existing lifecycle deprecations remain;
+there is no new R8 missing-class warning. Conservative R8 rules stay unchanged.
+
+R8 9.3.16/minAPI26 emits a fresh **104,554,056-byte mapping** and five DEX files;
+all lengths, headers, SHA-1 and Adler32 checks verify. Mapping SHA256
+`836ba0ac499ec294fbacbbdd91ad8772394473d42739a540ab889c5773908b5b`;
+map ID `bc25bf597b0fab6119bbdaf2bb0f695d922e83db91aded640d9f04f379918375`.
+Before/after **439 inputs**, all **13 schemas**, and **20 previous build/release
+files** (574,422,286 bytes) match exactly. The immutable v26 AAB still matches its
+Gate-0 hash. Evidence: `artifacts/release27-engineering-20261001/r8-only-20261001T2030/`
+with guarded init, logs, snapshots and `verification.json`.
+
+This is current-source R8/DEX integrity, not packaged runtime, retracing, native
+symbols or Play acceptance. The diagnostic mapping must NOT be uploaded for v26
+or any other package. A future authorized final build needs its matching mapping.
+No APK/AAB signing/packaging, product/build configuration, deployment or Xiaomi
+change. Overall release **NOT READY**; remaining gates are unchanged.
+
+### Previous local checkpoint: real deferred point read across Room reopen
 
 A test-only addition joins real named SDK SERVER point reads and the existing
 unwired private-pull Room adapter. Admin seeds a valid parent/binder/placement;
@@ -14,7 +39,7 @@ applies exact slot/holo/identity/revision and atomically removes the marker.
 Checkpoint revision advances; scope, epoch and cursor phase remain unchanged.
 No dummy parent, remote write, outbox ACK or active delta rollout is introduced.
 
-**11/11 actual SDK cases PASS** (87.789 s complete harness; new case 3.213 s),
+**11/11 actual SDK cases PASS** (87.918 s complete harness; new case 3.213 s),
 including all previous ten, with eleven complete Admin preflights/readbacks and
 twelve exact nominal Google accounts. All three new seed payloads/timestamps and
 previous owners remain unchanged. Exact marked test DB/sidecars are removed only
@@ -884,7 +909,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest Android 899 JVM PASS/1 opt-in SKIP, 371 fixed emulator PASS and two extra full-field Room controls; latest completed Web product suite 1285 PASS plus 103 public-cache cases and 33 local backend/Web-client SDK cases; seven real Android collection-session SDK cases with independent Admin readbacks; debug/test builds, release Kotlin, both lints and isolated Web build pass in their dated checkpoints; prior failures retained; complete physical/live contracts untested |
+| 13 Full regression | IN PROGRESS | latest Android 912 JVM PASS/1 opt-in SKIP; 371 fixed emulator cases cover the same product APK used by the later test-only SDK expansion; 11 actual collection-session SDK cases and 11 Room controls pass with independent Admin proof; latest broad Web product suite 1285 PASS, 103 public-cache cases and 33 local backend/Web-client SDK cases are separate/overlapping scopes; debug/test builds, release Kotlin, both lints, isolated R8 and Web build pass in their dated checkpoints; prior failures retained; physical/live contracts remain untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
