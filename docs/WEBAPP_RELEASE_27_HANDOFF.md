@@ -1,10 +1,16 @@
 # Release 27: Android / Web backend handoff
 
-Updated 2026-10-01. This is a development handoff, not deployment authorization.
+Updated 2026-10-02. This is a development handoff, not deployment authorization.
 
 The Web application and backend remain in the separate sibling repository
 `DomiDex-Web`. Its detailed handoff is `docs/WEBAPP_RELEASE_27_HANDOFF.md` there.
 Do not copy the Web application into this Android workspace.
+
+R27 owner decision (2026-10-02): retain the secured full synchronization paths.
+The inactive delta foundation is a future optimization, not an R27 rollout gate.
+Do not activate its reader, add cursors/migrations or replace the architecture.
+Android/Web identity, conflict, offline and owner-isolation checks still apply;
+no deployment or release signing is authorized by this scope decision.
 
 ## Reproducible baseline
 

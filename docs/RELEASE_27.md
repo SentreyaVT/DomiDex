@@ -1,6 +1,21 @@
 # Release 27 engineering ledger
 
-This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
+This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-02.
+
+### Scope decision: retain full synchronization for R27 (2026-10-02)
+
+The owner explicitly chose the currently secured full-sync implementation for
+R27. The existing Collection listener and fair, bounded private FULL pull remain
+active; the delta reader/Room adapter stay unwired. Delta activation, its query
+completeness proofs and any larger read-path redesign are deferred to a future
+optimization, not remaining R27 release requirements. No code, schema, cursor,
+Rules, index, setting or dependency changes are needed for this decision.
+
+Correctness, data integrity and existing regressions take priority. The remaining
+full-sync lifecycle/offline/multi-client tests and all non-delta mission gates
+remain applicable. Historical delta experiments below are retained as evidence,
+not current rollout instructions. Overall NOT READY is not lifted solely by
+this scope adjustment. Release-signing/production/Xiaomi restrictions remain.
 
 ### Latest local checkpoint: current parser source passes isolated R8
 
@@ -1003,7 +1018,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply and explicit conflict protection tested; real local two-SDK matrix 25/25; local delta-to-business Room adapter 32/32; full sync-package 140 PASS/1 opt-in SKIP (later 140 PASS/4 opt-in SKIP); actual Android SDK overlay proof 3/3; actual Android repository/worker-pass and Web save/clear roundtrip 3+2 phases twice; actual stale-base conflict with explicit cloud/local choices each 3+2 phases and five independent server readbacks; unwired fair deferred reservation 6 JVM +18 Room PASS; full scheduling/UI convergence, active delta integration and multi-client scale remain; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS, FULL retained | Existing owner/session/ACK/conflict/fair-pull protections and dated Android/Web SDK/Room proofs remain. Latest session/deferred suite 11/11 uses its own pre-parser APK; actual scheduler/UI/process and multi-client scale boundaries remain. Delta activation and its separate acceptance gates are deferred by explicit owner decision 2026-10-02, not R27 requirements; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded Android import with 3 actual Room persistence/rollback cases, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card decoded-body cap/cancellation proven 14/14, cache/package regression 83/83; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
@@ -1012,7 +1027,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest Android 912 JVM PASS/1 opt-in SKIP; 371 fixed emulator cases cover the same product APK used by the later test-only SDK expansion; 11 actual collection-session SDK cases and 11 Room controls pass with independent Admin proof; latest broad Web product suite 1285 PASS, 103 public-cache cases and 33 local backend/Web-client SDK cases are separate/overlapping scopes; debug/test builds, release Kotlin, both lints, isolated R8 and Web build pass in their dated checkpoints; prior failures retained; physical/live contracts remain untested |
+| 13 Full regression | IN PROGRESS | Latest parser checkpoint: Android 914 JVM PASS/1 existing optional SKIP, 371 fixed emulator cases plus 3 analyzer cases; R8-only source 2dce825 PASS. Earlier 11 SDK/11 Room proofs retain their own pre-parser APK identities, not relabelled as new runtime coverage. Latest broad Web product suite 1285 PASS, 103 public-cache cases and 33 local backend/Web-client SDK cases are separate/overlapping scopes. Build/lint and historical failures remain documented; physical/live contracts remain untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |

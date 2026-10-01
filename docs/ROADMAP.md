@@ -1,6 +1,6 @@
 # Roadmap – nächste Prüfziele, keine Release-Zusage
 
-Stand: 2026-10-01. Ausgangspunkt ist der ursprüngliche Audit in
+Stand: 2026-10-02. Ausgangspunkt ist der ursprüngliche Audit in
 [PROJECT_STATUS](PROJECT_STATUS.md). Die folgenden Prüfziele sind keine Liste
 vollständig unerledigter Implementierungen: anschließende lokale Teilkorrekturen,
 Tests und offene Gates stehen im [Release-27-Ledger](RELEASE_27.md).
@@ -24,6 +24,8 @@ Tests und offene Gates stehen im [Release-27-Ledger](RELEASE_27.md).
    ältere Clients, Offline-Konflikte und erneuten echten Trend gemeinsam testen.
 5. **Sync/Binder:** messbare Erstlade-/Folgeladezeiten; zwei berechtigte Geräte,
    Offline/Reconnect, Revocation, Konflikte, Löschen und Teilen end-to-end.
+   Für R27 bleibt auf ausdrücklichen Nutzerwunsch der abgesicherte vollständige
+   Abgleich aktiv. Kein Delta-Rollout und kein unnötiger Lesepfad-Umbau.
 6. **Release-Gate:** unveränderte R8-Sicherheitsgrenzen, Mapping zum exakten AAB,
    nachgewiesene Native-Symbol-Abdeckung, ehrlicher Hersteller-Blocker; finaler
    Geräte- und Google-Play-Kompatibilitätstest nach separatem Go.
@@ -34,6 +36,11 @@ werden durch diese Roadmap freigegeben.
 
 ## Hardening und Wartbarkeit
 
+- **Delta als spätere Optimierung:** vorhandene inaktive Grundlage erhalten;
+  erst nach belastbarem Nachweis vollständiger Änderungen einschließlich
+  SDK-Overlays, Cursorgrenzen, Altbestand und Wiederherstellung aktivieren.
+  Die offenen Delta-Nachweise sind keine R27-Anforderung mehr; Sicherheits- und
+  Regressionstests des weiterhin aktiven vollständigen Sync bleiben erforderlich.
 - Die lokal implementierten, standardmäßig deaktivierten App-Check-Provider erst
   nach Projektregistrierungs-/Play-Integrity-Prüfung aktivieren; Enforcement separat
   freigeben und bestehende UID-/Serverrechte nicht dadurch ersetzen.

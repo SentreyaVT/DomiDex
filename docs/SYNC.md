@@ -1,9 +1,30 @@
 # Release 27 synchronization contract
 
-Status: Gate 4 design and measured regression work, not a deployed delta protocol.
+Status: R27 retains the validated full-sync path by explicit owner decision on
+2026-10-02. Delta is deferred, not a release-27 activation requirement.
 The current application remains Room-first. Auth, entitlements, owner isolation,
 optimistic revisions, tombstones and the existing private-sharing readiness gate
 must remain authoritative. No production data migration is authorized here.
+
+## Release-27 scope decision (2026-10-02)
+
+Keep the existing Collection listener and the bounded, fair four-group private
+FULL pull with their current Room/outbox/session protections. Do not wire the
+experimental timestamp/delta protocol or its Room adapter into the active worker,
+replace the read architecture, migrate cursors or add rollout switches for R27.
+The existing foundation/tests remain as inactive research, not shipped behavior.
+
+A future delta proposal first needs reproducible no-missed-change evidence for
+SDK pending-write overlays, timestamp provenance, cursor ties, legacy records,
+interrupted passes, dependencies, repair and account changes. The current
+`Source.SERVER` metadata checks alone do not establish query completeness. Until
+that is solved, correctness and data integrity take priority over fewer reads.
+
+Earlier sections below retain their dated findings. Their delta integration gates
+now apply to that future optimization, NOT to R27 release acceptance. Existing
+R27 full-sync lifecycle, offline/conflict, multi-client and scale checks still
+apply; this decision does not claim instantaneous sync, zero remaining bugs,
+completed hardware validation or authorization to deploy/sign.
 
 ## Deferred point-read / persistent Room integration (2026-10-01)
 
@@ -435,7 +456,7 @@ The later active round-robin change is described below; it does not revive this
 rejected horizon query. Low-latency Android/Web convergence and wider Gate-4
 acceptance remain open; do not hide the rejected SDK evidence.
 
-## Private binder delta protocol — foundation in progress, not active yet
+## Private binder delta protocol — deferred future optimization, inactive for R27
 
 `PrivateBinderPullProtocol.kt` now defines pure phases, timestamp tuples, bounded
 page transitions and strict local metadata encoding. `PrivatePullRoomStore.kt`
