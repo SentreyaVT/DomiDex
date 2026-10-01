@@ -2,6 +2,7 @@ package com.dominik.cardvault.data.knowledge
 
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
 import com.dominik.cardvault.data.feedback.ScannerReportKnowledgeContext
+import com.dominik.cardvault.security.DomiDexAppCheck
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import java.io.IOException
@@ -49,7 +50,7 @@ internal class FirebaseReviewedScanKnowledge(private val auth: FirebaseAuth) {
                         .header("Authorization", "Bearer $bearer").header("Accept", "application/json")
                         .header("Cache-Control", "no-store")
                         .post(payload.toRequestBody("application/json".toMediaType())).build()
-                    client.newCall(request).awaitReviewedHint(context)
+                    client.newCall(DomiDexAppCheck.attachCachedHeader(request)).awaitReviewedHint(context)
                 }
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (_: Exception) { null }

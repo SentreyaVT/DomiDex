@@ -2,6 +2,7 @@ package com.dominik.cardvault.data.sharing
 
 import android.content.Context
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
+import com.dominik.cardvault.security.DomiDexAppCheck
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import java.io.IOException
@@ -167,7 +168,7 @@ private object OkHttpSharingTransport : BinderSharingTransport {
         val request = Request.Builder().url(url).method(method, requestBody)
             .header("Authorization", "Bearer $token").header("Accept", "application/json")
             .header("Cache-Control", "no-store").build()
-        return client.newCall(request).awaitSharingResponse()
+        return client.newCall(DomiDexAppCheck.attachCachedHeader(request)).awaitSharingResponse()
     }
 }
 

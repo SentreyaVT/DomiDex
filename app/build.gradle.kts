@@ -7,6 +7,12 @@ plugins {
     alias(libs.plugins.google.services)
 }
 
+// Opt-in only after the Firebase/Play registration and rollout checks are complete.
+val appCheckEnabled = providers.gradleProperty("domidexAppCheck").orNull?.let {
+    require(it == "true" || it == "false") { "domidexAppCheck must be true or false" }
+    it.toBoolean()
+} ?: false
+
 val releaseKeystorePropertiesFile = rootProject.file("keystore.properties")
 val releaseKeystoreProperties = Properties()
 if (releaseKeystorePropertiesFile.isFile) {
@@ -53,6 +59,7 @@ android {
         targetSdk = 37
         versionCode = 27
         versionName = "1.0-closed-alpha.6"
+        buildConfigField("boolean", "DOMIDEX_APP_CHECK_ENABLED", appCheckEnabled.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -137,6 +144,9 @@ dependencies {
     implementation(libs.firebase.firestore)
     implementation(libs.firebase.storage)
     implementation(libs.firebase.config)
+    implementation(libs.firebase.appcheck)
+    debugImplementation(libs.firebase.appcheck.debug)
+    releaseImplementation(libs.firebase.appcheck.play.integrity)
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)
     implementation(libs.googleid)

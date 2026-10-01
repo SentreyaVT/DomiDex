@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
+import com.dominik.cardvault.security.DomiDexAppCheck
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import java.io.ByteArrayOutputStream
@@ -78,7 +79,7 @@ internal class FirebaseScannerReportUploader(@Suppress("UNUSED_PARAMETER") conte
                     .build()
                 requireSameAccount(auth, expectedUid)
                 currentCoroutineContext().ensureActive()
-                client.newCall(request).awaitReportReceipt(auth, expectedUid)
+                client.newCall(DomiDexAppCheck.attachCachedHeader(request)).awaitReportReceipt(auth, expectedUid)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: ScannerReportUploadException) {

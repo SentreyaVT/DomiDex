@@ -156,9 +156,9 @@ An 18-test pass alone is not Gate 1 approval.
 |---|---|---|
 | 0 Baseline | PASS (local reproducible scope) | frozen current source, fresh JVM/instrumentation/scanner timings and isolated Web build; live limits explicit |
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
-| 2 API security | IN PROGRESS | distributed write limits and local Auth tested; stream bounds/review in progress; public IP/token limits belong to Gate 6 |
-| 3 App Check | NOT TESTED | actual integration and monitor-first behavior, no blind enforcement |
-| 4 Collection/binder sync | NOT TESTED | initial/delta/outbox/conflict/offline/restart/multi-client scale |
+| 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
+| 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
+| 4 Collection/binder sync | IN PROGRESS | reproduced ACK races: 5/7 baseline failures, now 18 helper/Room tests pass; final worker-chain adjustment and initial/delta/outbox/conflict/offline/multi-client scale remain |
 | 5 Pricing/catalog | NOT TESTED | exact-identity centralized fetch/cache/fallback/retention evidence |
 | 6 Shared binder scale | NOT TESTED | 5k placements, pagination, final revoke check, caching |
 | 7 Camera stability | NOT TESTED | synthetic/emulator regression; real hardware matrix separate |
@@ -174,8 +174,11 @@ An 18-test pass alone is not Gate 1 approval.
 
 ## Findings to reproduce, not assumed fixed
 
-- Backend has no common multi-instance request rate-limit implementation in inspected
-  source. Existing size/concurrency limits are not request rate limits.
+- Baseline had no common multi-instance request limiter. Gate 2 now uses shared
+  Firestore transactions for report uploads/share creation/role grants, with
+  monitor-first configuration and explicit later enforcement. Rights revocation and
+  account deletion remain available without consuming these write quotas. Public
+  IP/token limits and their trusted ingress boundary remain Gate 6 work.
 - Sharing fetches external card data directly and does not use the same enrichment
   or price-selection path as normal collection pricing. Validate exact identity and
   public-price consent before unifying any path.
@@ -209,3 +212,37 @@ contracts and separate workspace responsibilities as those gates are implemented
 Final delivery must contain all 29 requested report sections and an evidence-based
 READY FOR INTERNAL VALIDATION / READY FOR CLOSED TEST / NOT READY classification.
 This ledger does not declare the mission complete.
+
+## Gate 2 local validation
+
+Web/backend adds three UID+policy budgets, current Bearer revalidation for role
+changes, exact owned quota deletion, in-transaction deletion fencing, bounded JSON
+streams for six Admin/Lab actions, a scoped OpenAPI contract and a clean package-
+import smoke test. No rules were weakened and no production configuration changed.
+
+Final isolated suite: 690 primary/new tests + 76 extra + 7 Node = 773 unique tests.
+Separately 30 Auth/Firestore/Storage emulator tests pass, including two independent
+Firestore clients competing for the same quota. Typecheck/lint pass. Clean isolated
+Web build: 295 source files, 37.125 s, not a deployable production artifact.
+An initial CPU-contended run had two existing 1-second UI wait failures (688/690);
+the unchanged full serial rerun passed 690/690 in 16.61 s. No assertion or timeout
+was loosened. Public ingress, Cloud Run behavior, live TTL and old sharing-overlay
+packer deployment remain unverified; the old packer is explicitly not approved.
+
+## Gate 3 local validation
+
+Android/AppCheck default is off, backend default is off with monitor-only opt-in;
+no Firebase/Play Console or production setting was changed. Provider registration,
+live Play/debug attestation and enabled SDK performance still need a separate
+activation decision. See `docs/RELEASE_27_APP_CHECK.md` for the exact contract.
+
+106 selected Android Auth/sharing/sync/AppCheck JVM tests pass (15 new), and 31
+offline-emulator tests pass (2 new startup tests, 18 collection ACK/failure cases,
+11 existing sharing/work tests). Debug/test APK builds, release Kotlin and fresh
+release manifest, debug/release lint pass in 4m 53s. No release signing or AAB build.
+The unmodified signed-v26 hash was rechecked. Web commit `d58c917` adds 52 new
+AppCheck tests within 825 unique tests, typecheck/lint, package-import and isolated
+Web-build success. No real attestation is inferred from these local test doubles.
+
+Remaining scanner-knowledge baseline regressions are still recorded for Gate 9;
+these selected passing suites are not a claim that every gate or full suite is green.
