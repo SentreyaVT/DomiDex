@@ -40,37 +40,52 @@ class RoomCollectionRepository(
     private val verifyGuestClaimOwner: suspend () -> String = { com.dominik.cardvault.auth.requireVerifiedCollectionOwnerForClaim() },
     private val onKeepLocalPriceConflicts: suspend (String) -> Int = { 0 },
     private val captureConflictSession: (String) -> (() -> Boolean) = { owner -> { activeOwnerUid.value == owner } },
+    private val captureLocalSession: (String) -> (() -> Boolean) = { owner -> { activeOwnerUid.value == owner } },
 ) : CollectionRepository {
     private val dao = database.cardVaultDao()
     private val catalogQueries = CatalogQueryCache<CatalogSearchResult>()
     private val catalogObserverMutex = Mutex()
     private var catalogObserverRegistered = false
 
-    override suspend fun exportUserBackup(settingsJson: String): String = withContext(Dispatchers.IO) {
-        com.dominik.cardvault.data.backup.UserBackupStore(database, activeOwnerUid.value).exportJson(org.json.JSONObject(settingsJson))
+    override fun captureLocalDataSession(): com.dominik.cardvault.data.backup.LocalDataSession {
+        val owner = activeOwnerUid.value
+        val current = captureLocalSession(owner)
+        return com.dominik.cardvault.data.backup.LocalDataSession(owner) { activeOwnerUid.value == owner && current() }
+            .also { it.requireCurrent() }
     }
 
-    override suspend fun restoreUserBackup(raw: String, journalKey: String?): com.dominik.cardvault.data.backup.UserBackupStore.Result = withContext(Dispatchers.IO) {
-        val owner = activeOwnerUid.value
-        com.dominik.cardvault.data.backup.UserBackupStore(database, owner).restore(raw, journalKey) { activeOwnerUid.value == owner }.also {
+    override suspend fun exportUserBackup(settingsJson: String, session: com.dominik.cardvault.data.backup.LocalDataSession): String = withContext(Dispatchers.IO) {
+        session.requireCurrent()
+        com.dominik.cardvault.data.backup.UserBackupStore(database, session.ownerUid).exportJson(org.json.JSONObject(settingsJson))
+            .also { session.requireCurrent() }
+    }
+
+    override suspend fun restoreUserBackup(raw: String, journalKey: String?, session: com.dominik.cardvault.data.backup.LocalDataSession): com.dominik.cardvault.data.backup.UserBackupStore.Result = withContext(Dispatchers.IO) {
+        session.requireCurrent()
+        val owner = session.ownerUid
+        com.dominik.cardvault.data.backup.UserBackupStore(database, owner).restore(raw, journalKey) { session.requireCurrent(); true }.also {
             if (!it.alreadyImported && owner != GUEST_OWNER_UID) onSyncNeeded()
         }
     }
 
-    override suspend fun restoreLegacyBackup(raw: String, entries: List<ManualCardInput>, journalKey: String?): Int = withContext(Dispatchers.IO) {
+    override suspend fun restoreLegacyBackup(raw: String, entries: List<ManualCardInput>, journalKey: String?, session: com.dominik.cardvault.data.backup.LocalDataSession): Int = withContext(Dispatchers.IO) {
         require(journalKey == null || journalKey.matches(Regex("backup-file-commit:[a-f0-9-]{36}")))
-        val owner = activeOwnerUid.value
+        session.requireCurrent()
+        val owner = session.ownerUid
         val hash = java.security.MessageDigest.getInstance("SHA-256").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }
         database.withTransaction {
             if (journalKey != null) dao.putMetadata(AppMetadataEntity(journalKey, "done"))
             val key = "backup-v1:$owner:$hash"
-            if (dao.metadata(key) != null) return@withTransaction 0
+            val alreadyImported = dao.metadata(key) != null
+            session.requireCurrent()
+            if (alreadyImported) return@withTransaction 0
             entries.forEach {
-                check(activeOwnerUid.value == owner) { "Konto während des Imports gewechselt. Bitte erneut versuchen." }
+                session.requireCurrent()
                 addManualCard(it)
             }
-            check(activeOwnerUid.value == owner) { "Konto während des Imports gewechselt. Bitte erneut versuchen." }
+            session.requireCurrent()
             dao.putMetadata(AppMetadataEntity(key, "done"))
+            session.requireCurrent()
             entries.size
         }
     }

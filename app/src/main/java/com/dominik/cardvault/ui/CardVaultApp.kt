@@ -407,7 +407,7 @@ private val relaxedTutorialSteps = listOf(
     detail?.let { section ->
         if (section == "Konto") AccountSettingsDialog(repository, onDismiss = { detail = null })
         else if (section == "Konto löschen") AccountDeletionRequestDialog(onDismiss = { detail = null })
-        else if (section == "Sammlung & Backup") CollectionBackupDialog(repository, portfolio.cards, onDismiss = { detail = null })
+        else if (section == "Sammlung & Backup") CollectionBackupDialog(repository, onDismiss = { detail = null })
         else SettingsDetailDialog(section, sync, context, onRefresh = refreshCatalog, onDismiss = { detail = null })
     }
     if (BuildConfig.DEBUG && adminAllowed && showAdminTools) {
@@ -775,7 +775,8 @@ private fun parseCollectionBackup(raw: String): List<ManualCardInput> {
 
 private data class BackupImportPayload(val raw: String, val version: Int, val entryCount: Int, val entries: List<ManualCardInput> = emptyList(), val zipEntries: Map<String, ByteArray> = emptyMap())
 
-private fun writeDomiDexBackup(output: OutputStream, snapshot: com.dominik.cardvault.data.backup.BackupPhotos.Export, feedbackStore: ScanFeedbackStore): Int {
+private fun writeDomiDexBackup(output: OutputStream, snapshot: com.dominik.cardvault.data.backup.BackupPhotos.Export, feedbackStore: ScanFeedbackStore, session: com.dominik.cardvault.data.backup.LocalDataSession): Int {
+    session.requireCurrent()
     val bounded = object : java.io.FilterOutputStream(output) {
         var written = 0L
         override fun write(value: Int) { require(++written <= 28L * 1024 * 1024) { "Das Backup überschreitet das sichere Dateilimit (28 MB)." }; out.write(value) }
@@ -790,7 +791,7 @@ private fun writeDomiDexBackup(output: OutputStream, snapshot: com.dominik.cardv
         zip.write(snapshot.raw.toByteArray(Charsets.UTF_8))
         zip.closeEntry()
         snapshot.files.forEach { (path, bytes) -> zip.putNextEntry(java.util.zip.ZipEntry(path)); zip.write(bytes); zip.closeEntry() }
-        return feedbackStore.exportTo(zip)
+        return feedbackStore.exportTo(zip, session)
     }
 }
 
@@ -812,76 +813,97 @@ private fun readDomiDexBackup(input: InputStream, context: Context): BackupImpor
     }
 }
 
-@Composable private fun CollectionBackupDialog(repository: CollectionRepository, cards: List<CollectionCard>, onDismiss: () -> Unit) {
+@Composable private fun CollectionBackupDialog(repository: CollectionRepository, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val feedbackStore = remember(context) { ScanFeedbackStore(context) }
     var status by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingImport by remember { mutableStateOf<BackupImportPayload?>(null) }
+    var pendingImport by remember { mutableStateOf<Pair<BackupImportPayload, com.dominik.cardvault.data.backup.LocalDataSession>?>(null) }
+    var exportSession by remember { mutableStateOf<com.dominik.cardvault.data.backup.LocalDataSession?>(null) }
+    var importSession by remember { mutableStateOf<com.dominik.cardvault.data.backup.LocalDataSession?>(null) }
     var working by remember { mutableStateOf(false) }
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+        val session = exportSession
+        exportSession = null
+        if (uri == null) { working = false; return@rememberLauncherForActivityResult }
+        if (session == null) { working = false; status = "Export bitte für das gewünschte Konto neu starten."; return@rememberLauncherForActivityResult }
         scope.launch {
             working = true
             status = runCatching {
                 val feedbackCount = withContext(Dispatchers.IO) {
+                    session.requireCurrent()
                     val snapshot = com.dominik.cardvault.data.backup.BackupPhotos.export(context,
-                        repository.exportUserBackup(com.dominik.cardvault.data.backup.BackupSettings.export(context).toString()))
+                        repository.exportUserBackup(com.dominik.cardvault.data.backup.BackupSettings.export(context).toString(), session))
                     val verifiedArchive = File.createTempFile("domidex-export-", ".zip", context.cacheDir)
                     try {
-                        val count = verifiedArchive.outputStream().use { writeDomiDexBackup(it, snapshot, feedbackStore) }
+                        val count = verifiedArchive.outputStream().use { writeDomiDexBackup(it, snapshot, feedbackStore, session) }
                         verifiedArchive.inputStream().use { com.dominik.cardvault.data.backup.BoundedBackupReader.read(it) }
-                        context.contentResolver.openOutputStream(uri)?.use { target -> verifiedArchive.inputStream().use { it.copyTo(target) } }
+                        session.requireCurrent()
+                        context.contentResolver.openOutputStream(uri)?.use { target -> verifiedArchive.inputStream().use { session.copyTo(it, target) } }
                             ?: error("Datei konnte nicht geöffnet werden.")
                         count
                     } finally { verifiedArchive.delete() }
                 }
-                "Backup gespeichert: ${cards.size} Sammlungseinträge · $feedbackCount lokale Scan-Feedbacks."
+                session.requireCurrent()
+                "Backup gespeichert: $feedbackCount lokale Scan-Feedbacks dieses Kontos. Unzugeordnete ältere Feedbacks sind nicht enthalten."
             }.getOrElse { "Backup konnte nicht gespeichert werden. ${it.message.orEmpty()}" }
             working = false
         }
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+        val session = importSession
+        importSession = null
+        if (uri == null) { working = false; return@rememberLauncherForActivityResult }
+        if (session == null) { working = false; status = "Import bitte für das gewünschte Konto neu starten."; return@rememberLauncherForActivityResult }
         scope.launch {
             working = true
-            val parsed = runCatching { withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { readDomiDexBackup(it, context) } ?: error("Datei konnte nicht geöffnet werden.") } }
-            parsed.onSuccess { pendingImport = it; status = null }.onFailure { status = it.message ?: "Backup konnte nicht gelesen werden." }
+            val parsed = runCatching { withContext(Dispatchers.IO) { session.requireCurrent(); context.contentResolver.openInputStream(uri)?.use { readDomiDexBackup(it, context) }?.also { session.requireCurrent() } ?: error("Datei konnte nicht geöffnet werden.") } }
+            parsed.onSuccess { pendingImport = it to session; status = null }.onFailure { status = it.message ?: "Backup konnte nicht gelesen werden." }
             working = false
         }
     }
     AlertDialog(
         onDismissRequest = { if (!working) onDismiss() }, title = { Text("Sammlung & Backup") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            SettingsInfoBlock("Lokales DomiDex-Backup", "Backup V2 enthält deine Sammlung, Varianten, Kaufdaten, Notizen, private Binder, Cover, Seiten, Kartenplätze, Holo-Einstellungen und Darstellungseinstellungen. Lokales Scan-Feedback wird mit seinen Bildern ergänzt. Marktpreis-Caches, Login und Einwilligungen werden nicht übernommen.")
+            SettingsInfoBlock("Lokales DomiDex-Backup", "Backup V2 enthält deine Sammlung, Varianten, Kaufdaten, Notizen, private Binder, Cover, Seiten, Kartenplätze, Holo-Einstellungen und Darstellungseinstellungen. Nur eindeutig diesem Konto zugeordnetes lokales Scan-Feedback wird mit seinen Bildern ergänzt. Ältere Feedbacks ohne Kontozuordnung bleiben unverändert auf diesem Gerät und werden nicht exportiert. Marktpreis-Caches, Login und Einwilligungen werden nicht übernommen.")
             SettingsInfoBlock("Sicher speichern", "Wähle beim Export selbst einen Speicherort, zum Beispiel Dateien, Downloads oder einen privaten Cloud-Ordner. DomiDex lädt die Datei nicht hoch.")
             SettingsInfoBlock("Sicher importieren", "Backup V2 ergänzt fehlende Einträge. Bereits vorhandene Identitäten, Mengen und Binder bleiben erhalten. Ein erneuter Import desselben Backups erhöht keine Mengen. Ältere Backups werden einmalig innerhalb einer gemeinsamen Transaktion übernommen.")
-            Button(onClick = { exportLauncher.launch("DomiDex-Backup-${java.time.LocalDate.now()}.zip") }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("Sammlung & Scan-Feedback exportieren") }
-            OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/zip", "application/json", "text/json", "text/plain")) }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("DomiDex-Backup importieren") }
+            Button(onClick = { runCatching {
+                exportSession = repository.captureLocalDataSession(); working = true
+                exportLauncher.launch("DomiDex-Backup-${java.time.LocalDate.now()}.zip")
+            }.onFailure { exportSession = null; working = false; status = it.message } }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("Sammlung & Scan-Feedback exportieren") }
+            OutlinedButton(onClick = { runCatching {
+                importSession = repository.captureLocalDataSession(); working = true
+                importLauncher.launch(arrayOf("application/zip", "application/json", "text/json", "text/plain"))
+            }.onFailure { importSession = null; working = false; status = it.message } }, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("DomiDex-Backup importieren") }
             if (working) LinearProgressIndicator(Modifier.fillMaxWidth())
             status?.let { Text(it, color = if (it.contains("nicht", true) || it.contains("konnte", true)) MaterialTheme.colorScheme.error else VaultPositive, fontSize = 12.sp) }
         } },
         confirmButton = { TextButton(onClick = onDismiss, enabled = !working) { Text("Fertig") } },
     )
-    pendingImport?.let { payload -> AlertDialog(
+    pendingImport?.let { (payload, session) -> AlertDialog(
         onDismissRequest = { pendingImport = null }, title = { Text("${payload.entryCount} Einträge importieren?") },
-        text = { Text("Die Einträge werden zu deiner aktuellen Sammlung hinzugefügt. Lokale Scan-Feedbacks werden nur ergänzt, wenn ihre ID noch nicht vorhanden ist. Es wird nichts gelöscht oder überschrieben.") },
+        text = { Text("Die Einträge und Scan-Feedbacks werden dem Konto zugeordnet, mit dem du die Dateiauswahl geöffnet hast. Bei einem Kontowechsel musst du neu starten. Fremde Kontozuordnungen aus der Datei werden nicht übernommen. Vorhandene Daten werden nicht überschrieben; unklare Feedback-ID-Konflikte brechen den Import ab.") },
         confirmButton = { TextButton(onClick = {
             pendingImport = null; scope.launch {
                 working = true
                 val outcome = runCatching { withContext(Dispatchers.IO) {
+                    session.requireCurrent()
                     val database = com.dominik.cardvault.data.local.CardVaultDatabase.get(context)
                     com.dominik.cardvault.data.backup.BackupImportJournal(context, database).restore { beforeCreate, journalKey ->
-                        feedbackStore.withImportedFeedback(payload.zipEntries, beforeCreate) { feedback ->
-                            val count = if (payload.version == 2) com.dominik.cardvault.data.backup.BackupPhotos.withRestored(context, payload.raw, payload.zipEntries, beforeCreate) { prepared -> repository.restoreUserBackup(prepared, journalKey).addedCards }
-                                else repository.restoreLegacyBackup(payload.raw, payload.entries, journalKey)
+                        feedbackStore.withImportedFeedback(payload.zipEntries, session, beforeCreate) { feedback ->
+                            val count = if (payload.version == 2) com.dominik.cardvault.data.backup.BackupPhotos.withRestored(context, payload.raw, payload.zipEntries, beforeCreate) { prepared -> repository.restoreUserBackup(prepared, journalKey, session).addedCards }
+                                else repository.restoreLegacyBackup(payload.raw, payload.entries, journalKey, session)
                             count to feedback
                         }
                     }.also {
-                        com.dominik.cardvault.data.backup.BackupSettings.applyPending(context, com.dominik.cardvault.data.local.CardVaultDatabase.get(context))
+                        if (runCatching { session.requireCurrent() }.isSuccess) com.dominik.cardvault.data.backup.BackupSettings.applyPending(context, com.dominik.cardvault.data.local.CardVaultDatabase.get(context))
                     }
                 } }
-                status = outcome.fold({ "${it.first} neue Einträge und ${it.second} Scan-Feedbacks wurden importiert. Binder und Einstellungen sind übernommen; bestehende Einträge bleiben erhalten." }, { "Import fehlgeschlagen. ${it.message.orEmpty()}" })
+                status = outcome.fold({
+                    if (runCatching { session.requireCurrent() }.isSuccess) "${it.first} neue Einträge und ${it.second} Scan-Feedbacks wurden importiert. Bestehende Einträge bleiben erhalten."
+                    else "Import für das zuvor bestätigte Konto abgeschlossen; Konto inzwischen gewechselt. Bitte dort prüfen."
+                }, { "Import fehlgeschlagen. ${it.message.orEmpty()}" })
                 working = false
             }
         }) { Text("Jetzt importieren") } },
@@ -3713,6 +3735,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     var latestScanFile by remember { mutableStateOf<File?>(null) }
     var feedbackConsentPending by remember { mutableStateOf(false) }
     var feedbackEditorPath by remember { mutableStateOf<String?>(null) }
+    var feedbackEditorSession by remember { mutableStateOf<com.dominik.cardvault.data.backup.LocalDataSession?>(null) }
     val contributionPrefs = remember(context) { context.getSharedPreferences("cardvault_contribution", Context.MODE_PRIVATE) }
     var contributionOptIn by rememberSaveable { mutableStateOf(contributionPrefs.getBoolean("opt_in", false)) }
     var contributionEligible by remember { mutableStateOf(false) }
@@ -3789,6 +3812,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             queuedScans.firstOrNull { it.id == selectedScanId || it.file == latestScanFile }?.let(reportFlow::open)
             feedbackConsentPending = false
             feedbackEditorPath = null
+            feedbackEditorSession = null
         }
     }
     LaunchedEffect(analysis) {
@@ -4739,8 +4763,11 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     }
     if (feedbackConsentPending && reportFlow.allowsLocalEditor) ScanFeedbackConsentDialog(
         onHelp = {
-            feedbackConsentPending = false
-            feedbackEditorPath = latestScanFile?.absolutePath
+            runCatching { repository.captureLocalDataSession() }.onSuccess {
+                feedbackEditorSession = it
+                feedbackConsentPending = false
+                feedbackEditorPath = latestScanFile?.absolutePath
+            }.onFailure { scanAddError = it.message }
         },
         onDecline = {
             feedbackConsentPending = false
@@ -4755,12 +4782,13 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             manualEvidence = true
         },
     )
-    feedbackEditorPath?.takeIf { reportFlow.allowsLocalEditor }?.let { path -> ScanFeedbackEditorDialog(
+    feedbackEditorPath?.takeIf { reportFlow.allowsLocalEditor }?.let { path -> feedbackEditorSession?.let { session -> ScanFeedbackEditorDialog(
         imageFile = File(path),
+        session = session,
         analysis = analysis,
-        onDismiss = { File(path).delete(); feedbackEditorPath = null; manualEvidence = true },
-        onConfirmed = { File(path).delete(); feedbackEditorPath = null; manualEvidence = true },
-    ) }
+        onDismiss = { File(path).delete(); feedbackEditorPath = null; feedbackEditorSession = null; manualEvidence = true },
+        onConfirmed = { File(path).delete(); feedbackEditorPath = null; feedbackEditorSession = null; manualEvidence = true },
+    ) } }
     if (sessionSummaryOpen) {
         val unfinishedIds = buildList {
             addAll(queuedScans.filterNot { it.stage.isTerminal }.map(QueuedCardScan::id))
@@ -4908,7 +4936,7 @@ private fun ScanFeedbackMark.viewportBounds(viewport: Size, zoom: Float, pan: Of
     dismissButton = { Row { TextButton(onClick = onManualSearch) { Text("Manuell suchen") }; TextButton(onClick = onDecline) { Text("Nicht speichern") } } },
 )
 
-@Composable private fun ScanFeedbackEditorDialog(imageFile: File, analysis: CardTextAnalysis?, onDismiss: () -> Unit, onConfirmed: () -> Unit) {
+@Composable private fun ScanFeedbackEditorDialog(imageFile: File, session: com.dominik.cardvault.data.backup.LocalDataSession, analysis: CardTextAnalysis?, onDismiss: () -> Unit, onConfirmed: () -> Unit) {
     val context = LocalContext.current
     var marks by remember(imageFile) { mutableStateOf(listOf(
         ScanFeedbackMark("Kartenname", left = .08f, top = .07f, width = .68f, height = .12f, detectedText = analysis?.roiEvidence?.firstOrNull { it.region == CardOcrRegion.NAME }?.normalizedValue.orEmpty()),
@@ -4924,6 +4952,7 @@ private fun ScanFeedbackMark.viewportBounds(viewport: Size, zoom: Float, pan: Of
     var zoom by remember(imageFile) { mutableFloatStateOf(1f) }
     var pan by remember(imageFile) { mutableStateOf(Offset.Zero) }
     var editorStep by remember(imageFile) { mutableIntStateOf(0) }
+    var saveError by remember(imageFile, session) { mutableStateOf<String?>(null) }
     val categories = listOf("Kartenname", "HP", "Kartentyp", "Artwork", "Attacke 1", "Schaden Attacke 1", "Attacke 2", "Schaden Attacke 2", "Regeltext", "Kartennummer", "Setkennung", "Seltenheit", "Variantensymbol", "Copyright/Hersteller", "Sonstiges")
     val active = marks.getOrNull(selected)
     val latestMarks = rememberUpdatedState(marks)
@@ -4936,6 +4965,7 @@ private fun ScanFeedbackMark.viewportBounds(viewport: Size, zoom: Float, pan: Of
             Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(editorScrollState),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            saveError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (editorStep == 0) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(editBoxes, { editBoxes = true }, label = { Text("Felder bearbeiten") })
@@ -5071,7 +5101,7 @@ private fun ScanFeedbackMark.viewportBounds(viewport: Size, zoom: Float, pan: Of
                 }
             }
         }
-    }, confirmButton = { TextButton(enabled = marks.isNotEmpty(), onClick = { if (editorStep < 2) editorStep++ else runCatching { persistScanFeedback(context, imageFile, marks, analysis) }.onSuccess { onConfirmed() } }) { Text(if (editorStep < 2) "Weiter" else "Lokal speichern") } }, dismissButton = { TextButton(onClick = { if (editorStep > 0) editorStep-- else onDismiss() }) { Text(if (editorStep > 0) "Zurück" else "Abbrechen") } })
+    }, confirmButton = { TextButton(enabled = marks.isNotEmpty(), onClick = { if (editorStep < 2) editorStep++ else runCatching { persistScanFeedback(context, imageFile, marks, analysis, session) }.onSuccess { onConfirmed() }.onFailure { saveError = it.message ?: "Feedback konnte nicht gespeichert werden." } }) { Text(if (editorStep < 2) "Weiter" else "Lokal speichern") } }, dismissButton = { TextButton(onClick = { if (editorStep > 0) editorStep-- else onDismiss() }) { Text(if (editorStep > 0) "Zurück" else "Abbrechen") } })
 }
 
 @Composable private fun FeedbackLegendSwatch(color: Color, label: String) = Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -5081,7 +5111,8 @@ private fun ScanFeedbackMark.viewportBounds(viewport: Size, zoom: Float, pan: Of
 
 @Composable private fun FeedbackSlider(label: String, value: Float, onValueChange: (Float) -> Unit) = Column { Text(label, color = VaultTextMuted, fontSize = 11.sp); Slider(value = value, onValueChange = onValueChange, valueRange = .05f..1f) }
 
-private fun persistScanFeedback(context: Context, imageFile: File, marks: List<ScanFeedbackMark>, analysis: CardTextAnalysis?) {
+private fun persistScanFeedback(context: Context, imageFile: File, marks: List<ScanFeedbackMark>, analysis: CardTextAnalysis?, session: com.dominik.cardvault.data.backup.LocalDataSession) {
+    session.requireCurrent()
     val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
     val record = ScanFeedback(
         id = UUID.randomUUID().toString(),
@@ -5100,7 +5131,7 @@ private fun persistScanFeedback(context: Context, imageFile: File, marks: List<S
         appVersion = packageInfo.versionName ?: "unbekannt",
         notes = null,
     )
-    ScanFeedbackStore(context).save(imageFile, record)
+    ScanFeedbackStore(context).save(imageFile, record, session)
 }
 
 @Composable private fun ManualScanEvidenceDialog(initialSetCode: String, initialNumber: String, onDismiss: () -> Unit, onConfirm: (String, String, String) -> Unit) {

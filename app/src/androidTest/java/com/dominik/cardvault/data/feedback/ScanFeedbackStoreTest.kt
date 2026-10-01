@@ -1,6 +1,7 @@
 package com.dominik.cardvault.data.feedback
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.dominik.cardvault.data.backup.LocalDataSession
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
@@ -15,6 +16,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ScanFeedbackStoreTest {
     private lateinit var root: File
+    private val session = LocalDataSession("test-owner") { true }
 
     @Before fun createRoot() {
         root = File(
@@ -53,23 +55,23 @@ class ScanFeedbackStoreTest {
                     ),
                 ),
                 appVersion = "1.0.5-test",
-            ),
+            ), session,
         )
         assertEquals("images/feedback-1.jpg", feedback.imageRelativePath)
 
         val archive = ByteArrayOutputStream().use { buffer ->
-            ZipOutputStream(buffer).use { zip -> source.exportTo(zip) }
+            ZipOutputStream(buffer).use { zip -> source.exportTo(zip, session) }
             buffer.toByteArray()
         }
         val entries = unzip(archive)
         val target = ScanFeedbackStore(File(root, "target-store"), true)
 
-        assertEquals(1, target.importFromZip(entries))
-        val restored = target.list().single()
+        assertEquals(1, target.importFromZip(entries, session))
+        val restored = target.list(session).single()
         assertEquals("Pikachu 123/198", restored.originalPrediction)
         assertEquals("123/198", restored.annotations.single().correctedText)
         assertTrue(File(File(root, "target-store"), restored.imageRelativePath).isFile)
-        assertEquals(0, target.importFromZip(entries))
+        assertEquals(0, target.importFromZip(entries, session))
     }
 
     @Test fun skipsEntriesWhoseConsentImageIsMissing() {
@@ -86,8 +88,8 @@ class ScanFeedbackStoreTest {
         }""".trimIndent().toByteArray()
         val store = ScanFeedbackStore(File(root, "store"), true)
 
-        assertEquals(0, store.importFromZip(mapOf("scan_feedback/feedback.json" to manifest)))
-        assertTrue(store.list().isEmpty())
+        assertEquals(0, store.importFromZip(mapOf("scan_feedback/feedback.json" to manifest), session))
+        assertTrue(store.list(session).isEmpty())
     }
 
     private fun unzip(bytes: ByteArray): Map<String, ByteArray> {
@@ -108,9 +110,9 @@ class ScanFeedbackStoreTest {
             {"id":"../outside","createdAtEpochMillis":1,"imageRelativePath":"images/../outside.jpg","annotations":[],"appVersion":"test"}]}"""
         val directory = File(root, "safe-store")
         val store = ScanFeedbackStore(directory, true)
-        try { store.importFromZip(mapOf("scan_feedback/feedback.json" to manifest.toByteArray(), "scan_feedback/images/valid.jpg" to byteArrayOf(1))); org.junit.Assert.fail() }
+        try { store.importFromZip(mapOf("scan_feedback/feedback.json" to manifest.toByteArray(), "scan_feedback/images/valid.jpg" to byteArrayOf(1)), session); org.junit.Assert.fail() }
         catch (_: IllegalArgumentException) { }
-        assertTrue(store.list().isEmpty()); assertTrue(File(directory, "images").listFiles().orEmpty().isEmpty())
+        assertTrue(store.list(session).isEmpty()); assertTrue(File(directory, "images").listFiles().orEmpty().isEmpty())
     }
 
     @Test fun databaseFailureRollsBackImportedFeedbackFiles() {
@@ -118,9 +120,9 @@ class ScanFeedbackStoreTest {
             {"id":"valid","createdAtEpochMillis":1,"imageRelativePath":"images/valid.jpg","annotations":[],"appVersion":"test"}]}"""
         val directory = File(root, "rollback-store")
         val store = ScanFeedbackStore(directory, true)
-        try { store.importAtomically(mapOf("scan_feedback/feedback.json" to manifest.toByteArray(), "scan_feedback/images/valid.jpg" to byteArrayOf(1))) { error("database failure") }; org.junit.Assert.fail() }
+        try { store.importAtomically(mapOf("scan_feedback/feedback.json" to manifest.toByteArray(), "scan_feedback/images/valid.jpg" to byteArrayOf(1)), session) { error("database failure") }; org.junit.Assert.fail() }
         catch (_: IllegalStateException) { }
-        assertTrue(store.list().isEmpty()); assertTrue(File(directory, "images").listFiles().orEmpty().isEmpty())
+        assertTrue(store.list(session).isEmpty()); assertTrue(File(directory, "images").listFiles().orEmpty().isEmpty())
     }
 
     @Test fun symlinkDirectoryCannotEscapeStore() {
@@ -129,7 +131,7 @@ class ScanFeedbackStoreTest {
         android.system.Os.symlink(outside.absolutePath, File(directory, "images").absolutePath)
         val store = ScanFeedbackStore(directory, true)
         val image = File(root, "source.jpg").apply { writeBytes(byteArrayOf(1)) }
-        try { store.save(image, ScanFeedback("safe-id", 1, "", annotations = emptyList(), appVersion = "test")); org.junit.Assert.fail() }
+        try { store.save(image, ScanFeedback("safe-id", 1, "", annotations = emptyList(), appVersion = "test"), session); org.junit.Assert.fail() }
         catch (_: IllegalArgumentException) { }
         assertTrue(outside.listFiles().orEmpty().isEmpty())
         File(directory, "images").delete() // do not traverse the test symlink during cleanup

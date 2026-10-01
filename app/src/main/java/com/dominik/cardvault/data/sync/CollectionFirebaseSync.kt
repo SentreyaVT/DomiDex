@@ -165,6 +165,7 @@ class FirebaseCollectionSession(
 ) : AutoCloseable {
     private val mutableOwnerUid = MutableStateFlow(collectionOwnerForUid(canonicalCollectionOwnerUid(auth.currentUser)))
     val ownerUid: StateFlow<String> = mutableOwnerUid
+    private val localDataOwnerSession = com.dominik.cardvault.data.backup.LocalDataOwnerSession(mutableOwnerUid.value)
     private val mutableCloudState = MutableStateFlow(CollectionCloudState(
         if (canonicalCollectionOwnerUid(auth.currentUser) == null) CollectionCloudStatus.SIGNED_OUT else CollectionCloudStatus.CHECKING,
         canonicalCollectionOwnerUid(auth.currentUser),
@@ -186,6 +187,7 @@ class FirebaseCollectionSession(
     private fun handleIdTokenState(changedAuth: FirebaseAuth) {
         val user = changedAuth.currentUser
         val uid = canonicalCollectionOwnerUid(user)
+        localDataOwnerSession.observeOwner(collectionOwnerForUid(uid))
         mutableOwnerUid.value = collectionOwnerForUid(uid)
         val (previousUid, generation) = synchronized(entitlementLock) {
             val previousUid = entitledOwnerUid
@@ -480,6 +482,15 @@ class FirebaseCollectionSession(
         }
     }
 
+    /** Local backup/feedback must work for Guest and offline accounts without cloud access. */
+    internal fun captureLocalDataSession(ownerUid: String): () -> Boolean {
+        val current = localDataOwnerSession.capture(ownerUid)
+        return {
+            !closed && current() &&
+                collectionOwnerForUid(canonicalCollectionOwnerUid(auth.currentUser)) == ownerUid
+        }
+    }
+
     /** Existing explicit Settings decisions also cover price sidecars, with a per-action auth lease. */
     private suspend fun resolvePriceSelectionConflicts(uid: String, keepLocal: Boolean): Int {
         if (entitledOwnerUid != uid || canonicalCollectionOwnerUid(auth.currentUser) != uid) return 0
@@ -524,6 +535,7 @@ class FirebaseCollectionSession(
     }
 
     override fun close() {
+        localDataOwnerSession.close()
         synchronized(entitlementLock) {
             closed = true
             started = false

@@ -1,6 +1,7 @@
 package com.dominik.cardvault.data.feedback
 
 import android.content.Context
+import com.dominik.cardvault.data.backup.LocalDataSession
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -33,6 +34,8 @@ data class ScanFeedback(
     val scannerVersion: String = "scanner-v1",
     val resolvedCardId: String? = null,
     val notes: String? = null,
+    /** Null means an unassigned legacy file, never implicitly the current account or Guest. */
+    val ownerUid: String? = null,
 )
 
 /** Offline-first, consented scan-feedback storage. No network APIs are used here. */
@@ -44,53 +47,74 @@ class ScanFeedbackStore private constructor(private val root: File) {
 
     init { images.mkdirs(); metadata.mkdirs() }
 
-    fun save(imageFile: File, draft: ScanFeedback): ScanFeedback {
+    fun save(imageFile: File, draft: ScanFeedback, session: LocalDataSession): ScanFeedback = synchronized(fileLock) {
+        session.requireCurrent()
+        require(draft.ownerUid == null || draft.ownerUid == session.ownerUid) { "Feedback gehört zu einem anderen Konto." }
         require(imageFile.isFile) { "Das Feedbackbild fehlt." }
         val id = FeedbackPathPolicy.validateId(draft.id.ifBlank { UUID.randomUUID().toString() })
         val relativeImage = "images/$id.jpg"
-        val record = draft.copy(id = id, imageRelativePath = relativeImage)
+        val record = draft.copy(id = id, imageRelativePath = relativeImage, ownerUid = session.ownerUid)
         val targetImage = FeedbackPathPolicy.file(root, "images", id, "jpg")
+        val targetMetadata = FeedbackPathPolicy.file(root, "metadata", id, "json")
+        require(!targetImage.exists() && !targetMetadata.exists()) { "Feedback-ID ist bereits vorhanden. Bestehende Dateien bleiben unverändert." }
         val temporaryImage = FeedbackPathPolicy.file(root, "images", id, "tmp")
-        imageFile.copyTo(temporaryImage, overwrite = true)
-        java.nio.file.Files.move(temporaryImage.toPath(), targetImage.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
-        writeMetadata(record)
-        return record
+        try {
+            imageFile.inputStream().use { input -> temporaryImage.outputStream().use { session.copyTo(input, it) } }
+            session.requireCurrent()
+            java.nio.file.Files.move(temporaryImage.toPath(), targetImage.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            writeMetadata(record)
+            session.requireCurrent()
+            record
+        } catch (failure: Throwable) {
+            targetImage.delete(); targetMetadata.delete()
+            throw failure
+        } finally { temporaryImage.delete() }
     }
 
-    fun list(): List<ScanFeedback> = metadata.listFiles { file -> file.extension == "json" }
+    private fun allRecords(): List<ScanFeedback> = metadata.listFiles { file -> file.extension == "json" }
         .orEmpty()
         .mapNotNull { file -> runCatching { fromJson(file.readText()) }.getOrNull() }
         .sortedByDescending { it.createdAtEpochMillis }
 
-    fun exportTo(zip: ZipOutputStream): Int {
-        val feedback = list()
+    fun list(session: LocalDataSession): List<ScanFeedback> = synchronized(fileLock) {
+        session.requireCurrent()
+        allRecords().filter { it.ownerUid == session.ownerUid }.also { session.requireCurrent() }
+    }
+
+    fun exportTo(zip: ZipOutputStream, session: LocalDataSession): Int = synchronized(fileLock) {
+        val feedback = list(session)
         feedback.forEach { item -> require(FeedbackPathPolicy.file(root, "images", item.id, "jpg").isFile) { "Ein lokales Feedbackbild fehlt. Das Backup wurde nicht als vollständig gespeichert." } }
         val manifest = JSONObject().apply {
             put("format", EXPORT_FORMAT)
             put("version", EXPORT_VERSION)
-            put("feedback", JSONArray().apply { feedback.forEach { put(it.toJson()) } })
+            // Ownership is local authority, not portable archive data.
+            put("feedback", JSONArray().apply { feedback.forEach { put(it.toJson(includeOwner = false)) } })
         }.toString(2).toByteArray()
         zip.putNextEntry(java.util.zip.ZipEntry("scan_feedback/feedback.json"))
         zip.write(manifest)
         zip.closeEntry()
         feedback.forEach { item ->
+            session.requireCurrent()
             val image = FeedbackPathPolicy.file(root, "images", item.id, "jpg")
             if (!image.isFile) return@forEach
             zip.putNextEntry(java.util.zip.ZipEntry("scan_feedback/${item.imageRelativePath}"))
-            image.inputStream().use { it.copyTo(zip) }
+            image.inputStream().use { session.copyTo(it, zip) }
             zip.closeEntry()
         }
-        return feedback.size
+        session.requireCurrent()
+        feedback.size
     }
 
     /** Validate all paths before writing anything. Existing records are never overwritten. */
-    fun importFromZip(entries: Map<String, ByteArray>): Int = importAtomically(entries) { it }
+    fun importFromZip(entries: Map<String, ByteArray>, session: LocalDataSession): Int = importAtomically(entries, session) { it }
 
-    fun <T> importAtomically(entries: Map<String, ByteArray>, commit: (Int) -> T): T {
-        val prepared = prepareImport(entries)
+    fun <T> importAtomically(entries: Map<String, ByteArray>, session: LocalDataSession, commit: (Int) -> T): T = synchronized(fileLock) {
+        session.requireCurrent()
+        val prepared = prepareImport(entries, session = session)
         val created = mutableListOf<File>()
         try {
             prepared.forEach { (item, image) ->
+                session.requireCurrent()
                 val target = FeedbackPathPolicy.file(root, "images", item.id, "jpg")
                 val metadataTarget = FeedbackPathPolicy.file(root, "metadata", item.id, "json")
                 check(!target.exists() && !metadataTarget.exists()) { "Feedback wurde während des Imports geändert." }
@@ -99,7 +123,8 @@ class ScanFeedbackStore private constructor(private val root: File) {
                 created.add(metadataTarget)
                 writeMetadata(item)
             }
-            return commit(prepared.size)
+            session.requireCurrent()
+            commit(prepared.size)
         } catch (failure: Throwable) {
             created.asReversed().forEach { file -> file.delete() }
             throw failure
@@ -108,25 +133,33 @@ class ScanFeedbackStore private constructor(private val root: File) {
 
     fun validateImport(entries: Map<String, ByteArray>, requireAllImages: Boolean = false) { prepareImport(entries, requireAllImages) }
 
-    suspend fun <T> withImportedFeedback(entries: Map<String, ByteArray>, beforeCreate: ((File) -> Unit)? = null, commit: suspend (Int) -> T): T {
-        val prepared = prepareImport(entries)
+    suspend fun <T> withImportedFeedback(entries: Map<String, ByteArray>, session: LocalDataSession, beforeCreate: ((File) -> Unit)? = null, commit: suspend (Int) -> T): T {
         val created = mutableListOf<File>()
         try {
-            prepared.forEach { (item, bytes) ->
-                val image = FeedbackPathPolicy.file(root, "images", item.id, "jpg")
-                val metadataFile = FeedbackPathPolicy.file(root, "metadata", item.id, "json")
-                check(!image.exists() && !metadataFile.exists()) { "Feedbackkonflikt während des Imports." }
-                beforeCreate?.invoke(image); created.add(image); java.io.FileOutputStream(image).use { it.write(bytes); it.fd.sync() }
-                beforeCreate?.invoke(metadataFile); created.add(metadataFile); writeMetadata(item)
+            val count = synchronized(fileLock) {
+                session.requireCurrent()
+                val prepared = prepareImport(entries, session = session)
+                prepared.forEach { (item, bytes) ->
+                    session.requireCurrent()
+                    val image = FeedbackPathPolicy.file(root, "images", item.id, "jpg")
+                    val metadataFile = FeedbackPathPolicy.file(root, "metadata", item.id, "json")
+                    check(!image.exists() && !metadataFile.exists()) { "Feedbackkonflikt während des Imports." }
+                    beforeCreate?.invoke(image); created.add(image); java.io.FileOutputStream(image).use { it.write(bytes); it.fd.sync() }
+                    beforeCreate?.invoke(metadataFile); created.add(metadataFile); writeMetadata(item)
+                }
+                session.requireCurrent()
+                prepared.size
             }
-            return commit(prepared.size)
+            // Commit checks the same session inside its Room transaction. Never rollback files
+            // merely because the owner changes after that transaction has already committed.
+            return commit(count)
         } catch (failure: Throwable) {
-            if (beforeCreate == null) created.asReversed().forEach { it.delete() }
+            if (beforeCreate == null) synchronized(fileLock) { created.asReversed().forEach { it.delete() } }
             throw failure
         }
     }
 
-    private fun prepareImport(entries: Map<String, ByteArray>, requireAllImages: Boolean = false): List<Pair<ScanFeedback, ByteArray>> {
+    private fun prepareImport(entries: Map<String, ByteArray>, requireAllImages: Boolean = false, session: LocalDataSession? = null): List<Pair<ScanFeedback, ByteArray>> {
         val manifest = entries["scan_feedback/feedback.json"] ?: return emptyList()
         val rootJson = JSONObject(manifest.toString(Charsets.UTF_8))
         require(rootJson.optString("format") == EXPORT_FORMAT && rootJson.optInt("version") == EXPORT_VERSION) { "Scan-Feedback im Export ist nicht unterstützt." }
@@ -135,7 +168,8 @@ class ScanFeedbackStore private constructor(private val root: File) {
         val prepared = mutableListOf<Pair<ScanFeedback, ByteArray>>()
         val ids = mutableSetOf<String>()
         for (index in 0 until records.length()) {
-            val item = fromJson(records.getJSONObject(index).toString())
+            // An archive can never supply authority. Only the explicitly confirmed local session can.
+            val item = fromJson(records.getJSONObject(index).toString()).copy(ownerUid = session?.ownerUid)
             FeedbackPathPolicy.validateId(item.id)
             require(ids.add(item.id)) { "Doppelte Feedback-ID im Backup." }
             val safePath = "images/${item.id}.jpg"
@@ -143,10 +177,14 @@ class ScanFeedbackStore private constructor(private val root: File) {
             require(!requireAllImages || entries.containsKey("scan_feedback/$safePath")) { "Ein Feedbackbild fehlt im Backup." }
             val target = FeedbackPathPolicy.file(root, "images", item.id, "jpg")
             val metadataTarget = FeedbackPathPolicy.file(root, "metadata", item.id, "json")
-            if (metadataTarget.exists()) continue
+            if (session != null && metadataTarget.exists()) {
+                val existingOwner = runCatching { fromJson(metadataTarget.readText()).ownerUid }.getOrNull()
+                require(existingOwner == session.ownerUid) { "Feedback-ID gehört zu einem anderen Konto oder ist ein unzugeordneter Altbestand." }
+                continue
+            }
             val image = entries["scan_feedback/$safePath"] ?: continue
             require(image.size <= MAX_IMAGE_BYTES) { "Feedbackbild ist zu groß." }
-            require(!target.exists()) { "Bildkonflikt im Feedback-Backup." }
+            require(session == null || !target.exists()) { "Bildkonflikt im Feedback-Backup." }
             prepared.add(item to image)
         }
         return prepared
@@ -165,6 +203,7 @@ class ScanFeedbackStore private constructor(private val root: File) {
         const val EXPORT_FORMAT = "domidex.scan-feedback"
         const val EXPORT_VERSION = 1
         private const val MAX_IMAGE_BYTES = 12 * 1024 * 1024
+        private val fileLock = Any()
 
         fun fromJson(raw: String): ScanFeedback {
             val root = JSONObject(raw)
@@ -194,16 +233,18 @@ class ScanFeedbackStore private constructor(private val root: File) {
                 scannerVersion = root.optString("scannerVersion", "scanner-v1"),
                 resolvedCardId = root.optNullableString("resolvedCardId"),
                 notes = root.optNullableString("notes"),
+                ownerUid = root.optNullableString("ownerUid"),
             )
         }
     }
 }
 
-private fun ScanFeedback.toJson() = JSONObject().apply {
+private fun ScanFeedback.toJson(includeOwner: Boolean = true) = JSONObject().apply {
     put("id", id); put("createdAtEpochMillis", createdAtEpochMillis); put("imageRelativePath", imageRelativePath)
     put("originalPrediction", originalPrediction ?: JSONObject.NULL); put("originalConfidence", originalConfidence ?: JSONObject.NULL)
     put("originalOcrResults", JSONArray(originalOcrResults)); put("appVersion", appVersion); put("scannerVersion", scannerVersion)
     put("resolvedCardId", resolvedCardId ?: JSONObject.NULL); put("notes", notes ?: JSONObject.NULL)
+    if (includeOwner && ownerUid != null) put("ownerUid", ownerUid)
     put("annotations", JSONArray().apply { annotations.forEach { annotation -> put(JSONObject().apply {
         put("id", annotation.id); put("x", annotation.x); put("y", annotation.y); put("width", annotation.width); put("height", annotation.height)
         put("label", annotation.label); put("type", annotation.type.name); put("detectedText", annotation.detectedText ?: JSONObject.NULL); put("correctedText", annotation.correctedText ?: JSONObject.NULL)

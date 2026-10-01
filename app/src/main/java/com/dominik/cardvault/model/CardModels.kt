@@ -168,9 +168,10 @@ enum class AddCardOutcome { CREATED, QUANTITY_INCREMENTED }
 interface CollectionRepository {
     val cloudState: Flow<com.dominik.cardvault.data.sync.CollectionCloudState>
         get() = kotlinx.coroutines.flow.flowOf(com.dominik.cardvault.data.sync.CollectionCloudState(com.dominik.cardvault.data.sync.CollectionCloudStatus.LOCAL_ONLY))
-    suspend fun exportUserBackup(settingsJson: String): String = error("Backup wird nicht unterstützt.")
-    suspend fun restoreUserBackup(raw: String, journalKey: String? = null): com.dominik.cardvault.data.backup.UserBackupStore.Result = error("Backup wird nicht unterstützt.")
-    suspend fun restoreLegacyBackup(raw: String, entries: List<ManualCardInput>, journalKey: String? = null): Int = error("Backup wird nicht unterstützt.")
+    fun captureLocalDataSession(): com.dominik.cardvault.data.backup.LocalDataSession = error("Lokaler Kontovorgang wird nicht unterstützt.")
+    suspend fun exportUserBackup(settingsJson: String, session: com.dominik.cardvault.data.backup.LocalDataSession = captureLocalDataSession()): String = error("Backup wird nicht unterstützt.")
+    suspend fun restoreUserBackup(raw: String, journalKey: String? = null, session: com.dominik.cardvault.data.backup.LocalDataSession = captureLocalDataSession()): com.dominik.cardvault.data.backup.UserBackupStore.Result = error("Backup wird nicht unterstützt.")
+    suspend fun restoreLegacyBackup(raw: String, entries: List<ManualCardInput>, journalKey: String? = null, session: com.dominik.cardvault.data.backup.LocalDataSession = captureLocalDataSession()): Int = error("Backup wird nicht unterstützt.")
     val portfolio: Flow<PortfolioSummary>
     val binders: Flow<List<BinderSummary>>
     /** User-created display binders. Their values never feed [portfolio]. */
