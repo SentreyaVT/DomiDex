@@ -159,6 +159,31 @@ Das endgültige Ergebnis verwendet die Hybridentscheidung. Manuelle Ganzbild-/Id
 Der Hinzufügen-Dialog bestätigt Kandidat und Ziel-Binder; identische Sitzungsfunde erfordern bei Wiederholung
 „Trotzdem hinzufügen“. Physische Holo-/Reverse-Eindeutigkeit ist durch ein flaches Referenzbild nicht bewiesen.
 
+## Referenzbilder: Download-Slot bis zum Callback-Ende halten
+
+Der tatsächlich von `CardArtworkVerifier` verwendete Helper
+`app/src/main/java/com/dominik/cardvault/ui/ReferenceArtworkHttp.kt` behält den bestehenden
+Callback-Client und Bytevertrag. Factory/Start und Abbruch laufen auf IO; nach registriertem
+Callback wartet jeder Rückkehrpfad auf dessen `finally` einschließlich Reader-/Response-Cleanup.
+Dadurch bleibt der vorhandene Download-Slot auch bei Cancellation bis zum Ressourcenende belegt.
+Ein noch laufender alter Callback darf weder ein Ergebnis veröffentlichen noch verfrüht Platz
+für einen weiteren Download freigeben. Fehler vor erfolgreichem Callback-Start erzeugen keinen
+unauflösbaren Wartezustand; beide Callback-Pfade signalisieren ihr Ende auch bei Fehlern.
+
+Am 01.10.2026 ergab die verhaltensgleiche Extraktion **6 Tests: 4 PASS, 2 FAIL**:
+Bei blockiertem Body-Read beziehungsweise Response-Cleanup kehrte der abgebrochene Aufruf zu früh zurück.
+Nach dem Lebensdauerfix bestehen **11/11** Fälle in `ReferenceArtworkHttpLifetimeTest`;
+der ergänzende fokussierte Lauf umfasst **33/33 PASS in acht Klassen**. Die sechs ursprünglichen
+Testfälle samt Assertions blieben erhalten; ergänzt wurden Factory-/Enqueue-/Callbackfehler und der Abbruch
+während der Factory. Archivierte XML: `artifacts/release27-engineering-20261001/artwork-http/`
+(`RED-result.xml`, `GREEN-results/`; lokal, ignoriert).
+
+Der Nachweis nutzt kontrollierte Call-/ResponseBody-Doubles, echte Callback-Threads und einen
+Semaphore-2-Aufruftest – **kein Netzwerk-, Bitmap-/Verifier-End-to-End- oder Smartphone-Benchmark**.
+Unverändert bleiben 8 MiB Bytegrenze, 1,5/2/3-s-Clientzeitwerte, 7-s-Batchbudget, Deskriptoren,
+Referenzcache, OCR und Entscheidungsschwellen. Daraus folgt weder ein allgemeiner Zeitgewinn
+noch eine Garantie für sofortigen Abschluss beliebiger Plattformarbeit.
+
 ## Drei getrennte Foto-/Feedbackwege
 
 | Weg | Auslösung, Speicherung und Grenze |

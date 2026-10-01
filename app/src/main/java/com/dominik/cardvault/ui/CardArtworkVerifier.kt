@@ -7,23 +7,16 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
 import java.io.ByteArrayOutputStream
-import java.io.IOException
 import java.io.InputStream
 import java.util.LinkedHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
-import kotlin.coroutines.resume
 import kotlin.math.sqrt
 
 internal const val MAX_REFERENCE_ARTWORK_BYTES = 8 * 1024 * 1024
@@ -315,27 +308,5 @@ internal object CardArtworkVerifier {
         return bitmap.getPixel(x, y)
     }
 
-    private suspend fun download(url: String): ByteArray? = suspendCancellableCoroutine { continuation ->
-        val request = runCatching {
-            Request.Builder().url(url).header("User-Agent", "DomiDex scanner artwork verification").build()
-        }.getOrNull()
-        if (request == null) { continuation.resume(null); return@suspendCancellableCoroutine }
-        val call = artworkClient.newCall(request)
-        continuation.invokeOnCancellation { call.cancel() }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (continuation.isActive) continuation.resume(null)
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                val encoded = response.use {
-                    val body = response.body
-                    if (!continuation.isActive || !response.isSuccessful || body == null ||
-                        body.contentLength() > MAX_REFERENCE_ARTWORK_BYTES) null
-                    else runCatching { body.byteStream().use(::readBoundedReferenceArtwork) }.getOrNull()
-                }
-                if (continuation.isActive) continuation.resume(encoded)
-            }
-        })
-    }
+    private suspend fun download(url: String): ByteArray? = downloadReferenceArtwork(url, artworkClient)
 }

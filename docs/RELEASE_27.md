@@ -167,7 +167,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest root 824 JVM PASS/1 opt-in SKIP, 1,104 Web, 339 distinct emulator tests (327 regression + 12 manual-analysis), release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; physical/live contracts untested |
+| 13 Full regression | IN PROGRESS | latest root 847 JVM PASS/1 opt-in SKIP, 1,197 Web, 371 emulator tests, 84 current Rules and 30 local backend SDK cases; release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; physical/live contracts untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
@@ -384,6 +384,38 @@ This checkpoint excludes the subsequent reference-artwork HTTP lifetime investig
 Only emulator-5554 was installed. Xiaomi, production, release signing and historical
 release-26 artifacts remain untouched; the entire release is not declared ready.
 
+### Reference-artwork callback lifetime: verified local checkpoint
+
+The actual reference-image download helper now retains its existing semaphore slot
+until the registered callback has finished body reading and response cleanup,
+including cancellation. Factory/enqueue/cancel work runs on IO; cancellation before
+factory publication must not enqueue a new request. Callback and enqueue failures
+cannot leave the caller waiting for a callback that will never arrive. The existing
+OkHttp client, headers, byte limit, cache, descriptor logic and recognition thresholds
+remain unchanged. This fixes resource ownership, not a demonstrated overall OCR speedup.
+
+The behavior-preserving extraction first reproduced **4 PASS / 2 FAIL**; the original
+six assertions remain intact. Eleven focused lifetime cases and 22 existing artwork/
+catalog cases now pass (**33/33**, eight classes). Controlled callback threads and
+body/cleanup gates prove lifetime and permit ordering, not physical-camera quality
+or unrestricted network cancellation. Exact scope: `docs/scanner-architecture.md`.
+
+Root full offline regression: **848 JVM cases in 124 classes: 847 PASS / 1 existing
+opt-in SKIP / 0 FAIL / 0 ERROR**. Debug/test APKs, debug/release lint and release Kotlin
+compile pass in **3m40s**, 104 tasks (20 executed / 84 up-to-date). Full XML archived
+under `artifacts/release27-engineering-20261001/artwork-http/full-unit-results/`;
+log `artwork-http-final-regression-build.log`.
+
+These exact APKs pass **371/371** API-36 emulator tests in **305.139 s**; the same
+combined selection as the catalog checkpoint above, with no cases counted twice.
+Log: `artwork-http-final-regression371-instrumentation.log`. Debug SHA-256:
+`EFC43123536FE34FDE5C244A808B9A846EC6A0F494F178D1682B7E6369666FF3`;
+test APK `3B3DE487F96710451B7E3FC19016D392084BC45F34260144C3DD1DB0B3571796`.
+Only emulator-5554, airplane mode 1 / Wi-Fi 0. The signed-v26 AAB, mapping and partial
+symbol ZIP hashes were rechecked and match the immutable table above. No Xiaomi,
+release signing, AAB, production change, deployment or push. This checkpoint does
+not cover subsequent SDK overlay tests or activate the prepared delta reader.
+
 ### Gate 8: unchanged-input replay with additive identity observations
 
 The debug/test APK checkpoint `b8cb4ef` was replayed on the original API-36 AVD
@@ -566,6 +598,30 @@ checkpoint in one Room transaction. The new 32 cases pass in 1.836 s; the entire
 coverage and outstanding SDK/fence/fairness requirements are in `docs/SYNC.md`.
 This is not a Firestore worker activation, a network-read reduction or a physical
 multi-device result. The following paragraphs retain earlier checkpoint evidence.
+
+Separate Web checkpoint `bb4bffe` now prepares an authenticated exact server-time
+anchor with a dedicated 60/minute owner quota and exact account-deletion cleanup.
+Existing authorization shape/read count and write-limit policy are unchanged.
+Root confirms **1,197/1,197 Web unit tests**, **30/30 actual local Firebase SDK cases**
+(including the exact missing-lock readTime and two-SDK 59+2 quota race), lint,
+typecheck and isolated build PASS. Android has not been wired to the new endpoint;
+no deployment occurred. `4bb7886` additionally projects six needed shared-placement
+fields without changing global collision layout or document-read counts.
+See the sibling Web `docs/WEBAPP_RELEASE_27_HANDOFF.md` for exact evidence/limits.
+A server-time anchor alone does not prove query completeness in the presence of
+local pending-write overlays, nor validate historical/admin timestamp provenance.
+Those adapter/fair-recheck/repair gates remain open before delta-worker activation.
+
+Additional local security proof: Android `1c3eb27` and Web `c960f20` add four real
+client-SDK Rules deny cases and a versioned isolated cross-repository runner. Owner,
+foreign app user, client admin and anonymous cannot create, get/list/query, overwrite,
+update or delete the current hashed `privateReadRateLimits` counter. Server checks
+confirm unchanged fields; production Rules themselves are unchanged. Root passes
+**84/84** current Android Rules cases, no skips (35.604 s), **17/17** runner-safety
+cases, plus the unchanged **30/30** backend-SDK default (33.487 s). Both demo manifests
+confirm unchanged inputs and free ports before/after; Web lint/typecheck pass.
+Invocation, tool integrity, credential isolation and non-OS-sandbox limits are in
+the sibling Web `tests/rules-local/README.md`. No live rules or real account test.
 
 Committed ACK/failure changes preserve successor mutations and terminal decisions;
 late responses cannot recreate a pending row without an outbox or overwrite a newer
