@@ -241,6 +241,11 @@ interface CardVaultDao {
         ORDER BY createdAtEpochMillis, entryKey""")
     suspend fun conflictedPriceSelectionOutbox(ownerUid: String): List<PrivateBinderSyncOutboxEntity>
 
+    /** Same held-conflict predicate as the pending queue; existence only, no payloads. */
+    @Query("""SELECT EXISTS(SELECT 1 FROM private_binder_sync_outbox WHERE ownerUid = :ownerUid
+        AND recordType = 'PRICE_SELECTION' AND lastError GLOB 'price-selection-conflict:*')""")
+    suspend fun hasConflictedPriceSelectionOutbox(ownerUid: String): Boolean
+
     @Query("""SELECT COUNT(*) FROM private_binder_sync_outbox WHERE ownerUid = :ownerUid
         AND recordType = 'PRICE_SELECTION' AND lastError GLOB 'price-selection-conflict:*'""")
     fun observePriceSelectionConflictCount(ownerUid: String): Flow<Int>

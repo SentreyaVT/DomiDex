@@ -46,6 +46,47 @@ These are deterministic local Room/worker-contract tests, not two physical devic
 or a live Firebase end-to-end run. No Xiaomi, production data or release signing
 was used. The wider Gate 4 delta/scale work below is still in progress.
 
+## Held price conflicts remain visible in cloud status (2026-10-01)
+
+A real Room regression reproduced `ACTIVE` with a confirmed collection snapshot
+and an unresolved private price-selection conflict. The pending private queue
+intentionally excludes `PRICE_SELECTION` rows whose error matches
+`price-selection-conflict:*`, but the status calculation only inspected ordinary
+collection errors/conflicts. It could therefore falsely advertise no pending work.
+
+The actual `refreshCloudState` now calls a shared owner-scoped queue reader which
+also performs an existence-only query using exactly that held-conflict predicate.
+The existing error priority makes the unresolved choice visible. No price, source
+date, payload, revision or outbox is changed by reading status. The existing
+two-outbox invalidation observer was already correct and remains unchanged.
+No schema, sync policy, Firebase rule or network request is added. SQLite may scan
+that owner's indexed outbox range; this is not a constant-time latency claim.
+
+Root RED: **4 PASS / 1 FAIL**, 0.273 s, exact assertion `ERROR` expected but `ACTIVE`.
+Root GREEN: **9/9 actual Room tests PASS**, 0.461 s, zero skips/failures. Tests use
+the real production conflict helpers: keep-local becomes PENDING with a new
+mutation and unchanged market source, confirmed keep-cloud becomes CLEAN/empty
+outbox, and ACTIVE still requires a confirmed server snapshot. Foreign owners,
+other record types, malformed held markers, old decisions and unconfirmed remote
+snapshots retain the correct prior policy. Two source reviews found no blocker.
+
+The final local debug/test build, lint and JVM run pass in 2m49s: **853 PASS,
+one existing live-source opt-in SKIP, no failures/errors**, 125 suites. The fixed
+emulator regression passes **371/371**, 256.329 s, no skips/failures. Manifest
+`artifacts/android-regression/20261001T130420Z-908a5872/manifest.json` confirms exact
+APK installation, unchanged source/APK inputs, and offline/no-reverse afterward.
+The separate SDK overlay/transaction proof passes **3/3**, 2.813 s, with independent
+server readback and all cleanup/input flags true; Web evidence directory
+`outputs/private-pull-sdk-local/2026-10-01T13-09-31-515Z-e0cdc853/`.
+That SDK suite is not a complete production Worker/Android-Web roundtrip.
+
+Debug APK SHA-256: `617B1DF9D8D14DDE4EB9058521DAE772D76B6297024009FFBC22EB67FB71E195`.
+Test APK SHA-256: `73A70017BB72802842E25089C69670EAC8354E36FACD4511F6690DF667ABC04A`.
+Focused RED/GREEN, installation receipts, strict nine-case result validation and
+copied JVM XML are retained as `cloud-queue-status-*` / `cloud-queue-status/`
+under `artifacts/release27-engineering-20261001/`. Only the isolated emulator was
+installed. No Xiaomi, release signing, AAB, Play, production or deployment action.
+
 ## Rejected ID-horizon experiment (2026-10-01; not active)
 
 A deterministic regression reproduced a remaining fairness limit: continuously

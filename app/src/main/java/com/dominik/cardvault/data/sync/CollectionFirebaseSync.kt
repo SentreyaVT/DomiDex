@@ -17,6 +17,7 @@ import androidx.work.workDataOf
 import com.dominik.cardvault.auth.FirebaseEntitlements
 import com.dominik.cardvault.auth.canUseFirebaseAppBackend
 import com.dominik.cardvault.data.local.CardVaultDatabase
+import com.dominik.cardvault.data.local.CardVaultDao
 import com.dominik.cardvault.data.local.CatalogCardEntity
 import com.dominik.cardvault.data.local.CollectionEntryEntity
 import com.dominik.cardvault.data.local.CollectionSyncOutboxEntity
@@ -139,6 +140,17 @@ internal fun CoroutineScope.observeCollectionOutbox(database: CardVaultDatabase,
     database.invalidationTracker.createFlow("collection_sync_outbox", "private_binder_sync_outbox")
         .collect { onChange() }
 }
+
+internal data class CollectionCloudQueueState(val pending: Boolean, val error: Boolean)
+
+/** The same owner-scoped DAO aggregation used by the authenticated collection status. */
+internal suspend fun readCollectionCloudQueueState(dao: CardVaultDao, uid: String): CollectionCloudQueueState {
+    val pending = dao.pendingSyncOutbox(uid, 1).isNotEmpty() || dao.pendingPrivateBinderSyncOutbox(uid, 1).isNotEmpty()
+    val error = dao.erroredSyncOutbox(uid).isNotEmpty() || dao.conflictedSyncOutbox(uid).isNotEmpty() ||
+        dao.hasConflictedPriceSelectionOutbox(uid)
+    return CollectionCloudQueueState(pending, error)
+}
+
 internal fun shouldResumeServerReread(entryState: String, outboxState: String): Boolean =
     entryState == SYNC_CLEAN && outboxState == SYNC_PENDING
 internal fun remoteConflictReason(revision: Long): String = "$REMOTE_REVISION_CONFLICT_PREFIX$revision"
@@ -288,13 +300,11 @@ class FirebaseCollectionSession(
     private fun refreshCloudState() {
         val uid = synchronized(entitlementLock) { entitledOwnerUid } ?: return
         scope.launch {
-            val dao = database.cardVaultDao()
-            val pending = dao.pendingSyncOutbox(uid, 1).isNotEmpty() || dao.pendingPrivateBinderSyncOutbox(uid, 1).isNotEmpty()
-            val error = dao.erroredSyncOutbox(uid).isNotEmpty() || dao.conflictedSyncOutbox(uid).isNotEmpty()
+            val queue = readCollectionCloudQueueState(database.cardVaultDao(), uid)
             synchronized(entitlementLock) {
                 if (started && entitledOwnerUid == uid && mutableOwnerUid.value == uid) {
                     mutableCloudState.value = CollectionCloudState(
-                        collectionCloudStatus(false, true, false, serverSnapshot, pending, error || snapshotError), uid, true,
+                        collectionCloudStatus(false, true, false, serverSnapshot, queue.pending, queue.error || snapshotError), uid, true,
                     )
                 }
             }

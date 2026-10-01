@@ -226,6 +226,23 @@ only the uncommitted horizon experiment. The prior ASC path and all earlier fixe
 remain. No index/schema/rules/deployment change was attempted. See `docs/SYNC.md`;
 the failed attempt and its synthetic passes do not close Gate 4.
 
+### 2026-10-01: accurate cloud status for held price conflicts
+
+The real Room status aggregation falsely reported ACTIVE for an unresolved private
+price-selection conflict: that row is intentionally absent from the pending queue,
+but was also missing from the error check. The actual session now uses a shared
+queue reader with an owner-isolated EXISTS over the exact existing held-conflict
+predicate. No price mutation, conflict resolution, schema or network change.
+
+Root RED: four passed / one failed (`ERROR` expected, `ACTIVE` actual). Final GREEN:
+nine focused Room tests pass in 0.461 s, including real explicit local/cloud
+resolution and unchanged owner/type/marker boundaries. Build, debug lint and
+853 JVM cases pass; one existing opt-in skip remains. The fixed 371-case emulator
+regression passes in 256.329 s, with unchanged inputs and exact APK installation.
+Existing actual local SDK overlay/transaction cases pass 3/3 in 2.813 s with
+independent server verification and complete cleanup. Paths, hashes and limitations
+are in `docs/SYNC.md`. This does not close the full Android/Web convergence gate.
+
 | Gate | Status | Required next evidence |
 |---|---|---|
 | 0 Baseline | PASS (local reproducible scope) | frozen current source, fresh JVM/instrumentation/scanner timings and isolated Web build; live limits explicit |
