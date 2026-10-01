@@ -46,7 +46,20 @@ These are deterministic local Room/worker-contract tests, not two physical devic
 or a live Firebase end-to-end run. No Xiaomi, production data or release signing
 was used. The wider Gate 4 delta/scale work below is still in progress.
 
-## Private binder delta protocol — planned, not implemented yet
+## Private binder delta protocol — foundation in progress, not active yet
+
+`PrivateBinderPullProtocol.kt` now defines pure phases, timestamp tuples, bounded
+page transitions and strict local metadata encoding. `PrivatePullRoomStore.kt`
+implements exact-raw CAS plus atomic payload/marker/checkpoint commit. A fresh
+local epoch prevents a repaired/reset checkpoint from recreating an older CAS
+token. `PrivatePullAuthSession.kt` prepares a per-run token/account-event lease.
+These components are **not yet connected to the running Firebase worker**. Their
+tests must pass before integration; no delta/network speedup is claimed yet.
+
+The existing placement apply path separately uses an indexed existence query for
+a requested free slot, fetching all active placements only for a real collision.
+Its first-free conflict policy is unchanged. This is a local Room optimization,
+not an alteration to Firestore requests or automatic conflict decisions.
 
 ### Scope and compatibility
 
@@ -125,3 +138,41 @@ against the measured full-scan baseline, with no live customer data or load.
 Collection pagination/listening requires its own reviewed continuation protocol;
 this private-binder contract does not silently replace the existing collection
 listener. Rollout flags must not bypass any security checks.
+
+### Integration checks still required
+
+- Replace the overloaded current `Checkpoint` apply result with explicit deferred
+  outcomes for own pending outbox and unresolved parents. A locally pending parent
+  tombstone is not proof of a permanently deleted remote parent.
+- Do not overwrite a different pending placement mutation while resolving a remote
+  membership collision; defer the incoming row instead.
+- Retain confirmed deletion revisions for unknown placements before accepting any
+  older live snapshot. All remote apply paths, including push-conflict responses
+  and fallback pulls, must honor that protection; a pull-only mutex is insufficient.
+- Bound the full worker budget, not just each group. Stop a completed group cycle:
+  repeatedly starting Idle at the same boundary inside one run would replay forever.
+- Timestamp trust remains an adapter obligation. The Android public snapshot API
+  has no server read-time field; a representable timestamp alone is not proof of a
+  valid historical writer. Malformed legacy values must not poison progress.
+- The metadata port isolates metadata scope, not arbitrary caller DAO writes. The
+  adapter must validate document owner, parents and outbox in the same transaction.
+
+Reference semantics: [Firestore query cursors](https://firebase.google.com/docs/firestore/query-data/query-cursors)
+and [Android DocumentSnapshot](https://firebase.google.com/docs/reference/android/com/google/firebase/firestore/DocumentSnapshot.html).
+Pending-write metadata and full seconds/nanoseconds are required; neither estimated
+local server timestamps nor client-clock values establish a confirmed watermark.
+
+### Local foundation evidence (2026-10-01)
+
+The pure protocol's 42 JVM cases pass within 116 selected sync/sharing unit tests.
+Nineteen real Room tests cover metadata CAS, recovery epochs, marker capacity,
+owner/group isolation and payload+cursor rollback. Seven local placement tests
+cover indexed free positions, unchanged collision policy, tombstones and synthetic
+1k/5k/20k scale. Combined with existing ACK/work/sharing/startup tests, the final
+offline emulator run passes 57 tests in 15.123 seconds. Debug/test builds and release
+Kotlin compilation pass; no signed release build was performed.
+
+Only the indexed free-position fast path is active in the worker. The delta state
+machine, Room store and auth lease remain integration groundwork, not enabled sync.
+No Firestore delta-read savings or cross-device timing claim is made from these
+local tests. See `RELEASE_27.md` for the measured local lookup and its limitations.

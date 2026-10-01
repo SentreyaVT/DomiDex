@@ -146,6 +146,9 @@ interface CardVaultDao {
     @Query("SELECT * FROM private_binder_placements WHERE binderId = :binderId AND slotPosition = :slotPosition AND ownerUid = :ownerUid AND deletedAtEpochMillis IS NULL LIMIT 1")
     suspend fun privateBinderPlacementAt(binderId: String, slotPosition: Long, ownerUid: String = GUEST_OWNER_UID): PrivateBinderPlacementEntity?
 
+    @Query("SELECT EXISTS(SELECT 1 FROM private_binder_placements WHERE ownerUid = :ownerUid AND binderId = :binderId AND slotPosition = :slotPosition AND id != :excludingId AND deletedAtEpochMillis IS NULL)")
+    suspend fun hasOtherActivePrivatePlacement(ownerUid: String, binderId: String, slotPosition: Long, excludingId: String): Boolean
+
     @Query("SELECT * FROM private_binder_placements WHERE binderId = :binderId AND ownerUid = :ownerUid AND deletedAtEpochMillis IS NULL ORDER BY slotPosition, id")
     suspend fun activePrivateBinderPlacements(binderId: String, ownerUid: String = GUEST_OWNER_UID): List<PrivateBinderPlacementEntity>
 
@@ -570,6 +573,16 @@ interface CardVaultDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun putMetadata(value: AppMetadataEntity)
+
+    /** Bounded lexicographic range; callers construct a fixed owner-scoped prefix. */
+    @Query("SELECT * FROM app_metadata WHERE `key` >= :startInclusive AND `key` < :endExclusive AND `key` > :afterKey ORDER BY `key` LIMIT :limit")
+    suspend fun metadataRangePage(startInclusive: String, endExclusive: String, afterKey: String, limit: Int): List<AppMetadataEntity>
+
+    @Query("SELECT COUNT(*) FROM app_metadata WHERE `key` >= :startInclusive AND `key` < :endExclusive")
+    suspend fun metadataRangeCount(startInclusive: String, endExclusive: String): Int
+
+    @Query("DELETE FROM app_metadata WHERE `key` = :key")
+    suspend fun deleteMetadata(key: String): Int
 
     @Transaction
     suspend fun updateEntry(id: Long, ownerUid: String, syncState: String, quantity: Int, condition: String, notes: String, acquisitionPriceMinor: Long?, acquisitionCurrency: String?, acquisitionDateEpochDay: Long?, finish: String, variant: String, effectOverride: String?) {

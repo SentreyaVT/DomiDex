@@ -698,9 +698,7 @@ private suspend fun applyRemotePlacement(
         dao.updatePrivateBinderPlacement(tombstone)
         queueRemoteResolution(dao, tombstone, PRIVATE_SYNC_DELETE)
     }
-    val active = dao.activePrivateBinderPlacements(binder.id, uid)
-    val targetOccupied = active.any { it.id != id && it.slotPosition == requestedPosition }
-    val localPosition = if (targetOccupied) firstFreePosition(active, id) else requestedPosition
+    val localPosition = remotePrivatePlacementPosition(dao, uid, binder.id, id, requestedPosition)
     val resolvedLocally = localPosition != requestedPosition
     val placement = PrivateBinderPlacementEntity(
         id = id,
@@ -764,16 +762,6 @@ private suspend fun applyRemotePriceSelection(
     // retaining its revision prevents an older local choice from being resurrected later.
     dao.upsertPriceSelection(parsed.copy(collectionEntryId = entry.id))
     return checkpoint
-}
-
-private fun firstFreePosition(placements: List<PrivateBinderPlacementEntity>, excludingId: String): Long {
-    val used = placements.asSequence()
-        .filter { it.id != excludingId && it.deletedAtEpochMillis == null && it.slotPosition >= 0L }
-        .map(PrivateBinderPlacementEntity::slotPosition)
-        .toHashSet()
-    var candidate = 0L
-    while (candidate in used) candidate++
-    return candidate
 }
 
 private suspend fun queueRemoteResolution(

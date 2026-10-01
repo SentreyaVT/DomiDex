@@ -158,7 +158,7 @@ An 18-test pass alone is not Gate 1 approval.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | ACK/failure/terminal-state fixes verified: 18 helper/Room cases, final combined 31 emulator tests and 74 JVM tests pass; initial/delta/outbox/conflict/offline/multi-client scale remain; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS | ACK/failure/terminal-state fixes plus delta persistence foundation: 116 selected JVM tests and 57 combined emulator tests pass; indexed slot lookup measured through 20k rows; delta worker integration and multi-client scale remain; see SYNC.md |
 | 5 Pricing/catalog | NOT TESTED | exact-identity centralized fetch/cache/fallback/retention evidence |
 | 6 Shared binder scale | NOT TESTED | 5k placements, pagination, final revoke check, caching |
 | 7 Camera stability | NOT TESTED | synthetic/emulator regression; real hardware matrix separate |
@@ -246,3 +246,42 @@ Web-build success. No real attestation is inferred from these local test doubles
 
 Remaining scanner-knowledge baseline regressions are still recorded for Gate 9;
 these selected passing suites are not a claim that every gate or full suite is green.
+
+## Gate 4 local validation (in progress)
+
+Committed ACK/failure changes preserve successor mutations and terminal decisions;
+late responses cannot recreate a pending row without an outbox or overwrite a newer
+local mutation. The private delta protocol and Room metadata transaction adapter
+are now prepared, **not yet connected to the production pull worker**. Existing
+bounded full pulls remain active. Schema 13, remote paths and security rules did
+not change. The prepared auth-session guard is not proof of live Firebase testing.
+
+Debug + instrumentation APK build, release Kotlin compilation and 116 selected
+sync/sharing JVM tests pass. The offline API-36 emulator's final combined run passes
+57 tests in 15.123 s: 19 actual Room checkpoint/defer/rollback/CAS cases, 7 indexed
+placement-position cases (including scale), 18 collection ACK cases, and 13 existing
+sharing/work/startup cases. These are helper/Room tests, not worker/Firebase E2E.
+
+The active placement improvement first checks the existing owner/binder/slot index
+with `EXISTS`; an unoccupied incoming slot no longer materializes every placement.
+Occupied slots retain the existing first-free policy and still read all active rows.
+Synthetic three-sample medians, milliseconds, for **one local lookup**:
+
+| Existing placements | Previous free-slot strategy | Indexed free-slot lookup | Collision fallback |
+|---|---:|---:|---:|
+| 1,000 | 11.285 | 2.385 | 14.922 |
+| 5,000 | 28.472 | 2.579 | 38.793 |
+| 20,000 | 118.817 | 2.063 | 131.272 |
+
+The baseline matches the prior materialization plus `any` check, not an extra hash
+allocation for an already-free slot. Placement field hashes and foreign keys are
+unchanged, and `EXPLAIN QUERY PLAN` confirms the existing slot index. The collision
+path deliberately includes both the index probe and old fallback; no claim of a
+collision-speedup, network-read saving, whole-sync speedup or UI latency SLA follows.
+
+Evidence: `gate4-pull-foundation-build.log`,
+`gate4-pull-foundation-instrumentation-final.log`, and
+`gate4-slot-measurement-final.log` under the ignored Android evidence directory.
+Only PID 21379 / 02:10 UTC lines in the measurement log are the final comparison;
+the earlier PID 21257 baseline was superseded. Remaining delta integration risks
+and acceptance tests are listed explicitly in `docs/SYNC.md`.
