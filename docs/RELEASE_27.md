@@ -285,3 +285,24 @@ Evidence: `gate4-pull-foundation-build.log`,
 Only PID 21379 / 02:10 UTC lines in the measurement log are the final comparison;
 the earlier PID 21257 baseline was superseded. Remaining delta integration risks
 and acceptance tests are listed explicitly in `docs/SYNC.md`.
+
+## Gate 5 Android import safety (partial, local validation)
+
+The existing atomic Cardmarket import now serializes overlapping UI/worker imports,
+owns both temporary files before parallel downloads, and cleans both after failure
+or cancellation. Each decoded stream is bounded to 128 MiB; this is a technical
+safety limit, not a claim about the provider's published maximum. Truncated or
+oversized downloads, an empty product/guide join, or a missing/invalid guide source
+timestamp cannot replace the last good Room snapshot. A valid source timestamp is
+never substituted with the device's current time. Source URLs, gzip behavior,
+timeouts, Room schema, release configuration and provider rights are unchanged.
+
+Thirty new helper tests and three existing parser tests pass. They exercise stream
+limits (including expanded gzip), cleanup, cancellation, serialization and import
+preflight; they are not a live provider download or an actual Room import E2E test.
+The combined build also passes 154 selected sync/sharing JVM tests, debug/test APK
+builds and release Kotlin compilation. Evidence: `gate5-cardmarket-import-*` and
+`gate4-confirmed-dependency-build.log` in the ignored engineering directory.
+
+Full all-set price coverage, shared dataset versions and a rights-approved central
+delivery strategy remain open Gate 5 work. No production import was triggered.
