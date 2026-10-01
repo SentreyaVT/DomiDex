@@ -158,12 +158,12 @@ An 18-test pass alone is not Gate 1 approval.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply protection and bounded single-flight full pulls active; 189 selected JVM and 78 emulator tests pass; synthetic 1k/5k/20k runner cycles; delta integration and multi-client scale remain; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS | ACK/session/remote-apply protection and bounded full pulls active; real local two-SDK matrix 25/25; Android conflict/UI follow-ups under validation; delta integration and multi-client scale remain; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded atomic Android import, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
-| 6 Shared binder scale | IN PROGRESS | in-flight binder deletion/ownership guarded; local regression passes, 5k scale/pagination/cache and public IP/token limits remain |
+| 6 Shared binder scale | IN PROGRESS | in-flight binder deletion/ownership guarded; 5k pagination correctness and bounded catalog cache tested; O(N) reads/private price parity and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | NOT TESTED | synthetic/emulator regression; real hardware matrix separate |
 | 8 Recognition | NOT TESTED | multisignal, variant-aware false accepts, reproducible benchmark |
-| 9 Community knowledge | IN PROGRESS (client safety PASS locally) | reproduced confidence/freshness/lifecycle faults fixed; 48 focused JVM + 11 real-Android cache/SDK cases pass; backend ownership/replay and aggregation scale remain |
+| 9 Community knowledge | IN PROGRESS (client safety PASS locally) | confidence/freshness/lifecycle faults fixed; 48 focused JVM + 11 Android cases; canonical trigger/deploy ownership tested; aggregation scale/live evidence remain |
 | 10 Privacy/lifecycle | NOT TESTED | export/deletion/locks/storage/retention inventory |
 | 11 Observability/cost | NOT TESTED | low-cardinality safe metrics; simulation labelled, alerts prepared |
 | 12 Load/scale | NOT TESTED | 10/40/80 concurrency; 1k/5k/20k collections; no production load |
@@ -456,3 +456,76 @@ RED/GREEN and the SDK-harness failure are retained separately. No real Firebase
 listener/auth E2E, physical-device benchmark or scanner accuracy/speed improvement is
 inferred from these tests. No release signing, AAB, deployment or Xiaomi action.
 The historical signed-v26 AAB SHA-256 remains the immutable value listed above.
+
+## Gate 4 two-client price-selection matrix (local, 2026-10-01)
+
+The real local Firestore SDK/rules matrix now includes 21 price-selection cases,
+alongside four existing two-client sync cases. Root independently reran **25/25
+PASS** in 17.41 s of Vitest / 25.8 s total. Both clients use synthetic claims and
+`demo-domidex-sync`; no user account or production service is used. Android, Web
+and copied harness rules retain SHA-256
+`53B815173F59727368F85C1E1861108C0C246FE262F5FF6FBAA848000F930ACE`.
+
+The matrix covers all seven normal/reverse metrics and source fields, legacy
+quantity edits, clear/change races, queued stale writes, revoked access, disabled
+accounts, deletion locks, owner isolation, parent identity/tombstones, and confirmed
+snapshots. Expected PERMISSION_DENIED messages are successful negative assertions,
+not ignored errors. In a same-revision transaction race, a rules rejection may occur
+before an SDK precondition retry; the caller must not assume automatic convergence.
+
+`disableNetwork()` alone did not interrupt direct transaction RPCs in the installed
+Node SDK. A separate loopback TCP proxy therefore destroys its own connections and
+rejects new ones. The transaction fails, the second client confirms unchanged server
+state, reconnect does not replay it, and a fresh explicit transaction succeeds.
+The test accepts CANCELLED/UNAVAILABLE, not a false acknowledgement. Earlier failed
+test assumptions and their logs are retained. This is real local transport/rules
+coverage, **not** an Android Worker/Room or Web UI end-to-end convergence claim.
+
+The isolated runner uses cached tools, temporary empty credential directories and
+a Node loopback-only network guard. That guard is not an OS/Java firewall. All five
+reserved local ports were unoccupied before and closed after the run. Evidence:
+`artifacts/release27-engineering-20261001/security-gate4-two-client/run-20261001-051139-b2f2af98/`.
+The newly identified Android silent remote-wins policy and Web partial-add retry
+are separate product fixes under validation, not closed by this matrix.
+
+The durable Web `test:sync-emulator` command now includes both suites in an explicit
+serial configuration with environment-file loading disabled and 30-second test
+timeouts. The transport fixture derives the upstream from the validated local
+emulator address and allocates its own ephemeral loopback port; it does not require
+the engineering harness's machine-specific port. Root rerun after this portability
+change: **25/25 PASS**, 22.96 s / 30.34 s total, evidence sibling directory
+`run-20261001-051340-2a0bd236`. No emulator configuration or product rules changed.
+
+## Gate 6 bounded public catalog cache (local, 2026-10-01)
+
+Shared-binder resolution now reuses public catalog metadata for at most 60 seconds
+from insertion, with no renewal on access. The process-local cache is bounded to
+8,192 entries / 32 MiB serialized bytes / 128 KiB per entry. It contains no UID,
+token, binder, collection entry, private DTO or authorization result. Exact public
+card IDs and the fixed language/resolver version form keys. Every consumer receives
+a fresh copy. Declared identity contradictions and malformed prices are preserved
+uncached rather than normalized into apparently valid data.
+
+Up to 64 in-flight catalog jobs are deduplicated; overflow performs uncached work,
+so this is **not** a global concurrency limit. One consumer's cancellation cannot
+cancel another; the final cancellation or 12-second job deadline aborts its provider
+request. Late completion cannot populate a replacement job's cache. Errors/missing
+cards are not cached. Existing private checks, including final revocation/deletion
+checks, still run for every response. Price source timestamps do not change.
+
+Root independently reran **64/64** tests in six files (3.58 s), including cache
+boundaries, copies, abort races, real handler entry points and packaging. In a local
+one-entry fixture, cold/warm catalog fetches are 1/0; private logical reads remain
+9/9. This is not a Cloud Run, provider-latency or billing measurement. The cache does
+not fix O(N) placement reads, private-price parity, provider response-byte limits,
+or the missing anonymous public-read limiter. Evidence: Web
+`outputs/public-catalog-cache/2026-10-01T03-09-19-895Z-21304.log`.
+
+The separate Web `docs/RELEASE_27_PUBLIC_READ_LIMITS.md` records the unresolved
+trusted-ingress boundary, guessed-token read cost, GET/HEAD behavior and polling
+amplification. `VINEXT_TRUST_PROXY` in the inspected version verifies protocol/host,
+not client-IP provenance. No speculative header-based limiter or new quota storage
+was added; external ingress/bypass/logging evidence is needed before enforcement.
+
+No production deployment, signing, AAB, Xiaomi action or live account test was
+performed for either follow-up.
