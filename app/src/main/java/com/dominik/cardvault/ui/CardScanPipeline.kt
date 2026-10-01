@@ -217,11 +217,7 @@ internal object CardImageNormalizer {
         try {
             Utils.bitmapToMat(source, sourceMat)
             Imgproc.cvtColor(sourceMat, gray, Imgproc.COLOR_RGBA2GRAY)
-            val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
-            clahe.apply(gray, normalized)
-            clahe.collectGarbage()
             Imgproc.GaussianBlur(gray, rawBlurred, Size(5.0, 5.0), 0.0)
-            Imgproc.GaussianBlur(normalized, normalizedBlurred, Size(5.0, 5.0), 0.0)
             // Fast normal edge pass. Expensive fallbacks are evaluated only when it is weak.
             Imgproc.Canny(rawBlurred, edges, 32.0, 104.0)
             val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
@@ -229,6 +225,10 @@ internal object CardImageNormalizer {
             Imgproc.dilate(edges, edges, kernel)
             val primary = findBestQuad(edges, hierarchy, source.width, source.height, usedFallback = false)
             val candidate = if (primary == null || primary.score < CardScanConfiguration.FALLBACK_GEOMETRY_TRIGGER) {
+                // Preserve the exact fallback pixels, but prepare them only when they are needed.
+                val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+                try { clahe.apply(gray, normalized) } finally { clahe.collectGarbage() }
+                Imgproc.GaussianBlur(normalized, normalizedBlurred, Size(5.0, 5.0), 0.0)
                 Imgproc.Canny(normalizedBlurred, contrastEdges, 22.0, 86.0)
                 Imgproc.adaptiveThreshold(normalizedBlurred, adaptive, 255.0, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 31, 7.0)
                 Imgproc.threshold(normalizedBlurred, luminance, 0.0, 255.0, Imgproc.THRESH_BINARY_INV or Imgproc.THRESH_OTSU)
@@ -573,13 +573,21 @@ internal object CardImageNormalizer {
             // Calculate a small, robust pixel sample for exposure/glare and variance.
             var sum = 0.0; var glare = 0; var clipped = 0; var laplacianSum = 0.0; var laplacianSquared = 0.0; var samples = 0
             val step = 8
-            for (y in 0 until qualityGray.rows() step step) for (x in 0 until qualityGray.cols() step step) {
-                val value = qualityGray.get(y, x)[0]
-                val edge = laplacian.get(y, x)[0]
-                sum += value; laplacianSum += edge; laplacianSquared += edge * edge
-                if (value >= 244) glare++
-                if (value >= 250 || value <= 5) clipped++
-                samples++
+            // Read sampled rows in bulk instead of creating two JNI arrays per sampled pixel.
+            // The sample positions, unsigned luminance values and accumulation order are identical.
+            val luminanceRow = ByteArray(qualityGray.cols())
+            val edgeRow = DoubleArray(laplacian.cols())
+            for (y in 0 until qualityGray.rows() step step) {
+                qualityGray.get(y, 0, luminanceRow)
+                laplacian.get(y, 0, edgeRow)
+                for (x in 0 until qualityGray.cols() step step) {
+                    val value = (luminanceRow[x].toInt() and 0xFF).toDouble()
+                    val edge = edgeRow[x]
+                    sum += value; laplacianSum += edge; laplacianSquared += edge * edge
+                    if (value >= 244) glare++
+                    if (value >= 250 || value <= 5) clipped++
+                    samples++
+                }
             }
             val mean = sum / samples.coerceAtLeast(1)
             val laplacianMean = laplacianSum / samples.coerceAtLeast(1)

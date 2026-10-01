@@ -41,6 +41,14 @@ internal enum class ScannerFeedbackAccess { CHECKING, LOCAL, WEB_REPORT, UNAVAIL
 // Keep old preference readers compatible, but a saved standing consent must never send a photo.
 private const val AUTOMATIC_SCANNER_REPORTS_ENABLED = false
 
+internal const val SCANNER_REPORT_PRIVACY_DETAILS =
+    "Nur Administratoren und ausdrücklich freigeschaltete Scanner-Lab-Prüfer können die Berichte im Scanner Lab ansehen. " +
+        "Ein ausdrücklich gestarteter Upload kann im Hintergrund abgeschlossen werden. Bereits gesendete Berichte werden durch Schließen der Ansicht nicht gelöscht. Für deren Löschung kannst du den Datenschutzkontakt nutzen."
+
+internal const val SCANNER_REPORT_UPLOAD_CONSENT =
+    "Mit „Hochladen“ stimmst du zu, dieses Foto und die erkannten Kartenmerkmale samt Analyseergebnis und technischer Analysekennung geschützt in Firebase zu speichern. " +
+        "Nur Administratoren und ausdrücklich freigeschaltete Scanner-Lab-Prüfer können den Bericht ansehen. Prüfe, dass keine persönlichen Informationen im Bild sichtbar sind. Standort-Metadaten werden entfernt."
+
 internal fun scannerFeedbackAccess(uid: String?, claims: FirebaseEntitlements?): ScannerFeedbackAccess = when {
     uid == null -> ScannerFeedbackAccess.LOCAL
     claims == null -> ScannerFeedbackAccess.UNAVAILABLE
@@ -68,6 +76,7 @@ internal fun QueuedCardScan.scannerReportDraft(): ScannerReportDraft {
         failureReason = decision?.reason?.takeIf(String::isNotBlank)
             ?: evidence?.imageQuality?.reason?.takeIf(String::isNotBlank)
             ?: stage.name,
+        knowledgeContext = knowledgeContext,
     )
 }
 
@@ -301,9 +310,9 @@ internal fun ScannerAutomaticReportControl(flow: ScannerReportFlow, showAllAcces
         title = { Text("Welche Scandaten werden gesendet?") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Gesendet werden das Kartenfoto, erkannte Kartenmerkmale und technische Analyseergebnisse wie Erkennungssicherheit und Fehlergrund. Standort- und andere Foto-Metadaten werden vor dem Senden entfernt.")
+                Text("Gesendet werden das Kartenfoto, erkannte Kartenmerkmale und technische Analyseergebnisse wie Analysekennung, Erkennungssicherheit und Fehlergrund. Standort- und andere Foto-Metadaten werden vor dem Senden entfernt.")
                 Text("Dein Klarname, Telefonnummer, Adresse und eine zusätzliche Gerätekennung gehören nicht zu den Berichtsfeldern. Der Upload erfolgt mit deinem angemeldeten Konto und ist diesem zugeordnet; er ist nicht anonym. Fotografiere keine persönlichen Informationen.")
-                Text("Nur Administratoren können die Berichte im Scanner Lab ansehen. Ein ausdrücklich gestarteter Upload kann im Hintergrund abgeschlossen werden. Bereits gesendete Berichte werden durch Schließen der Ansicht nicht gelöscht. Für deren Löschung kannst du den Datenschutzkontakt nutzen.")
+                Text(SCANNER_REPORT_PRIVACY_DETAILS)
             }
         },
         confirmButton = { TextButton(onClick = { showDetails = false }) { Text("Verstanden") } },
@@ -347,7 +356,7 @@ internal fun ScannerReportDialog(flow: ScannerReportFlow, onManualAdd: (() -> Un
                 when {
                     outcome?.reportId != null -> Text("Hochgeladen. Der Bericht ist im Web-Scanner-Lab zur Bearbeitung bereit.")
                     !manualCapture -> Text("Der aktuelle Firebase-Upload erlaubt nur manuell ausgelöste Fotos. Bitte die Karte erneut mit dem Auslöser aufnehmen. Diese Aufnahme wird nicht hochgeladen.")
-                    else -> Text("Mit „Hochladen“ stimmst du zu, dieses Foto und die erkannten Kartenmerkmale samt Analyseergebnis geschützt in Firebase zu speichern. Nur Administratoren können den Bericht ansehen. Prüfe, dass keine persönlichen Informationen im Bild sichtbar sind. Standort-Metadaten werden entfernt.")
+                    else -> Text(SCANNER_REPORT_UPLOAD_CONSENT)
                 }
                 if (flow.uploadingScanId == scan.id) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())

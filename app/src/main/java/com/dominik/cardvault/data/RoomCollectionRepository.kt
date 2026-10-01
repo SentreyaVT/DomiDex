@@ -8,6 +8,7 @@ import com.dominik.cardvault.data.sync.PRIVATE_SYNC_BINDER
 import com.dominik.cardvault.data.sync.PRIVATE_SYNC_DELETE
 import com.dominik.cardvault.data.sync.PRIVATE_SYNC_LAYOUT
 import com.dominik.cardvault.data.sync.PRIVATE_SYNC_PLACEMENT
+import com.dominik.cardvault.data.sync.PRIVATE_SYNC_PRICE_SELECTION
 import com.dominik.cardvault.data.sync.PRIVATE_SYNC_UPSERT
 import com.dominik.cardvault.data.sync.deterministicPrivatePlacementId
 import com.dominik.cardvault.model.*
@@ -94,9 +95,17 @@ class RoomCollectionRepository(
         else dao.observeSyncErrorCount(ownerUid)
     }
     override val binders: Flow<List<BinderSummary>> = activeOwnerUid.flatMapLatest { ownerUid ->
-        dao.observeBinders(ownerUid).map { rows -> rows.map { row ->
-            BinderSummary(row.id, row.name, row.heroAsset, row.uniqueCards, row.ownedCards, (row.marketValueMinor ?: 0L) / 100.0, row.lastPriceUpdatedAtEpochMillis)
-        } }
+        combine(dao.observeBinders(ownerUid), currentCardsFor(ownerUid)) { rows, currentCards ->
+            val cardsByBinder = currentCards.groupBy(CollectionCard::binderId)
+            rows.map { row ->
+                val cards = cardsByBinder[row.id].orEmpty()
+                BinderSummary(row.id, row.name, row.heroAsset, row.uniqueCards, row.ownedCards,
+                    cards.sumOf { (it.effectiveValueEur ?: 0.0) * it.quantity },
+                    cards.mapNotNull { it.priceUpdatedAtEpochMillis ?: it.activePriceSelection?.sourceAt }.maxOrNull(),
+                    cards.filter { it.usesPriceSelection }.sumOf { it.quantity },
+                    cards.filter { it.trendValueEur != null }.sumOf { it.quantity })
+            }
+        }
     }
 
     override val setBinderVisibility: Flow<Map<Long, Boolean>> = activeOwnerUid.flatMapLatest { ownerUid ->
@@ -105,11 +114,18 @@ class RoomCollectionRepository(
         }
     }
 
-    override val portfolio: Flow<PortfolioSummary> = activeOwnerUid.flatMapLatest { ownerUid ->
-        combine(
+    override val portfolio: Flow<PortfolioSummary> = activeOwnerUid.flatMapLatest { portfolioFor(it) }
+
+    /** Summaries only need today's values; do not load every historical price to render a binder. */
+    private fun currentCardsFor(ownerUid: String): Flow<List<CollectionCard>> = combine(
+        dao.observeCollection(ownerUid), dao.observePriceSelections(ownerUid),
+    ) { rows, selections -> collectionCards(rows, selections) }.flowOn(Dispatchers.Default)
+
+    private fun portfolioFor(ownerUid: String, includePortfolioHistory: Boolean = true): Flow<PortfolioSummary> = combine(
             dao.observeCollection(ownerUid),
             dao.observeOwnedRawPriceHistory(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE),
-        ) { rows, prices ->
+            dao.observePriceSelections(ownerUid),
+        ) { rows, prices, selections ->
         // One indexed view replaces repeated full price-table scans for every card and every
         // history timestamp. Room already emits immutable snapshots, so this cache is local to
         // the current calculation and can never become stale.
@@ -117,14 +133,24 @@ class RoomCollectionRepository(
             .filter { it.source == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }
             .groupBy(RawPriceSnapshotEntity::cardId)
             .mapValues { (_, values) -> values.sortedBy(RawPriceSnapshotEntity::effectiveAtEpochMillis) }
-        val cards = rows.map { row ->
+        PortfolioSummary(collectionCards(rows, selections, cardmarketPrices),
+            if (includePortfolioHistory) buildHistory(rows, prices, cardmarketPrices) else emptyList())
+    }.flowOn(Dispatchers.Default)
+
+    private fun collectionCards(
+        rows: List<CollectionProjection>,
+        selections: List<CollectionPriceSelectionEntity>,
+        cardmarketPrices: Map<String, List<RawPriceSnapshotEntity>> = emptyMap(),
+    ): List<CollectionCard> {
+        val selectionsByEntry = selections.associateBy(CollectionPriceSelectionEntity::collectionEntryId)
+        return rows.map { row ->
             val cardPrices = cardmarketPrices[row.priceCardId].orEmpty()
             val first = cardPrices.asSequence().mapNotNull { it.trendValueFor(row.finish) }.firstOrNull()
-            val latest = row.marketValueMinor
+            val latest = row.marketValueMinor?.takeIf { it > 0L }
             val change = if (first != null && latest != null && first != 0L) (latest - first) * 100.0 / first else 0.0
             CollectionCard(row.entryId, row.cardId, row.name, row.setName, row.collectorNumber,
                 CardLanguage.fromStorage(row.language), row.finish, row.variant, row.condition, row.quantity,
-                (latest ?: 0L) / 100.0, change, row.priceUpdatedAtEpochMillis, row.notes,
+                (latest ?: 0L) / 100.0, change, row.priceUpdatedAtEpochMillis.takeIf { latest != null }, row.notes,
                 row.acquisitionPriceMinor?.div(100.0), row.acquisitionDateEpochDay, accentFor(row.name), imageUrl = row.imageUrl)
                 .copy(
                     binderId = row.binderId,
@@ -133,19 +159,19 @@ class RoomCollectionRepository(
                     effectOverride = row.effectOverride,
                     sourceSetId = row.sourceSetId,
                     sourceCardId = row.sourceCardId,
+                    priceSelection = selectionsByEntry[row.entryId]?.selectionOrNull()
+                        ?.takeIf { row.externalProductSource == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE },
                 )
         }
-            PortfolioSummary(cards, buildHistory(rows, prices, cardmarketPrices))
-        }
-    }.flowOn(Dispatchers.Default)
+    }
 
     override val privateBinders: Flow<List<PrivateBinderSummary>> = activeOwnerUid.flatMapLatest { ownerUid ->
         combine(
             dao.observePrivateBinders(ownerUid),
             dao.observeAllPrivateBinderPlacements(ownerUid),
-            portfolio,
-        ) { binderRows, placementRows, currentPortfolio ->
-            val cardsByEntry = currentPortfolio.cards.associateBy(CollectionCard::entryId)
+            currentCardsFor(ownerUid),
+        ) { binderRows, placementRows, currentCards ->
+            val cardsByEntry = currentCards.associateBy(CollectionCard::entryId)
             val placementsByBinder = placementRows.groupBy(PrivateBinderPlacementEntity::binderId)
             binderRows.map { binder ->
                 val cards = placementsByBinder[binder.id].orEmpty().mapNotNull { cardsByEntry[it.collectionEntryId] }
@@ -157,11 +183,13 @@ class RoomCollectionRepository(
                     minimumPageCount = binder.minimumPageCount,
                     uniqueCards = cards.map(CollectionCard::entryId).distinct().size,
                     ownedCards = cards.sumOf(CollectionCard::quantity),
-                    marketValueEur = cards.sumOf { it.currentValueEur * it.quantity },
+                    marketValueEur = cards.sumOf { (it.effectiveValueEur ?: 0.0) * it.quantity },
                     createdAtEpochMillis = binder.createdAtEpochMillis,
                     updatedAtEpochMillis = binder.updatedAtEpochMillis,
                     lastOpenedAtEpochMillis = binder.lastOpenedAtEpochMillis,
                     ownerUid = binder.ownerUid,
+                    alternativePricedCards = cards.filter { it.usesPriceSelection }.sumOf { it.quantity },
+                    trendPricedCards = cards.filter { it.trendValueEur != null }.sumOf { it.quantity },
                 )
             }
         }
@@ -214,6 +242,9 @@ class RoomCollectionRepository(
                     }
                 }
                 val currentEntry = dao.getCollectionEntry(existing.id, ownerUid) ?: existing
+                input.priceSelection?.let { selection ->
+                    scheduleSync = savePriceSelectionInTransaction(currentEntry, selection, now) || scheduleSync
+                }
 
                 if (privateTarget != null) {
                     val assignment = assignToPrivateBinderInTransaction(
@@ -310,6 +341,9 @@ class RoomCollectionRepository(
             // fresh successor id; the deleted row remains intact and can never be resurrected.
             val stored = entry.copy(id = dao.insertCollectionEntry(entry))
             scheduleSync = queueMutation(stored, "UPSERT") || scheduleSync
+            input.priceSelection?.let { selection ->
+                scheduleSync = savePriceSelectionInTransaction(stored, selection, now) || scheduleSync
+            }
             if (privateTarget == null) {
                 TargetedAddCardResult(
                     entryId = stored.id,
@@ -520,7 +554,8 @@ class RoomCollectionRepository(
 
     override fun privateBinderContents(binderId: String): Flow<List<PrivateBinderCard>> =
         activeOwnerUid.flatMapLatest { ownerUid ->
-            combine(dao.observePrivateBinderPlacements(binderId, ownerUid), portfolio) { placements, currentPortfolio ->
+            // Keep each card's real history-derived change, but skip the unused whole-portfolio chart.
+            combine(dao.observePrivateBinderPlacements(binderId, ownerUid), portfolioFor(ownerUid, includePortfolioHistory = false)) { placements, currentPortfolio ->
                 val cardsByEntry = currentPortfolio.cards.associateBy(CollectionCard::entryId)
                 placements.mapNotNull { placement ->
                     cardsByEntry[placement.collectionEntryId]?.let { card ->
@@ -768,6 +803,13 @@ class RoomCollectionRepository(
                 dao.updateCollectionLayout(claimedLayout)
                 privateStateClaimed = queueCollectionLayoutMutation(claimedLayout, entry.syncId) || privateStateClaimed
             }
+            dao.priceSelections(GUEST_OWNER_UID).forEach { guestSelection ->
+                val entry = dao.getCollectionEntry(guestSelection.collectionEntryId, ownerUid) ?: return@forEach
+                val claimedSelection = guestSelection.copy(ownerUid = ownerUid, entrySyncId = entry.syncId,
+                    updatedAtEpochMillis = now, syncState = SYNC_PENDING, remoteRevision = 0L)
+                dao.upsertPriceSelection(claimedSelection)
+                privateStateClaimed = queuePriceSelectionMutation(claimedSelection) || privateStateClaimed
+            }
             dao.deleteGuestPrivateBinderPlacements()
             dao.deleteGuestPrivateBinders()
             check(activeOwnerUid.value == ownerUid) { "Konto während der Übernahme gewechselt." }
@@ -914,6 +956,7 @@ class RoomCollectionRepository(
                         variant = it.variant,
                         rarity = it.rarity,
                         holoTrendPriceEur = it.holoMarketValueMinor?.div(100.0),
+                        priceAlternatives = it.priceAlternatives(),
                     )
                 }
             }
@@ -936,6 +979,7 @@ class RoomCollectionRepository(
                     variant = it.variant,
                     rarity = it.rarity,
                     holoTrendPriceEur = it.holoMarketValueMinor?.div(100.0),
+                    priceAlternatives = it.priceAlternatives(),
                 )
             }
         }
@@ -950,6 +994,59 @@ class RoomCollectionRepository(
         if (queued) onSyncNeeded()
     }
 
+    override suspend fun setPriceSelection(entryId: Long, selection: CardPriceSelection) {
+        val owner = activeOwnerUid.value
+        val queued = database.withTransaction {
+            val entry = dao.getCollectionEntry(entryId, owner)?.takeIf { it.deletedAtEpochMillis == null }
+                ?: error("Die Karte ist nicht in dieser Sammlung verfügbar.")
+            val result = savePriceSelectionInTransaction(entry, selection, System.currentTimeMillis())
+            check(activeOwnerUid.value == owner) { "Konto während der Preiswahl gewechselt." }
+            result
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    override suspend fun clearPriceSelection(entryId: Long) {
+        val owner = activeOwnerUid.value
+        val queued = database.withTransaction {
+            val entry = dao.getCollectionEntry(entryId, owner)?.takeIf { it.deletedAtEpochMillis == null }
+                ?: error("Die Karte ist nicht in dieser Sammlung verfügbar.")
+            val previous = dao.priceSelection(owner, entry.syncId) ?: return@withTransaction false
+            val cleared = CollectionPriceSelectionEntity(entry.id, owner, entry.syncId, true,
+                updatedAtEpochMillis = System.currentTimeMillis(), syncState = syncStateFor(owner),
+                remoteRevision = previous.remoteRevision)
+            dao.upsertPriceSelection(cleared)
+            check(activeOwnerUid.value == owner) { "Konto während der Preiswahl gewechselt." }
+            queuePriceSelectionMutation(cleared)
+        }
+        if (queued) onSyncNeeded()
+    }
+
+    private suspend fun savePriceSelectionInTransaction(entry: CollectionEntryEntity, selection: CardPriceSelection, now: Long): Boolean {
+        require(entry.externalProductSource == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE) {
+            "Der Vergleichswert benötigt eine eindeutige Cardmarket-Zuordnung."
+        }
+        val identity = dao.collectionSyncProjection(entry.ownerUid, entry.syncId)?.priceIdentityCard()
+            ?: error("Die Kartenidentität ist nicht verfügbar.")
+        require(selection.matches(identity)) { "Der Vergleichswert gehört nicht zu dieser Karte und Variante." }
+        val product = dao.catalogProducts(com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE,
+            listOf(selection.productId)).singleOrNull() ?: error("Das zugeordnete Marktprodukt fehlt.")
+        val trend = if (selection.metric.reverse) product.holoMarketValueMinor else product.marketValueMinor
+        require(trend == null || trend <= 0L) { "Ein gültiger Trendpreis ist verfügbar; er hat Vorrang." }
+        require(product.priceAlternatives().any {
+            it.metric == selection.metric && it.amountMinor == selection.amountMinor &&
+                it.currency == selection.currency && it.sourceAt == selection.sourceAt
+        }) { "Die Preisdaten haben sich geändert. Bitte den Vergleichswert erneut auswählen." }
+        val previous = dao.priceSelection(entry.ownerUid, entry.syncId)
+        val stored = selection.asEntity(entry, previous?.remoteRevision ?: 0L, now)
+        dao.upsertPriceSelection(stored)
+        return queuePriceSelectionMutation(stored)
+    }
+
+    private suspend fun queuePriceSelectionMutation(selection: CollectionPriceSelectionEntity): Boolean =
+        queuePrivateMutation(selection.ownerUid, PRIVATE_SYNC_PRICE_SELECTION, selection.entrySyncId,
+            PRIVATE_SYNC_UPSERT, selection.remoteRevision, selection.updatedAtEpochMillis)
+
     override fun priceHistory(card: CollectionCard): Flow<List<CardPricePoint>> {
         if (com.dominik.cardvault.data.catalog.isQuarantinedCardmarketIdentity(card.sourceCardId ?: card.id, card.externalProductId)) {
             return kotlinx.coroutines.flow.flowOf(emptyList())
@@ -963,7 +1060,7 @@ class RoomCollectionRepository(
                 useHoloPrice = usesReverseHoloPrice,
                 ownerUid = ownerUid,
             ).map { rows ->
-                rows.map { row ->
+                rows.filter { it.valueMinor > 0L }.map { row ->
                     CardPricePoint(
                         timestampEpochMillis = row.effectiveAtEpochMillis,
                         valueEur = row.valueMinor / 100.0,
@@ -1011,7 +1108,7 @@ class RoomCollectionRepository(
 
     /** Normal/Holo use the product trend; Reverse Holo requires its own source observation. */
     private fun RawPriceSnapshotEntity.trendValueFor(finish: String): Long? =
-        if (finish.contains("reverse", ignoreCase = true)) holoTrendValueMinor?.takeUnless { it == 0L } else trendValueMinor
+        (if (finish.contains("reverse", ignoreCase = true)) holoTrendValueMinor else trendValueMinor)?.takeIf { it > 0L }
 
     private fun accentFor(name: String): Long = when {
         name.contains("Charizard", true) -> 0xFFF06445; name.contains("Pikachu", true) -> 0xFFFFC83D

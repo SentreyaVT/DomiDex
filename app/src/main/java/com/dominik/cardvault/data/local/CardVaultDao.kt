@@ -79,6 +79,43 @@ interface CardVaultDao {
     @Query("SELECT * FROM private_binders WHERE id = :binderId AND ownerUid = :ownerUid LIMIT 1")
     suspend fun privateBinder(binderId: String, ownerUid: String = GUEST_OWNER_UID): PrivateBinderEntity?
 
+    /** Only this binder and its referenced cards must be acknowledged before publishing a link. */
+    @Query("""
+        SELECT CASE
+          WHEN NOT EXISTS (
+            SELECT 1 FROM private_binders b WHERE b.ownerUid = :ownerUid AND b.id = :binderId
+              AND b.deletedAtEpochMillis IS NULL
+          ) THEN -1
+          WHEN EXISTS (
+            SELECT 1 FROM private_binders b WHERE b.ownerUid = :ownerUid AND b.id = :binderId
+              AND (b.syncState != 'CLEAN' OR b.remoteRevision <= 0)
+          ) OR EXISTS (
+            SELECT 1 FROM private_binder_sync_outbox o WHERE o.ownerUid = :ownerUid AND (
+              (o.recordType = 'BINDER' AND o.recordId = :binderId) OR
+              (o.recordType = 'PLACEMENT' AND EXISTS (
+                SELECT 1 FROM private_binder_placements p WHERE p.ownerUid = :ownerUid
+                  AND p.binderId = :binderId AND p.id = o.recordId
+              ))
+            )
+          ) OR EXISTS (
+            SELECT 1 FROM private_binder_placements p
+            LEFT JOIN collection_entries e ON e.id = p.collectionEntryId AND e.ownerUid = :ownerUid
+            WHERE p.ownerUid = :ownerUid AND p.binderId = :binderId AND (
+              p.syncState != 'CLEAN' OR p.remoteRevision <= 0 OR
+              (p.deletedAtEpochMillis IS NULL AND (
+                e.id IS NULL OR e.deletedAtEpochMillis IS NOT NULL OR
+                e.syncState != 'CLEAN' OR e.remoteRevision <= 0 OR EXISTS (
+                  SELECT 1 FROM collection_sync_outbox o
+                  WHERE o.ownerUid = :ownerUid AND o.syncId = e.syncId
+                )
+              ))
+            )
+          ) THEN 0
+          ELSE 1
+        END
+    """)
+    fun observePrivateBinderSharingSyncState(ownerUid: String, binderId: String): Flow<Int>
+
     @Insert
     suspend fun insertPrivateBinder(value: PrivateBinderEntity)
 
@@ -142,6 +179,24 @@ interface CardVaultDao {
     @Update
     suspend fun updateCollectionLayout(value: CollectionLayoutEntity)
 
+    @Query("SELECT * FROM collection_price_selections WHERE ownerUid = :ownerUid")
+    fun observePriceSelections(ownerUid: String): Flow<List<CollectionPriceSelectionEntity>>
+
+    @Query("SELECT * FROM collection_price_selections WHERE ownerUid = :ownerUid AND entrySyncId = :entrySyncId LIMIT 1")
+    suspend fun priceSelection(ownerUid: String, entrySyncId: String): CollectionPriceSelectionEntity?
+
+    @Query("SELECT * FROM collection_price_selections WHERE ownerUid = :ownerUid")
+    suspend fun priceSelections(ownerUid: String): List<CollectionPriceSelectionEntity>
+
+    @Upsert
+    suspend fun upsertPriceSelection(value: CollectionPriceSelectionEntity)
+
+    @Query("UPDATE collection_price_selections SET syncState = 'CLEAN', remoteRevision = :revision WHERE ownerUid = :ownerUid AND entrySyncId = :entrySyncId")
+    suspend fun markPriceSelectionSynced(ownerUid: String, entrySyncId: String, revision: Long)
+
+    @Query("UPDATE collection_price_selections SET remoteRevision = :revision WHERE ownerUid = :ownerUid AND entrySyncId = :entrySyncId")
+    suspend fun rebasePendingPriceSelection(ownerUid: String, entrySyncId: String, revision: Long)
+
     @Query("SELECT * FROM collection_layout WHERE ownerUid = '__domidex_guest__' ORDER BY collectionEntryId")
     suspend fun guestCollectionLayouts(): List<CollectionLayoutEntity>
 
@@ -175,6 +230,21 @@ interface CardVaultDao {
 
     @Query("SELECT * FROM private_binder_sync_outbox WHERE ownerUid = :ownerUid ORDER BY createdAtEpochMillis LIMIT :limit")
     suspend fun pendingPrivateBinderSyncOutbox(ownerUid: String, limit: Int = 50): List<PrivateBinderSyncOutboxEntity>
+
+    /** Sharing priority reuses the same outbox, limited to one binder and its placements. */
+    @Query("""
+        SELECT o.* FROM private_binder_sync_outbox o
+        WHERE o.ownerUid = :ownerUid AND (
+          (o.recordType = 'BINDER' AND o.recordId = :binderId) OR
+          (o.recordType = 'PLACEMENT' AND EXISTS (
+            SELECT 1 FROM private_binder_placements p WHERE p.ownerUid = :ownerUid
+              AND p.binderId = :binderId AND p.id = o.recordId
+          ))
+        )
+        ORDER BY CASE WHEN o.recordType = 'BINDER' THEN 0 ELSE 1 END,
+                 o.createdAtEpochMillis, o.entryKey LIMIT :limit
+    """)
+    suspend fun pendingSharingPrivateBinderOutbox(ownerUid: String, binderId: String, limit: Int = 50): List<PrivateBinderSyncOutboxEntity>
 
     @Query("SELECT * FROM private_binder_sync_outbox WHERE entryKey = :entryKey LIMIT 1")
     suspend fun privateBinderSyncOutbox(entryKey: String): PrivateBinderSyncOutboxEntity?
@@ -279,7 +349,9 @@ interface CardVaultDao {
                c.collectorNumber, c.language, c.finish, c.variant, c.imageUrl,
                p.trendValueMinor AS marketValueMinor,
                NULLIF(p.holoTrendValueMinor, 0) AS holoMarketValueMinor,
-               p.currency, c.rarity
+               p.currency, c.rarity, p.averageValueMinor, p.lowValueMinor,
+               p.average1DayValueMinor, p.average7DayValueMinor, p.average30DayValueMinor,
+               p.holoAverageValueMinor, p.holoLowValueMinor, p.effectiveAtEpochMillis AS priceSourceAt
         FROM (
             SELECT c.externalProductId, c.name FROM catalog_cards c
             WHERE c.externalSource = :source AND c.externalProductId IS NOT NULL
@@ -306,7 +378,9 @@ interface CardVaultDao {
                c.collectorNumber, c.language, c.finish, c.variant, c.imageUrl,
                p.trendValueMinor AS marketValueMinor,
                NULLIF(p.holoTrendValueMinor, 0) AS holoMarketValueMinor,
-               p.currency, c.rarity
+               p.currency, c.rarity, p.averageValueMinor, p.lowValueMinor,
+               p.average1DayValueMinor, p.average7DayValueMinor, p.average30DayValueMinor,
+               p.holoAverageValueMinor, p.holoLowValueMinor, p.effectiveAtEpochMillis AS priceSourceAt
         FROM catalog_cards c
         LEFT JOIN raw_price_snapshots p ON p.id = (
             SELECT p2.id FROM raw_price_snapshots p2
@@ -509,6 +583,19 @@ interface CardVaultDao {
 
     @Query("SELECT * FROM collection_sync_outbox WHERE ownerUid = :ownerUid AND state = 'PENDING' ORDER BY createdAtEpochMillis LIMIT :limit")
     suspend fun pendingSyncOutbox(ownerUid: String, limit: Int = 50): List<CollectionSyncOutboxEntity>
+
+    /** Do not push an unrelated collection while preparing this specific binder for sharing. */
+    @Query("""
+        SELECT o.* FROM collection_sync_outbox o
+        WHERE o.ownerUid = :ownerUid AND o.state = 'PENDING' AND EXISTS (
+          SELECT 1 FROM collection_entries e
+          JOIN private_binder_placements p ON p.collectionEntryId = e.id AND p.ownerUid = e.ownerUid
+          WHERE e.ownerUid = :ownerUid AND e.syncId = o.syncId
+            AND p.binderId = :binderId AND p.deletedAtEpochMillis IS NULL
+        )
+        ORDER BY o.createdAtEpochMillis, o.entryKey LIMIT :limit
+    """)
+    suspend fun pendingSharingCollectionOutbox(ownerUid: String, binderId: String, limit: Int = 50): List<CollectionSyncOutboxEntity>
 
     @Query("SELECT * FROM collection_sync_outbox WHERE entryKey = :entryKey LIMIT 1")
     suspend fun syncOutbox(entryKey: String): CollectionSyncOutboxEntity?

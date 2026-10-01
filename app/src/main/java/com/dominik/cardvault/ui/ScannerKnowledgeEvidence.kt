@@ -5,10 +5,16 @@ import com.dominik.cardvault.data.knowledge.ScanKnowledgeEvidence
 import com.dominik.cardvault.data.knowledge.ScanKnowledgeFingerprint
 import com.dominik.cardvault.data.knowledge.ScanKnowledgeRecord
 import com.dominik.cardvault.data.knowledge.ScanKnowledgeStatus
+import com.dominik.cardvault.data.feedback.ScannerReportKnowledgeContext
 import com.dominik.cardvault.model.CatalogSearchResult
 import java.security.MessageDigest
 
 internal const val DOMIDEX_SCANNER_VERSION = "scanner-v2.1"
+
+internal fun scannerReportKnowledgeContext(analysis: CardTextAnalysis): ScannerReportKnowledgeContext? =
+    scanKnowledgeFingerprint(analysis)?.let {
+        ScannerReportKnowledgeContext(it, DOMIDEX_SCANNER_VERSION, SCAN_KNOWLEDGE_VERSION)
+    }
 
 internal fun scanKnowledgeFingerprint(analysis: CardTextAnalysis): String? {
     val cardNumber = analysis.collectorNumber?.takeIf(String::isNotBlank) ?: return null

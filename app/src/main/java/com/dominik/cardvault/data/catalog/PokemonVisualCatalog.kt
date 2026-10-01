@@ -63,7 +63,7 @@ private object CardmarketExpansionRegistry {
 
 /**
  * Exact Cardmarket identities verified against the public expansion-6601
- * product catalogue and the cards' English attack/ability signatures.
+ * product catalogue, English attack/ability signatures, and numbered official pages.
  * These maintained exact bridges never depend on inferred name/product ordering.
  */
 private object CardmarketProductRegistry {
@@ -79,6 +79,102 @@ private object CardmarketProductRegistry {
         put("30th-c-021", 907_956L) // N — one-character title needs an exact bridge
         put("30th-c-022", 907_950L) // Palkia LV.X — avoids the main-set namesake
         put("30th-c-029", 907_945L) // Aquapolis Lugia
+        // Missing upstream product links, reviewed against both complete published
+        // catalogues on 2026-09-22. Exact unique name + attack/ability signatures;
+        // no duplicate-artwork pairs or inferred product ordering. Evidence:
+        // docs/catalog-30th-cardmarket-prices-20260922.md.
+        putAll(mapOf(
+            "30th-001" to 907_607L, "30th-003" to 907_609L,
+            "30th-004" to 907_610L, "30th-005" to 907_611L,
+            "30th-006" to 907_612L, "30th-007" to 907_613L,
+            "30th-008" to 907_614L, "30th-009" to 907_615L,
+            "30th-010" to 907_736L, "30th-012" to 907_618L,
+            "30th-013" to 907_619L, "30th-014" to 907_620L,
+            "30th-016" to 907_622L, "30th-019" to 907_625L,
+            "30th-020" to 907_627L, "30th-022" to 907_629L,
+            "30th-056" to 907_663L, "30th-057" to 907_664L,
+            "30th-058" to 907_665L, "30th-059" to 907_666L,
+            "30th-063" to 907_670L, "30th-067" to 907_674L,
+            "30th-068" to 907_675L, "30th-069" to 907_676L,
+            "30th-070" to 907_677L, "30th-072" to 907_679L,
+            "30th-074" to 907_681L, "30th-076" to 907_683L,
+            "30th-077" to 907_684L, "30th-078" to 907_685L,
+            "30th-079" to 907_686L, "30th-080" to 907_687L,
+            "30th-081" to 907_688L, "30th-082" to 907_689L,
+            "30th-083" to 907_690L, "30th-084" to 907_691L,
+            "30th-086" to 907_693L, "30th-088" to 907_695L,
+            "30th-091" to 907_698L, "30th-092" to 907_699L,
+            "30th-093" to 907_700L, "30th-095" to 907_702L,
+            "30th-096" to 907_703L, "30th-097" to 907_704L,
+            "30th-098" to 907_705L, "30th-099" to 907_706L,
+            "30th-100" to 907_707L, "30th-103" to 907_710L,
+            "30th-104" to 907_711L, "30th-105" to 907_712L,
+            "30th-106" to 907_713L, "30th-107" to 907_714L,
+            "30th-110" to 907_717L, "30th-111" to 907_718L,
+            "30th-114" to 907_721L, "30th-115" to 907_722L,
+            "30th-116" to 907_723L, "30th-119" to 907_726L,
+            "30th-120" to 907_727L, "30th-123" to 907_730L,
+            "30th-124" to 907_731L,
+            "30th-c-001" to 907_940L, "30th-c-004" to 907_958L,
+            "30th-c-006" to 907_947L, "30th-c-007" to 907_943L,
+            "30th-c-008" to 907_963L, "30th-c-009" to 907_960L,
+            "30th-c-012" to 907_965L, "30th-c-013" to 907_962L,
+            "30th-c-015" to 907_942L, "30th-c-016" to 907_957L,
+            "30th-c-017" to 907_961L, "30th-c-024" to 907_944L,
+            "30th-c-026" to 907_966L, "30th-c-027" to 907_967L,
+            "30th-c-028" to 907_964L, "30th-c-030" to 907_968L,
+        ))
+        // The official Cardmarket overview directly pairs each printed collector
+        // label with its product image ID. This resolves duplicate base/SAR/FUR
+        // signatures without inferring product order. RGB colours remain separate
+        // collector identities. Evidence: docs/catalog-30th-sar-prices-20260923.md.
+        putAll(mapOf(
+            "30th-002" to 907_608L, "30th-011" to 907_617L,
+            "30th-015" to 907_621L, "30th-017" to 907_623L,
+            "30th-018" to 907_624L, "30th-021" to 907_628L,
+            "30th-053" to 907_660L, "30th-054" to 907_661L,
+            "30th-055" to 907_662L, "30th-060" to 907_667L,
+            "30th-061" to 907_668L, "30th-062" to 907_669L,
+            "30th-064" to 907_671L, "30th-066" to 907_673L,
+            "30th-071" to 907_678L, "30th-073" to 907_680L,
+            "30th-075" to 907_682L, "30th-085" to 907_692L,
+            "30th-087" to 907_694L, "30th-089" to 907_696L,
+            "30th-090" to 907_697L, "30th-094" to 907_701L,
+            "30th-101" to 907_708L, "30th-102" to 907_709L,
+            "30th-108" to 907_715L, "30th-109" to 907_716L,
+            "30th-112" to 907_719L, "30th-113" to 907_720L,
+            "30th-117" to 907_724L, "30th-118" to 907_725L,
+            "30th-122" to 907_729L, "30th-125" to 907_732L,
+            "30th-126" to 907_733L, "30th-127" to 907_734L,
+            "30th-128" to 907_735L,
+            "30th-129" to 907_737L, "30th-130" to 907_738L,
+            "30th-131" to 907_739L, "30th-132" to 907_740L,
+            "30th-133" to 907_741L, "30th-134" to 907_742L,
+            "30th-135" to 907_743L, "30th-136" to 907_744L,
+            "30th-137" to 907_745L, "30th-138" to 907_746L,
+            "30th-139" to 907_747L, "30th-140" to 907_748L,
+            "30th-141" to 907_749L, "30th-142" to 907_750L,
+            "30th-143" to 908_352L, "30th-144" to 907_751L,
+            "30th-145" to 907_752L, "30th-146" to 907_753L,
+            "30th-147" to 907_754L, "30th-148" to 907_755L,
+            "30th-149" to 907_756L, "30th-150" to 907_757L,
+            "30th-151" to 908_353L, "30th-152" to 908_354L,
+            "30th-153" to 907_758L, "30th-154" to 908_355L,
+            "30th-155" to 907_759L, "30th-156" to 907_760L,
+            "30th-157" to 907_761L, "30th-158" to 907_762L,
+            "30th-rgb-r" to 909_509L, "30th-rgb-g" to 909_510L,
+            "30th-rgb-b" to 909_511L,
+        ))
+        // Remaining Classic identities: collector label and product-image ID were
+        // read from the same official Cardmarket overview element on 2026-09-25.
+        // Historic originals, LEGEND halves and the main set remain distinct.
+        // Evidence: docs/catalog-30th-classic-cardmarket-20260925.md.
+        putAll(mapOf(
+            "30th-c-002" to 907_946L, "30th-c-005" to 907_941L,
+            "30th-c-018" to 907_953L, "30th-c-019" to 907_954L,
+            "30th-c-020" to 907_955L, "30th-c-023" to 907_959L,
+            "30th-c-025" to 907_948L,
+        ))
     }
 
     fun idFor(sourceCardId: String): Long? = bySourceCardId[sourceCardId.lowercase(Locale.ROOT)]
@@ -94,7 +190,9 @@ private fun attachVerifiedCardmarketProduct(
     val productId = verifiedCardmarketProductId(sourceCardId)
     return variants.map { variant ->
         // A regular product bridge is not evidence for a stamp, foil or special edition.
-        val ordinary = variant.variant in setOf("Standard", "Normal", "Holo", "Reverse Holo")
+        // English detail fallback uses lowercase "standard". Preserve its label,
+        // finish and edition; only this eligibility comparison is case-insensitive.
+        val ordinary = variant.variant.trim().lowercase(Locale.ROOT) in setOf("standard", "normal", "holo", "reverse holo")
         val candidate = if (variant.cardmarketProductId == null && ordinary) productId else variant.cardmarketProductId
         variant.copy(cardmarketProductId = candidate.takeUnless { isQuarantinedCardmarketIdentity(sourceCardId, it) })
     }
@@ -288,6 +386,16 @@ class PokemonVisualCatalog internal constructor(
                     }
                 } else emptyList()
                 fillMissingSetLogos(german, english)
+                    .map { set ->
+                        // The upstream set index currently omits the three letter-numbered
+                        // RGB cards and the announced anniversary Black Star promos.
+                        val minimum = when (set.id.lowercase(Locale.ROOT)) {
+                            "30th" -> 161
+                            "mep" -> 105 // 001–088 plus 094–110; do not invent 089–093.
+                            else -> set.total
+                        }
+                        set.copy(total = maxOf(set.total, minimum))
+                    }
                     .sortedWith(compareByDescending(::catalogSetRecencyKey).thenByDescending { it.releaseDate })
             }.also { loaded ->
                 PokemonSetRegistry.registerSourceSets(loaded)
@@ -325,7 +433,9 @@ class PokemonVisualCatalog internal constructor(
                 check(germanCards != null || englishCards != null) { "Set-Katalog momentan nicht erreichbar" }
                 // Preserve German-first identities and the source-backed English naming bridge.
                 PokemonSetRegistry.registerSourceSets((germanCards.orEmpty() + englishCards.orEmpty()).map(PokemonVisualCard::set))
-                val cards = mergeLocalizedSetCards(germanCards.orEmpty(), englishCards.orEmpty())
+                val cards = mergeThirtyYearsCatalogSupplement(
+                    set, mergeLocalizedSetCards(germanCards.orEmpty(), englishCards.orEmpty()),
+                )
                     .sortedWith(compareBy({ (it.sourceLocalId ?: it.number).toIntOrNull() ?: Int.MAX_VALUE }, { it.sourceLocalId ?: it.number }))
                 CatalogSetCards(cards, cards.groupBy { collectorIdentity(it.sourceLocalId ?: it.number) })
             }
@@ -336,6 +446,9 @@ class PokemonVisualCatalog internal constructor(
      * source-declared Normal/Holo/Reverse printings for master-set slots.
      */
     suspend fun withDeclaredPrintVariants(card: PokemonVisualCard): PokemonVisualCard {
+        // Maintained supplemental identities have no upstream detail endpoint yet.
+        // Do not make every binder card wait for a pair of known 404 responses.
+        supplementalThirtyYearsCardDetail(card)?.let { return it }
         val detail = metadataCache.details.getOrLoad(card.id) {
             withContext(Dispatchers.IO) {
                 val encodedId = encodeCatalogPathSegment(card.id)
@@ -396,8 +509,10 @@ class PokemonVisualCatalog internal constructor(
         // the denominator, the same numerator can represent two different
         // physical cards. Reject that incomplete identity instead of silently
         // preferring the main set; an explicit source-set selection is exact.
-        if (denominator == null && resolvedSets.size > 1) return@withContext emptyList()
-        val matchingSets = if (denominator == null) resolvedSets else resolvedSets.filter { set ->
+        val rgbCollector = Regex("(?i)^\\s*[RGB]\\s*/\\s*RGB\\s*$").matches(collectorNumber)
+        if (denominator == null && resolvedSets.size > 1 && !rgbCollector) return@withContext emptyList()
+        val matchingSets = if (rgbCollector) resolvedSets.filter { it.id.equals("30th", true) }
+        else if (denominator == null) resolvedSets else resolvedSets.filter { set ->
             set.printedTotal == denominator ||
                 (set.id.equals("30th-c", ignoreCase = true) && classic30thLocalIdForPrintedCollector(collectorNumber) != null)
         }
@@ -408,6 +523,7 @@ class PokemonVisualCatalog internal constructor(
         matchingSets.flatMap { matchingSet ->
             val sourceCollectorKey = collectorIdentityForSourceLookup(collectorNumber, matchingSet.id)
             catalogOrDefault(emptyList()) { setCards(matchingSet).byCollectorNumber[sourceCollectorKey].orEmpty() }
+                .filter { !it.number.endsWith("/RGB", ignoreCase = true) || rgbCollector }
                 .map { candidate -> catalogOrDefault(candidate) { withDeclaredPrintVariants(candidate) } }
         }.distinctBy(PokemonVisualCard::id)
     }
@@ -639,7 +755,9 @@ class PokemonVisualCatalog internal constructor(
     private fun collectorIdentity(value: String): String {
         val primary = value.substringBefore('/').uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
         val prefix = primary.takeWhile(Char::isLetter)
-        val digits = primary.dropWhile(Char::isLetter).trimStart('0').ifBlank { "0" }
+        // Pure letter collectors such as R/RGB must index as R, not invented R0.
+        val digits = primary.dropWhile(Char::isLetter).trimStart('0')
+            .ifBlank { if (primary.any(Char::isDigit)) "0" else "" }
         return prefix + digits
     }
 }

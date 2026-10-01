@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [CatalogCardEntity::class, BinderEntity::class, CollectionEntryEntity::class, CollectionSyncOutboxEntity::class, PrivateBinderEntity::class, PrivateBinderPlacementEntity::class, CollectionLayoutEntity::class, PrivateBinderSyncOutboxEntity::class, RawPriceSnapshotEntity::class, GradedMarketRecordEntity::class, GradingAnalysisEntity::class, AppMetadataEntity::class, CatalogSyncStateEntity::class],
-    version = 12,
+    entities = [CatalogCardEntity::class, BinderEntity::class, CollectionEntryEntity::class, CollectionSyncOutboxEntity::class, PrivateBinderEntity::class, PrivateBinderPlacementEntity::class, CollectionLayoutEntity::class, CollectionPriceSelectionEntity::class, PrivateBinderSyncOutboxEntity::class, RawPriceSnapshotEntity::class, GradedMarketRecordEntity::class, GradingAnalysisEntity::class, AppMetadataEntity::class, CatalogSyncStateEntity::class],
+    version = 13,
     exportSchema = true,
 )
 abstract class CardVaultDatabase : RoomDatabase() {
@@ -21,8 +21,23 @@ abstract class CardVaultDatabase : RoomDatabase() {
         fun get(context: Context): CardVaultDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, CardVaultDatabase::class.java, "cardvault.db")
                 // Every future schema version must provide explicit migrations. Never silently erase collections.
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
                 .build().also { instance = it }
+        }
+
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE IF NOT EXISTS collection_price_selections (
+                    collectionEntryId INTEGER NOT NULL PRIMARY KEY, ownerUid TEXT NOT NULL,
+                    entrySyncId TEXT NOT NULL, cleared INTEGER NOT NULL, sourceSetId TEXT,
+                    sourceCardId TEXT, collectorNumber TEXT, finish TEXT, variant TEXT, language TEXT,
+                    productId INTEGER, metric TEXT, amountMinor INTEGER, currency TEXT,
+                    sourceAt INTEGER, selectedAt INTEGER, updatedAtEpochMillis INTEGER NOT NULL,
+                    syncState TEXT NOT NULL DEFAULT 'LOCAL_ONLY', remoteRevision INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(collectionEntryId) REFERENCES collection_entries(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                )""")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_collection_price_selections_ownerUid_entrySyncId ON collection_price_selections(ownerUid,entrySyncId)")
+            }
         }
 
         val MIGRATION_1_2 = object : Migration(1, 2) {

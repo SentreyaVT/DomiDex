@@ -1,0 +1,99 @@
+import groovy.json.JsonOutput
+import java.security.MessageDigest
+import java.time.Instant
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
+// Opt-in, read-only build inspection. No app configuration, signing settings or
+// dependencies are changed. Invoke explicitly after bundleRelease when archiving.
+gradle.projectsEvaluated {
+    def app = gradle.rootProject.findProject(':app')
+    if (app == null || !app.plugins.hasPlugin('com.android.application')) {
+        throw new GradleException('Release metadata requires the Android :app module.')
+    }
+    app.tasks.register('exportReleaseArchiveMetadata') {
+        group = 'verification'
+        description = 'Export allowlisted release/toolchain metadata without signing secrets.'
+        mustRunAfter(app.tasks.matching { it.name == 'bundleRelease' })
+        // Deliberately not incremental: fresh hashes bind metadata to these exact outputs.
+        doLast {
+            def sha256 = { File file ->
+                def digest = MessageDigest.getInstance('SHA-256')
+                file.withInputStream { stream ->
+                    byte[] buffer = new byte[65536]
+                    int length
+                    while ((length = stream.read(buffer)) != -1) digest.update(buffer, 0, length)
+                }
+                digest.digest().encodeHex().toString()
+            }
+            def fileEvidence = { File file ->
+                file.isFile() ? [path: file.canonicalPath, sha256: sha256(file)] : null
+            }
+            def android = app.extensions.getByName('android')
+            def components = app.extensions.getByName('androidComponents')
+            def release = android.buildTypes.getByName('release')
+            def configuration = app.configurations.getByName('releaseRuntimeClasspath')
+            File sdkDirectory = components.sdkComponents.sdkDirectory.get().asFile
+            // The ndkVersion DSL can contain an AGP default even when no NDK is
+            // installed. Inspect package metadata; never request/install a toolchain.
+            def installedNdks = (new File(sdkDirectory, 'ndk').listFiles() ?: []).findAll { it.isDirectory() }.collect { directory ->
+                File propertiesFile = new File(directory, 'source.properties')
+                def properties = new Properties()
+                if (propertiesFile.isFile()) propertiesFile.withInputStream { properties.load(it) }
+                [version: properties.getProperty('Pkg.Revision'), path: directory.canonicalPath]
+            }.sort { it.path }
+            // ResolvedArtifact is a public Gradle API and returns the original
+            // published AAR/JAR, not an Android classes-JAR/native transform.
+            def artifacts = configuration.resolvedConfiguration.resolvedArtifacts.collect { artifact ->
+                def id = artifact.id.componentIdentifier
+                def coordinate = id instanceof ModuleComponentIdentifier
+                    ? "${id.group}:${id.module}:${id.version}".toString() : id.displayName
+                [coordinate: coordinate, path: artifact.file.canonicalPath, sha256: sha256(artifact.file)]
+            }.sort { a, b -> (a.coordinate <=> b.coordinate) ?: (a.path <=> b.path) }
+            def dependencies = configuration.incoming.resolutionResult.allComponents.collect { component ->
+                def id = component.id
+                id instanceof ModuleComponentIdentifier ? "${id.group}:${id.module}:${id.version}".toString() : null
+            }.findAll { it != null }.unique().sort()
+            def metadata = [
+                schema_version: 1,
+                captured_at_utc: Instant.now().toString(),
+                scope: 'current_checkout_and_existing_outputs',
+                tools: [
+                    gradle: gradle.gradleVersion,
+                    agp: components.pluginVersion.toString().replaceFirst('^Android Gradle Plugin version ', ''),
+                    java_version: System.getProperty('java.version'),
+                    java_vendor: System.getProperty('java.vendor'),
+                    java_home: System.getProperty('java.home'),
+                    installed_ndks: installedNdks
+                ],
+                release: [
+                    application_id: android.defaultConfig.applicationId,
+                    version_code: android.defaultConfig.versionCode,
+                    version_name: android.defaultConfig.versionName,
+                    minify_enabled: release.minifyEnabled,
+                    shrink_resources: release.shrinkResources,
+                    debuggable: release.debuggable,
+                    debug_symbol_level: release.ndk.debugSymbolLevel,
+                    debug_symbol_level_default: components.pluginVersion.toString().endsWith('9.3.1')
+                        ? (release.debuggable ? 'NONE' : 'SYMBOL_TABLE') : 'UNVERIFIED: inspect this AGP version',
+                    abi_filters: ((android.defaultConfig.ndk.abiFilters ?: []) + (release.ndk.abiFilters ?: [])).unique().sort(),
+                    ndk_version: android.ndkVersion,
+                    ndk_path: android.ndkPath,
+                    ndk_version_note: 'Effective DSL value, possibly an AGP default; not evidence that this NDK was installed or used to build third-party native files.',
+                    compile_sdk: android.compileSdk,
+                    min_sdk: android.defaultConfig.minSdk,
+                    target_sdk: android.defaultConfig.targetSdk
+                ],
+                artifacts: artifacts,
+                dependency_versions: dependencies,
+                outputs: [
+                    aab: fileEvidence(app.layout.buildDirectory.file('outputs/bundle/release/app-release.aab').get().asFile),
+                    mapping: fileEvidence(app.layout.buildDirectory.file('outputs/mapping/release/mapping.txt').get().asFile)
+                ]
+            ]
+            File output = app.layout.buildDirectory.file('outputs/release-archive/metadata.json').get().asFile
+            output.parentFile.mkdirs()
+            output.setText(JsonOutput.prettyPrint(JsonOutput.toJson(metadata)) + '\n', 'UTF-8')
+            logger.lifecycle("Release archive metadata: ${output}")
+        }
+    }
+}

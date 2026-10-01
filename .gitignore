@@ -45,3 +45,5 @@ secrets.properties
 # Existing local promotional captures and tool-help output are not application source.
 /marketing/
 /vlc-help.txt
+# Local streaming/social-media exports; preserve files without publishing them.
+/output/

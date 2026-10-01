@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import com.dominik.cardvault.data.sharing.BinderShareOptions
 import com.dominik.cardvault.data.sharing.BinderShareSummary
 import com.dominik.cardvault.data.sharing.BinderSharingException
+import com.dominik.cardvault.data.sharing.BinderSharingSyncException
 import com.dominik.cardvault.data.sharing.BinderSharingGateway
 import com.dominik.cardvault.data.sharing.CreatedBinderShare
 import com.dominik.cardvault.data.sharing.FirebaseBinderSharingGateway
@@ -37,15 +38,16 @@ import kotlinx.coroutines.launch
 internal fun PrivateBinderSharingAction(binder: PrivateBinderSummary, enabled: Boolean) {
     val context = LocalContext.current
     val auth = remember { FirebaseAuth.getInstance() }
-    val gateway = remember { FirebaseBinderSharingGateway() }
+    val gateway = remember(context.applicationContext) { FirebaseBinderSharingGateway(context.applicationContext) }
     var currentUid by remember { mutableStateOf(canonicalCollectionOwnerUid(auth.currentUser)) }
     var opened by remember(binder.id, binder.ownerUid) { mutableStateOf(false) }
+    var managing by remember(binder.id, binder.ownerUid) { mutableStateOf(false) }
     DisposableEffect(auth) {
         val listener = FirebaseAuth.AuthStateListener { currentUid = canonicalCollectionOwnerUid(it.currentUser) }
         auth.addAuthStateListener(listener)
         onDispose { auth.removeAuthStateListener(listener) }
     }
-    TextButton(onClick = { opened = true }, enabled = enabled) { Text("Teilen") }
+    TextButton(onClick = { managing = false; opened = true }, enabled = enabled) { Text("Teilen") }
     if (!opened) return
     val owner = binder.ownerUid
     if (owner == null || owner != currentUid) {
@@ -57,21 +59,78 @@ internal fun PrivateBinderSharingAction(binder: PrivateBinderSummary, enabled: B
         )
         return
     }
-    PrivateBinderShareDialog(
+    val copyLink: (String) -> Unit = { url ->
+        check(canonicalCollectionOwnerUid(auth.currentUser) == owner)
+        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+            .setPrimaryClip(ClipData.newPlainText("DomiDex Binderlink", url))
+    }
+    val shareLink: (String) -> Unit = { url ->
+        check(canonicalCollectionOwnerUid(auth.currentUser) == owner)
+        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, url)
+        }, "Binderlink teilen"))
+    }
+    if (managing) PrivateBinderShareDialog(
         binderId = binder.id, binderName = binder.name, expectedUid = owner, gateway = gateway,
-        onDismiss = { opened = false },
-        onCopyLink = { url ->
-            check(canonicalCollectionOwnerUid(auth.currentUser) == owner)
-            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                .setPrimaryClip(ClipData.newPlainText("DomiDex Binderlink", url))
+        onDismiss = { opened = false }, onCopyLink = copyLink, onShareLink = shareLink,
+    ) else PrivateBinderQuickShareDialog(
+        binderId = binder.id, binderName = binder.name, expectedUid = owner, gateway = gateway,
+        onDismiss = { opened = false }, onManage = { managing = true },
+        onCopyLink = copyLink, onShareLink = shareLink,
+    )
+}
+
+/** Shown only after an explicit Teilen click; opening a binder never publishes it. */
+@Composable
+internal fun PrivateBinderQuickShareDialog(
+    binderId: String, binderName: String, expectedUid: String, gateway: BinderSharingGateway,
+    onDismiss: () -> Unit, onManage: () -> Unit,
+    onCopyLink: (String) -> Unit, onShareLink: (String) -> Unit,
+) = key(binderId, expectedUid, gateway) {
+    // Memory-only, single attempt for this explicit click. Never retry an uncertain POST.
+    var created by remember { mutableStateOf<CreatedBinderShare?>(null) }
+    var busy by remember { mutableStateOf(true) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        try {
+            created = gateway.create(expectedUid, binderId, BinderShareOptions(), null, confirmed = true)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            notice = safeSharingMessage(error, "Der Link konnte nicht bestätigt werden. Prüfe die Freigaben, bevor du erneut teilst.")
+        } finally { busy = false }
+    }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Binder teilen") },
+        text = {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(binderName, fontWeight = FontWeight.Bold)
+                Text("Dein Link zeigt Cover, Karten und Seiten – nur zum Ansehen. Ohne Preise, Anzeigename, private Fotos oder Notizen.")
+                if (busy) {
+                    CircularProgressIndicator(Modifier.size(24.dp))
+                    Text("Dein Binder und seine Karten werden bevorzugt synchronisiert; danach wird dein Link erstellt …")
+                }
+                notice?.let { Text(it, Modifier.testTag("quick-sharing-notice")) }
+                created?.let { share ->
+                    OutlinedTextField(share.url, {}, readOnly = true, label = { Text("Binderlink") }, modifier = Modifier.fillMaxWidth())
+                    Text("Öffnet den Binder in DomiDex oder im Browser. Kopiere oder teile den Link jetzt; nach dem Schließen wird er hier nicht gespeichert.")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            try { onCopyLink(share.url); notice = "Binderlink kopiert." }
+                            catch (_: Exception) { notice = "Der Link konnte nicht kopiert werden. Bitte Konto prüfen." }
+                        }) { Text("Kopieren") }
+                        Button(onClick = {
+                            try { onShareLink(share.url) }
+                            catch (_: Exception) { notice = "Teilen konnte nicht geöffnet werden. Du kannst den Link kopieren." }
+                        }) { Text("Link teilen") }
+                    }
+                }
+                TextButton(onClick = onManage, enabled = !busy) { Text("Freigaben verwalten") }
+            }
         },
-        onShareLink = { url ->
-            check(canonicalCollectionOwnerUid(auth.currentUser) == owner)
-            context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, url)
-            }, "Binderlink teilen"))
-        },
+        confirmButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Schließen") } },
     )
 }
 
@@ -116,7 +175,8 @@ private fun PrivateBinderShareContent(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            shares = null
+            // A pending sync must not hide existing links or prevent their revocation.
+            (error as? BinderSharingSyncException)?.activeShares?.let { shares = it }
             mustRefresh = true
             notice = safeSharingMessage(error, "Freigaben konnten nicht geladen werden. Bitte erneut versuchen.")
         } finally { loading = false }
@@ -133,7 +193,8 @@ private fun PrivateBinderShareContent(
                 Text("Freigaben zeigen den synchronisierten Stand. Ohne deine Bestätigung bleibt der Binder privat.")
                 if (loading) {
                     CircularProgressIndicator(Modifier.size(24.dp))
-                    Text("Freigaben werden geprüft …")
+                    Text("Freigaben werden geprüft. Ein neuer Binder wird bei Bedarf zuerst synchronisiert …")
+                    Text("Dafür ist eine Internetverbindung nötig. Dies kann kurz dauern.")
                 }
                 notice?.let { Text(it, modifier = Modifier.testTag("sharing-notice")) }
                 OutlinedButton(onClick = {
@@ -165,6 +226,7 @@ private fun PrivateBinderShareContent(
                             notice = null
                             scope.launch {
                                 try {
+                                    notice = "Der synchronisierte Stand wird geprüft. Der Link wird erst danach erstellt …"
                                     val result = gateway.create(expectedUid, binderId, options, displayName.trim().takeIf { options.showDisplayName }, confirmed)
                                     newShare = result
                                     shares = shares.orEmpty() + result.share

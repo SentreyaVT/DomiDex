@@ -23,7 +23,18 @@ data class CollectionCard(
     /** Stable TCGdex identity. Null only for cards that did not originate in that catalogue. */
     val sourceSetId: String? = null,
     val sourceCardId: String? = null,
-)
+    val priceSelection: CardPriceSelection? = null,
+) {
+    val trendValueEur: Double? get() = currentValueEur.takeIf {
+        priceUpdatedAtEpochMillis != null && it.isFinite() && it > 0.0 &&
+            !com.dominik.cardvault.data.catalog.isQuarantinedCardmarketIdentity(sourceCardId ?: id, externalProductId)
+    }
+    val activePriceSelection get() = priceSelection?.takeIf { it.matches(this) && trendValueEur == null }
+    val effectiveValueEur: Double? get() = trendValueEur ?: activePriceSelection?.valueEur
+    val usesPriceSelection get() = activePriceSelection != null
+    val valuationLabel get() = if (trendValueEur != null) "Cardmarket-Trendpreis"
+        else activePriceSelection?.let { "Gewählter Vergleichswert · ${it.metric.label}" } ?: "Preis nicht verfügbar"
+}
 
 data class CatalogSearchResult(
     val productId: Long, val name: String, val expansionId: String,
@@ -45,6 +56,9 @@ data class CatalogSearchResult(
     /** Stable visual-catalog identity; it must survive scanner, Room and Firebase. */
     val sourceSetId: String? = null,
     val sourceCardId: String? = null,
+    val priceAlternatives: List<CardPriceAlternative> = emptyList(),
+    /** Transient explicit UI confirmation, written atomically when adding the owned card. */
+    val confirmedPriceSelection: CardPriceSelection? = null,
 )
 
 /** Metadata cache for a German master-set slot; it never represents possession. */
@@ -72,7 +86,7 @@ data class CardPricePoint(
     val currency: String,
     val source: String,
 )
-data class BinderSummary(val id: String, val name: String, val heroAsset: String?, val uniqueCards: Int, val ownedCards: Int, val marketValueEur: Double, val lastPriceUpdatedAtEpochMillis: Long?)
+data class BinderSummary(val id: String, val name: String, val heroAsset: String?, val uniqueCards: Int, val ownedCards: Int, val marketValueEur: Double, val lastPriceUpdatedAtEpochMillis: Long?, val alternativePricedCards: Int = 0, val trendPricedCards: Int = 0)
 data class PrivateBinderSummary(
     val id: String,
     val name: String,
@@ -88,6 +102,8 @@ data class PrivateBinderSummary(
     val lastOpenedAtEpochMillis: Long?,
     /** Owner of this exact summary emission; never use a later auth snapshot for sharing. */
     val ownerUid: String? = null,
+    val alternativePricedCards: Int = 0,
+    val trendPricedCards: Int = 0,
 )
 
 data class PrivateBinderCard(
@@ -126,10 +142,12 @@ enum class BinderSortOrder {
 enum class BinderFilter { ALL, COMPLETE, INCOMPLETE, SET, PRIVATE }
 
 data class PortfolioSummary(val cards: List<CollectionCard>, val history: List<PortfolioPoint>) {
-    val totalValue get() = cards.sumOf { it.currentValueEur * it.quantity }
+    val totalValue get() = cards.sumOf { (it.effectiveValueEur ?: 0.0) * it.quantity }
     val totalCards get() = cards.sumOf { it.quantity }
     /** Unknown values are never treated as a zero-Euro market price. */
-    val pricedCards get() = cards.filter { it.priceUpdatedAtEpochMillis != null }.sumOf { it.quantity }
+    val trendPricedCards get() = cards.filter { it.trendValueEur != null }.sumOf { it.quantity }
+    val alternativePricedCards get() = cards.filter { it.usesPriceSelection }.sumOf { it.quantity }
+    val pricedCards get() = trendPricedCards + alternativePricedCards
     val unpricedCards get() = totalCards - pricedCards
     val hasPricedCards get() = pricedCards > 0
     val changePercent get() = if (history.size > 1 && history.first().value != 0.0) ((history.last().value - history.first().value) / history.first().value) * 100 else 0.0
@@ -142,6 +160,7 @@ data class ManualCardInput(val name: String, val setName: String, val collectorN
     /** Stable source identity. Both values are present together or both are null. */
     val sourceSetId: String? = null,
     val sourceCardId: String? = null,
+    val priceSelection: CardPriceSelection? = null,
 )
 data class CollectionEntryUpdate(val quantity: Int, val condition: String, val notes: String, val acquisitionPriceEur: Double?, val acquisitionDateEpochDay: Long?, val finish: String, val variant: String, val effectOverride: String?)
 enum class AddCardOutcome { CREATED, QUANTITY_INCREMENTED }
@@ -223,6 +242,8 @@ interface CollectionRepository {
     /** Exact source-declared Cardmarket ids, independent of names or inferred expansions. */
     suspend fun catalogProducts(productIds: List<Long>): List<CatalogSearchResult> = emptyList()
     suspend fun linkCatalogProduct(entryId: Long, productId: Long?)
+    suspend fun setPriceSelection(entryId: Long, selection: CardPriceSelection) { error("Preiswahl wird nicht unterstützt.") }
+    suspend fun clearPriceSelection(entryId: Long) { error("Preiswahl wird nicht unterstützt.") }
     /** Read-only Cardmarket snapshots for this exact linked product/finish. */
     fun priceHistory(card: CollectionCard): Flow<List<CardPricePoint>>
 }

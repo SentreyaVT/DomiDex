@@ -4,14 +4,11 @@ import android.app.ActivityManager
 import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,6 +42,8 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -216,69 +215,82 @@ internal fun PrivateBinderHoloSelectorDialog(
         title = { Text("Holo-Effekt wählen") },
         text = {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val compactHeight = maxHeight < 560.dp
+                val fontScale = LocalDensity.current.fontScale
+                val bodyHeight = minOf(maxHeight, 620.dp, LocalConfiguration.current.screenHeightDp.dp * .65f)
+                val compactHeight = bodyHeight < 480.dp || fontScale > 1.2f
+                val gridColumns = if (fontScale >= 1.5f || maxWidth < 240.dp) 1 else 2
+                val previewHeight = if (compactHeight) (bodyHeight * .32f).coerceIn(100.dp, 144.dp)
+                    else (bodyHeight * .36f).coerceIn(160.dp, 210.dp)
+                val previewWidth = previewHeight * (63f / 88f)
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .heightIn(max = if (compactHeight) 500.dp else 620.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .height(bodyHeight),
                     verticalArrangement = Arrangement.spacedBy(if (compactHeight) 6.dp else 10.dp),
                 ) {
-                Box(
-                    Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .width(if (compactHeight) 122.dp else 170.dp)
-                        .aspectRatio(63f / 88f)
-                        .privateBinderTouchTilt(
-                            state = tiltState,
-                            enabled = animationsEnabled,
-                            maxTiltDegrees = largePreferences.maxTiltDegrees,
-                            idleMotionEnabled = false,
-                        )
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(VaultNightRaised)
-                        .semantics { contentDescription = "Interaktive Holo-Vorschau" },
-                ) {
-                    if (!card.imageUrl.isNullOrBlank()) {
-                        AsyncImage(card.imageUrl, card.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    // Only the grid below scrolls. A real, separately laid-out header keeps
+                    // preview gestures independent from list scrolling and never overlays it.
+                    if (compactHeight) {
+                        Row(
+                            Modifier.fillMaxWidth().height(previewHeight),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            PrivateBinderHoloSelectorPreview(card, selected.id, largePreferences, tiltState, animationsEnabled, Modifier.width(previewWidth))
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(selected.displayName, color = VaultText, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                if (fontScale < 1.8f) {
+                                    Text(
+                                        if (animationsEnabled) "Karte berühren – das Licht folgt deiner Bewegung."
+                                        else "Ruhige Vorschau · Bewegung deaktiviert.",
+                                        color = VaultTextMuted, fontSize = 10.sp, lineHeight = 13.sp, maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
                     } else {
-                        Box(Modifier.fillMaxSize().background(MewPlumDeep), contentAlignment = Alignment.Center) {
-                            Text(card.name.take(1), color = VaultText, fontSize = 46.sp, fontWeight = FontWeight.Black)
+                        PrivateBinderHoloSelectorPreview(card, selected.id, largePreferences, tiltState, animationsEnabled, Modifier.align(Alignment.CenterHorizontally).width(previewWidth))
+                        Text(
+                            if (animationsEnabled) "Karte berühren – das Licht folgt deiner Bewegung."
+                            else "Ruhige Vorschau · Kartenbewegung ist deaktiviert.",
+                            color = VaultTextMuted, fontSize = 10.sp, lineHeight = 13.sp,
+                            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "${selected.displayName} · ${selected.description}",
+                            color = VaultText, fontSize = 10.sp, lineHeight = 14.sp,
+                            fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        PrivateBinderHoloIntensityPreset.entries.forEach { preset ->
+                            FilterChip(
+                                selected = intensityPreset == preset,
+                                onClick = { intensityPreset = preset },
+                                enabled = !saving && selected.id != PrivateBinderVisualEngine.NORMAL_HOLO_ID,
+                                label = { Text(preset.label, fontSize = 9.sp) },
+                                modifier = Modifier.weight(1f),
+                            )
                         }
                     }
-                    PrivateBinderHoloLayer(selected.id, Modifier.fillMaxSize(), largePreferences, tiltState)
-                }
-                Text("Mit dem Finger sanft über die Karte bewegen.", color = VaultTextMuted, fontSize = 9.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
-                Text(
-                    "${selected.displayName} · ${selected.description}",
-                    color = VaultText,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    PrivateBinderHoloIntensityPreset.entries.forEach { preset ->
-                        FilterChip(
-                            selected = intensityPreset == preset,
-                            onClick = { intensityPreset = preset },
-                            enabled = !saving && selected.id != PrivateBinderVisualEngine.NORMAL_HOLO_ID,
-                            label = { Text(preset.label, fontSize = 9.sp) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    PrivateBinderVisualEngine.holoEffects.chunked(2).forEach { effectRow ->
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                            effectRow.forEach { effect ->
+                    error?.let { Text(it, color = VaultError, fontSize = 10.sp) }
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(gridColumns),
+                        modifier = Modifier.fillMaxWidth().weight(1f)
+                            .semantics { contentDescription = "Holo-Effekte" },
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        items(PrivateBinderVisualEngine.holoEffects, key = { it.id }) { effect ->
                                 val chosen = effect.id == selectedId
                                 OutlinedCard(
                                     onClick = { if (!saving) selectedId = effect.id },
                                     colors = CardDefaults.outlinedCardColors(containerColor = VaultNightRaised),
-                                    border = BorderStroke(1.dp, if (chosen) MewRose else VaultOutline),
+                                    border = BorderStroke(if (chosen) 2.dp else 1.dp, if (chosen) MewRose else VaultOutline),
                                     modifier = Modifier
-                                        .weight(1f)
+                                        .fillMaxWidth()
                                         .semantics {
                                             this.selected = chosen
                                             contentDescription = "Holo ${effect.displayName}"
@@ -305,7 +317,7 @@ internal fun PrivateBinderHoloSelectorDialog(
                                                     effect.id,
                                                     Modifier.fillMaxSize(),
                                                     PrivateBinderVisualPreferences(
-                                                        intensity = if (effect.pattern == HoloPattern.NONE) 0f else .72f,
+                                                        intensity = if (effect.pattern == HoloPattern.NONE) 0f else intensityPreset.storedValue,
                                                         quality = PrivateBinderVisualQuality.LOW,
                                                         reduceMotion = true,
                                                     ),
@@ -316,13 +328,9 @@ internal fun PrivateBinderHoloSelectorDialog(
                                         Text(effect.description, color = VaultTextMuted, fontSize = 7.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                     }
                                 }
-                            }
-                            if (effectRow.size == 1) Spacer(Modifier.weight(1f))
                         }
                     }
                 }
-                error?.let { Text(it, color = VaultError, fontSize = 10.sp) }
-            }
             }
         },
         confirmButton = {
@@ -341,6 +349,33 @@ internal fun PrivateBinderHoloSelectorDialog(
         },
         dismissButton = { TextButton(enabled = !saving, onClick = onDismiss) { Text("Abbrechen") } },
     )
+}
+
+@Composable
+private fun PrivateBinderHoloSelectorPreview(
+    card: CollectionCard,
+    effectId: String,
+    preferences: PrivateBinderVisualPreferences,
+    tiltState: PrivateBinderTiltState,
+    animationsEnabled: Boolean,
+    modifier: Modifier,
+) {
+    Box(
+        modifier.aspectRatio(63f / 88f)
+            .privateBinderTouchTilt(tiltState, enabled = animationsEnabled, maxTiltDegrees = preferences.maxTiltDegrees, idleMotionEnabled = false)
+            .clip(RoundedCornerShape(12.dp))
+            .background(VaultNightRaised)
+            .semantics { contentDescription = "Interaktive Holo-Vorschau" },
+    ) {
+        if (!card.imageUrl.isNullOrBlank()) {
+            AsyncImage(card.imageUrl, card.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        } else {
+            Box(Modifier.fillMaxSize().background(MewPlumDeep), contentAlignment = Alignment.Center) {
+                Text(card.name.take(1), color = VaultText, fontSize = 36.sp, fontWeight = FontWeight.Black)
+            }
+        }
+        PrivateBinderHoloLayer(effectId, Modifier.fillMaxSize(), preferences, tiltState)
+    }
 }
 
 @Composable
@@ -389,9 +424,9 @@ internal fun PrivateBinderStaticHoloLayer(
         effectId = effectId,
         modifier = modifier,
         preferences = PrivateBinderVisualPreferences(
-            // Grid slots should remain calm and readable. The stored intensity is
-            // preserved; only this compact presentation is deliberately softened.
-            intensity = (intensity.coerceIn(0f, 1f) * .65f).coerceAtMost(.60f),
+            // Honor the selected strength in the binder too. The lower primitive budget
+            // already keeps compact cards calm; attenuating again hides their shimmer.
+            intensity = intensity.coerceIn(0f, 1f),
             quality = PrivateBinderVisualQuality.LOW,
             reduceMotion = true,
         ),

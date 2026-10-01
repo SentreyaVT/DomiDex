@@ -5,6 +5,20 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class PrivateBinderSyncPolicyTest {
+    @Test fun completedParentContinuesImmediatelyButOfflineOrConflictedParentKeepsBackoff() {
+        // The sidecar itself is still queued after its parent was acknowledged during the pull.
+        assertEquals(PrivateSyncContinuation.APPEND, privateSyncContinuation(
+            parentDependencyPending = false, hasMoreRemoteDocuments = false, hasPendingMutations = true))
+        assertEquals(PrivateSyncContinuation.RETRY, privateSyncContinuation(
+            parentDependencyPending = true, hasMoreRemoteDocuments = false, hasPendingMutations = true))
+        assertEquals(PrivateSyncContinuation.RETRY, privateSyncContinuation(
+            parentDependencyPending = true, hasMoreRemoteDocuments = true, hasPendingMutations = true))
+        assertEquals(PrivateSyncContinuation.APPEND, privateSyncContinuation(
+            parentDependencyPending = false, hasMoreRemoteDocuments = true, hasPendingMutations = false))
+        assertEquals(PrivateSyncContinuation.COMPLETE, privateSyncContinuation(
+            parentDependencyPending = false, hasMoreRemoteDocuments = false, hasPendingMutations = false))
+    }
+
     @Test fun exactBaseRevisionAppliesButStaleOfflineEditCannotOverwriteRemote() {
         assertEquals(
             PrivatePushAction.APPLY,

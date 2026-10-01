@@ -1,56 +1,108 @@
-# Firebase security and collection sync (not deployed)
+# DomiDex – Firebase-Sicherheitsgrenzen und Synchronisation
 
-The Android app uses the existing Firebase Authentication session for private image contributions and a UID-scoped collection replica. Room remains the local/offline source read by the UI. The rules remain default-deny and have not been deployed by Codex.
+Prüfstand: 1. Oktober 2026. Diese Bestandsaufnahme beschreibt vorhandenen lokalen Code. Die frühere pauschale Kennzeichnung „nicht deployed“ ist überholt: Firebase-Funktionen werden von DomiDex verwendet. Welche konkrete Regel-/Backend-Version live aktiv ist, muss jedoch unabhängig vom lokalen Git-Zustand belegt werden.
 
-## Paths
+Der Dokumentationslauf verändert keine Regeln, Cloud-Daten, Konten, IAM-Rechte, Deployments oder App-Builds.
 
-- `users/{uid}/...`: private JPEG, PNG or WebP files; only the matching Firebase UID may read/write/delete.
-- `catalog-contributions/{uid}/{sha256}/card.{ext}`: private, create-once intake. The matching UID can read or withdraw it; it is never an official/public catalogue image automatically.
-- `community-submissions/{uid}/{submissionId}/front.jpg`: the existing Firestore-metadata-backed contract remains intact.
-- Firestore `users/{uid}/collectionEntries/{syncId}`: private collection snapshots. Only the matching UID may read/write; physical deletes are denied and use tombstones.
+## Komponenten und Autorität
 
-## Collection data safety
+Android verwendet Firebase Authentication, Firestore und Storage. Room liefert die lokale/offline Datenbasis der Oberfläche. Die Funktionen unter `functions/` aggregieren Community-Scannerwissen. Weitere produktive HTTP-Abläufe, insbesondere ScanLab, Testerrechte, Freigaben und Kontolöschung, liegen im separaten **DomiDex-Web**-Projekt.
 
-- Legacy rows migrate into the isolated `__domidex_guest__` namespace and are never uploaded or assigned to an account automatically.
-- A separate explicit repository operation can claim guest rows after user confirmation. Source-/Cardmarket-identified rows use the same stable owner-scoped identity as normal adds (with a safe successor for occupied/tombstoned generations); unlinked rows receive fresh UUIDs. Every claimed row and outbox snapshot is committed transactionally.
-- Only a Firebase user linked to `google.com` is a canonical collection owner. A GitHub-only Firebase session stays in the guest namespace; GitHub may only be linked to an already signed-in Google user for private update access and can never switch collection ownership.
-- Local writes and a coalesced outbox share one Room transaction. Firestore writes use stable document IDs, mutation IDs and optimistic revisions.
-- Pending/conflicting local changes are never overwritten by a remote snapshot. Deletes remain tombstones so an offline device cannot resurrect them.
-- Authentication changes immediately switch the Room query namespace and the remote listener. Signing out reveals only guest data, not the previous account's collection.
-- Sync work uses a separate durable WorkManager chain per owner. A wake-up queued while work is already running is appended rather than lost, and every mutation re-checks the captured canonical UID.
-- Revision conflicts and terminal rule/payload errors have separate owner-scoped counters. Neither retries automatically: local-wins, fresh-server Cloud-wins, and corrected-error retry are explicit repository actions. Cloud-wins retains the guarded conflict outbox, opens the entry for listener updates, and performs a second server read before clearing that guard; it therefore cannot roll back a newer listener revision. A Cloud read/auth failure leaves the guarded conflict available for an explicit retry. Remote-delete and local-delete conflicts remain blocked from local-wins instead of silently resurrecting or deleting data.
-- After every successful write ACK the durable outbox remains until a fresh server read completes. This catches a newer remote revision that arrived while the local row was still pending and also resumes safely after process death.
-- Local inputs are checked against the same field/quantity limits as the rules. Oversized values are rejected with a validation error rather than silently truncated; existing legacy rows remain untouched.
+Der kanonische Collection-Owner ist eine mit Google verknüpfte Firebase-UID. `admin`, `appAccess` und `pretester` werden als serverseitige Claims gelesen; ein Client stellt sie nicht aus. `accountAccess` und `accountDeletionLocks` schränken gültige Claims zusätzlich ein.
 
-Known beta boundary: the app does not yet block all edits behind an initial Firestore-hydration screen. Stable source identities turn concurrent recognised-card adds into an explicit revision conflict, but fully manual/unlinked cards created simultaneously on two offline devices can still become separate entries. They are never auto-merged or silently discarded.
+## Regelpfade
 
-## Community image submissions
+| Pfad | Wesentliche Grenze im lokalen Regelstand |
+| --- | --- |
+| Firestore `users/{uid}/collectionEntries/{syncId}` | Owner/Entitlement, erlaubtes Schema, Mutation/Revisionsprüfung; Löschungen als Tombstone |
+| private Binder, Platzierungen und Layouts unter `users/{uid}` | ownergebundene, validierte Dokumente mit Konflikt-/Revisionsschutz |
+| `users/{uid}/collectionPriceSelections/{entrySyncId}` | lokale Release-27-Erweiterung; exakte Parent-/Karten-/Produkt-/Variantenidentität, Kennzahl und Wert validiert |
+| `users/{uid}/scanEvidence/{fingerprint}` und `scanKnowledge/{fingerprint}` | persönliche Evidenz bzw. eng begrenzte Einzelabfrage; globale Aggregat-Schreibzugriffe nur serverseitig |
+| `scannerReports` | keine direkten Client-Uploads/-Löschungen; lokaler direkter Review-/Lesezugriff administrativ begrenzt |
+| `supportRequests` | kleine requestergebundene Metadaten, keine vollständige Inbox/Fernsteuerung |
+| `siteContent/public` | öffentliche Produkttexte lesbar, Schreibzugriff administrativ und schema-begrenzt |
+| Storage `users/{uid}/...` | private Bilder für passenden Owner mit App-Zugriff |
+| `catalog-contributions/{uid}/{sha256}/card.{ext}` | ownergebundener, create-once Bildbeitrag, Owner kann lesen/zurückziehen |
+| `community-submissions/{uid}/{submissionId}/front.jpg` | Upload erfordert vorhandenen passenden Firestore-Metadatensatz |
+| `scanner-report-images/{reportId}/{fileName}` | alle direkten Client-Reads/-Writes verweigert, auch für Admin; Bildzugriff über authentifizierte Serverroute |
+| übrige Pfade | Default-Deny |
 
-- Uploads accept JPEG/PNG/WebP metadata and at most 10 MiB. The Android client additionally checks header, decoded dimensions and SHA-256 before upload.
-- Deterministic SHA-256 paths and a metadata existence check prevent duplicate uploads. There is no automatic retry loop.
-- Clients cannot approve, publish, overwrite, delete, list submissions, or make an image public. They may only request withdrawal from a pending state.
-- A Cloud Function/Admin SDK service must re-check ownership/state, validate bytes and dimensions, strip/reject sensitive metadata, run malware/safety checks and rate limits, move objects into private review, moderate publication, and perform retention/deletion on withdrawal. Admin SDK bypasses rules, so these checks remain mandatory.
+Maßgeblich sind `firestore.rules` und `storage.rules`, nicht eine UI-Rollenanzeige. Eine separate Web-Scanner-Lab-Berechtigung ist am Web-Backend zu beurteilen; sie macht einen Nutzer nicht automatisch zum allgemeinen Firebase-Admin.
 
-## Owner support
+## Sammlungssync und Offlineverhalten
 
-`supportRequests` permits only small requester metadata. There is no rule path for remote control, camera/screen streaming, raw diagnostics, or client-side privileged access. A future owner operation must run server-side and verify both a Firebase custom claim (for example `ownerSupport == true`) and a server-managed allowlist. Claims are issued/revoked only by authorized backend code; no email or role is hard-coded in the app.
+Die Implementierung unter `app/src/main/java/com/dominik/cardvault/data/sync/` verwendet dauerhafte ownergebundene Outboxes. Fachliche lokale Änderung und Mutation werden gemeinsam in Room gespeichert.
 
-A future user-initiated support package must require confirmation and be limited to app version, curated non-sensitive logs, and an explicitly selected screenshot.
+- Stabile Quellenidentitäten, Mutation-IDs und erwartete Revisionen verhindern blindes Überschreiben.
+- Pending-/Konfliktänderungen werden nicht durch eingehende Snapshots stillschweigend verworfen.
+- Tombstones verhindern eine einfache Wiederherstellung gelöschter Daten durch ältere Offline-Stände.
+- Authwechsel wechselt den Owner-Namespace und Listener; Gastdaten bleiben isoliert.
+- Lokale/Cloud-Konfliktauflösung und Wiederholung korrigierter terminaler Fehler sind explizite Aktionen.
+- Collection-ACKs werden mit einem frischen Serverstand abgeglichen.
+- Gastübernahme ist ausdrücklich bestätigt und serverseitig verifiziert; sie ist keine automatische Folge einer Anmeldung.
+- Vollständig manuelle, nicht verknüpfte Karten können bei unabhängiger Anlage auf zwei Offline-Geräten getrennte Einträge bleiben.
 
-## App Check
+Collection besitzt einen Live-Listener. Private Binder verwenden auch begrenzte Abrufe und periodische Arbeit im 15-Minuten-Raster. „Alles ohne Delay“ ist damit keine belegte Eigenschaft.
 
-App Check is not currently installed. Enable Play Integrity for the Android app later, add the App Check SDK, test debug/development tokens, and only then enable Storage enforcement in Firebase Console. UID-based Storage Rules remain mandatory and work independently of App Check.
+Die lokale Preisalternativen-Erweiterung nutzt separate `collectionPriceSelections` und Room-Schema 13; HEAD enthält Schema 12. Sie ist von einer neuen Veröffentlichung zu unterscheiden. Vorhandene Firebase-Regeltests decken nicht automatisch alle neuen Sidecar-Grenzfälle ab.
 
-## Before activation
+## Drei getrennte Beitrags-/Bildpfade
 
-1. Publish privacy/contribution terms and define moderation, quotas and retention/deletion for private contributions.
-2. Implement server-side owner authorization and a secure support endpoint.
-3. Test the rules with Firebase Emulator Suite: cross-user access, status-forging, overwrite/delete, oversized/non-image, public read and withdrawal.
+### Manuelle ScanLab-Berichte
 
-After those owner-run prerequisites, completing Firestore/Storage emulator tests and selecting the correct project, the deploy command is:
+`data/feedback/FirebaseScannerReportUploader.kt` sendet nach ausdrücklicher Bestätigung an die Web-API. Es gibt in diesem Pfad keinen automatischen Hintergrund-Retry. Auth und Kontoidentität werden geprüft.
 
-```sh
-firebase deploy --only firestore:rules,storage
+Die Bildvorbereitung dekodiert und kodiert ein begrenztes JPEG neu; dadurch werden ursprüngliche EXIF-/GPS-Metadaten nicht übernommen. Im Foto **sichtbare** Namen, Personen oder private Inhalte werden dadurch nicht entfernt. Ein historischer Preference-Schlüssel mit `automatic_v1` ändert den manuellen Uploadablauf nicht.
+
+### Gemeinsames Scannerwissen
+
+Die Einwilligung ist separat, versioniert und standardmäßig ausgeschaltet. Übertragen werden technische OCR-/Bildmerkmals-Hinweise, Kandidaten und bestätigte Korrekturen, keine Fotos. Die ownergebundene Queue prüft die Zustimmung vor dem Upload erneut.
+
+`functions/index.js` enthält `aggregateScanKnowledge`; `functions/knowledge-aggregate.js` berechnet Zustände aus Beiträgen. Mindestens drei unabhängige Bestätigungen und ein Abstand von zwei Stimmen sind für den beschriebenen stabilen Zustand nötig. Das ist Evidenzaggregation, kein nachgewiesenes automatisches ML-Modelltraining.
+
+Ausschalten verhindert neue Beiträge, entfernt aber nicht automatisch schon übertragene Evidenz. Der gelesene Android-Cache besitzt zudem keinen allgemeinen TTL-Widerruf: Ein fehlendes Remote-Dokument entfernt vorhandene lokale Hinweise nicht zwingend. Sofortige globale Rücknahme ist nicht zugesichert.
+
+### Optionale Katalogbilder
+
+`data/storage/DomiDexStorageGateway.kt` prüft Bildtyp, Dateigröße, Header/Dimensionen und SHA-256 und verlangt einen expliziten Beitragsschritt. Der gelesene Pfad lädt jedoch Originaldateibytes hoch; hier ist keine gleiche EXIF-Entfernung wie beim ScanLab-JPEG implementiert.
+
+Storage-Regeln erlauben JPEG/PNG/WebP und maximal 10 MiB. Deklarierter MIME-Typ und Clientprüfung ersetzen keine serverseitige Inhaltsprüfung. Ein privater Beitrag wird nicht automatisch ein freigegebenes öffentliches Katalogbild.
+
+Serverseitige Moderation, echte Bytevalidierung, Metadatenbehandlung, Quoten sowie Aufbewahrung/Löschung müssen für diesen Pfad gesondert nachgewiesen werden. Admin SDK umgeht Clientregeln.
+
+## Freigabelinks, Backup und Löschung
+
+Private Binderlinks werden im Web-Backend erzeugt und widerrufen. Der gelesene Vertrag ist tokenbasiert öffentlich lesbar, nicht auf bereits freigeschaltete Empfängerkonten beschränkt. Das Backend prüft den Freigabestatus und den weiter gültigen Besitzerzugriff. Linktokens sind vertraulich.
+
+Das Android-ZIP-Backup ist nicht verschlüsselt und kann personenbezogene Besitzdaten enthalten. Es exportiert keine Auth-/Claim-Berechtigung oder Einwilligung. Android-Systembackup ist deaktiviert; das ist nicht dasselbe wie Verschlüsselung eines manuell exportierten Backups.
+
+Der Android-Kontolöschdialog bereitet eine E-Mail vor, löscht selbst nichts. Der gesonderte Web-Löschendpunkt und sein serverseitiger Ablauf sind außerhalb dieses Repositories implementiert. Weder ein E-Mail-Entwurf noch ein Rules-Test beweist eine abgeschlossene Löschung.
+
+## App Check und offene Betriebsnachweise
+
+`firebase-appcheck:19.4.0` und `firebase-appcheck-interop:17.1.0` sind im lokal ausgewerteten Abhängigkeitsbaum transitiv vorhanden. Ein aktiver Android-App-Check-Provider/Initialisierung wurde nicht gefunden. Firebase-Console-Enforcement ist damit **nicht nachgewiesen**. Eine Provider-Einrichtung oder Enforcement-Umschaltung gehört nicht zu diesem Audit.
+
+Weitere separat zu prüfende Punkte:
+
+- tatsächlich deployte Regel-/Functions-/Web-Versionen;
+- serverseitige Ratenbegrenzung, Quoten und Überwachung pro Endpoint;
+- Reihenfolge/Konfliktbehandlung von clientzeitgestützter Knowledge-Evidenz;
+- Widerruf lokal gecachter Knowledge-Daten;
+- echte Metadaten-/Inhaltsprüfung optionaler Katalogbild-Beiträge;
+- Wiederherstellungs-/Löschtests über alle betroffenen Dienste.
+
+Kein unbedingtes „manipulationssicher“, „vollständig anonym“ oder „rechtlich zertifiziert“ ableiten.
+
+## Lokale Prüfung ohne Produktionszugriff
+
+Reine Aggregatlogik kann ohne Firebase-Verbindung ausgeführt werden:
+
+```powershell
+node --test functions/knowledge-aggregate.test.js
 ```
 
-This change does not run it.
+`firebase-tests/firestore.rules.test.mjs` und `storage.rules.test.mjs` benötigen lokale Firestore-/Storage-Emulatoren und einen ausdrücklich gewählten `demo-...`-Projektnamen. Ihre Setup-Hooks leeren Testdaten. Sie dürfen daher nicht als unkontrollierter Test gegen ein echtes Projekt gestartet werden.
+
+Eine sichere Testhülle muss lokale Emulator-Hosts/Ports, isolierte Konfiguration, serielle Ausführung und passende Test-Dependencies festlegen. Die aktuelle Audit-Testdokumentation hält ausgeführte Befehle und Ergebnisse fest. Historische grüne Logs sind keine heute neu ausgeführten Tests.
+
+Dieses Dokument enthält bewusst keinen Deploy-Befehl. Eine Veröffentlichung von Regeln oder Functions erfordert einen gesonderten, freigegebenen Änderungsauftrag.

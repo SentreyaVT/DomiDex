@@ -15,7 +15,19 @@ internal data class ScannerReportDraft(
     val ocrTokens: List<String> = emptyList(),
     val zoneConfidence: Map<String, Double> = emptyMap(),
     val failureReason: String,
+    val knowledgeContext: ScannerReportKnowledgeContext? = null,
 )
+
+/** The original analysis key only; never a reconstruction from the reviewed card or JPEG. */
+internal data class ScannerReportKnowledgeContext(
+    val fingerprint: String,
+    val scannerVersion: String,
+    val knowledgeVersion: Int,
+    val schemaVersion: Int = 1,
+) {
+    fun isValid(): Boolean = schemaVersion == 1 && knowledgeVersion == 1 &&
+        fingerprint.matches(Regex("[a-f0-9]{64}")) && scannerVersion.matches(Regex("[A-Za-z0-9._-]{1,40}"))
+}
 
 internal data class ScannerReportReceipt(val reportId: String)
 
@@ -62,6 +74,14 @@ internal object ScannerReportContract {
         draft.guessedNumber.cleanText(80)?.let { values["guessedNumber"] = it }
         // The Web normalizer treats explicit null as zero; unknown confidence must be omitted.
         draft.confidence?.takeIf(::validConfidence)?.let { values["confidence"] = it }
+        draft.knowledgeContext?.takeIf(ScannerReportKnowledgeContext::isValid)?.let {
+            values["knowledgeContext"] = mapOf(
+                "schemaVersion" to it.schemaVersion,
+                "fingerprint" to it.fingerprint,
+                "scannerVersion" to it.scannerVersion,
+                "knowledgeVersion" to it.knowledgeVersion,
+            )
+        }
         return json.toJson(values)
     }
 

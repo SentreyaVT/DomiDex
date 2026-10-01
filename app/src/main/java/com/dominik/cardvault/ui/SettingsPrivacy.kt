@@ -82,7 +82,7 @@ internal fun PrivacySettingsContent() {
         Text("Auf der öffentlichen DomiDex-Seite findest du die aktuellen Datenschutzinformationen.", color = VaultTextMuted)
         SelectionContainer { Text(AppSupportConfig.privacyUrl, style = MaterialTheme.typography.bodySmall) }
         Text(
-            "Pre-Beta-Hinweis: Der Online-Text ist noch nicht vollständig. Fragen zu Kontodaten, Scanner-Berichten und Löschung kannst du direkt an den Datenschutzkontakt richten.",
+            "Alpha-Hinweis: Der Online-Text ist noch nicht vollständig. Fragen zu Kontodaten, Scanner-Berichten und Löschung kannst du direkt an den Datenschutzkontakt richten.",
             style = MaterialTheme.typography.bodySmall,
         )
         OutlinedButton(

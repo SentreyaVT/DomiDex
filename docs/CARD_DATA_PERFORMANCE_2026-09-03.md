@@ -1,5 +1,7 @@
 # DomiDex – Karten-Datenperformance, 03.09.2026
 
+> Historischer Bericht / Entwurf des im Titel genannten Stands; keine aktuelle Release- oder Produktfreigabe. Maßgeblich sind [Projektstatus vom 01.10.2026](PROJECT_STATUS.md) und [Versionshistorie](RELEASE_HISTORY.md). Aussagen zu R8, ScanLab/Knowledge, Grading, Cloud, Test-Tracks und Geschäftsmodell dürfen nicht ungeprüft übernommen werden. Alte lokale Artefaktverweise können außerhalb der Arbeitsstation fehlen.
+
 ## Messaufbau
 
 Android-Studio-Emulator `Medium_Phone`, Android 36, x86_64, 2 GB RAM,

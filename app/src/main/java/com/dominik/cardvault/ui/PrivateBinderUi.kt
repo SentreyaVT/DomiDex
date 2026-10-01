@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -44,7 +45,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
@@ -243,7 +243,9 @@ internal fun ReferenceBinderTargetDialog(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("${card.name} · ${card.number}", color = VaultText, fontWeight = FontWeight.Bold)
                 Text(
-                    product.trendPriceEur?.let { "Cardmarket-Trendpreis: ${privateBinderEuro(it)}" } ?: "Preis nicht verfügbar",
+                    product.trendPriceEur?.let { "Cardmarket-Trendpreis: ${privateBinderEuro(it)}" }
+                        ?: product.confirmedPriceSelection?.let { "Gewählter Vergleichswert: ${privateBinderEuro(it.valueEur)} · ${it.metric.label}" }
+                        ?: "Preis nicht verfügbar",
                     color = if (product.trendPriceEur != null) MewIce else VaultTextMuted,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -279,30 +281,42 @@ internal fun BinderOverviewControls(
     var filterOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.weight(1f)) {
-            OutlinedButton(onClick = { sortOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                DomiLineIcon(DomiIconKind.SYNC, MewIce, Modifier.size(15.dp))
+            OutlinedButton(
+                onClick = { sortOpen = true },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, contentColor = MaterialTheme.colorScheme.onSurface),
+            ) {
+                DomiLineIcon(DomiIconKind.SYNC, MaterialTheme.colorScheme.primary, Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(sort.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
                 BinderSortOption.entries.forEach { option ->
                     DropdownMenuItem(
-                        text = { Text(option.label, color = if (option == sort) MewIce else VaultText) },
+                        text = { Text(option.label, color = if (option == sort) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) },
                         onClick = { onSortChanged(option); sortOpen = false },
                     )
                 }
             }
         }
         if (showFilter) Box(Modifier.weight(1f)) {
-            OutlinedButton(onClick = { filterOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                DomiLineIcon(DomiIconKind.SEARCH, MewRose, Modifier.size(15.dp))
+            OutlinedButton(
+                onClick = { filterOpen = true },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, contentColor = MaterialTheme.colorScheme.onSurface),
+            ) {
+                DomiLineIcon(DomiIconKind.SEARCH, MaterialTheme.colorScheme.secondary, Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(filter.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
                 filterOptions.forEach { option ->
                     DropdownMenuItem(
-                        text = { Text(option.label, color = if (option == filter) MewRose else VaultText) },
+                        text = { Text(option.label, color = if (option == filter) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) },
                         onClick = { onFilterChanged(option); filterOpen = false },
                     )
                 }
@@ -320,33 +334,35 @@ internal fun PrivateBinderShelfCard(
 ) {
     DomiGlassCard(modifier.fillMaxWidth(), highlighted = selected, onClick = onClick) {
         Row(
-            Modifier.fillMaxWidth().padding(14.dp),
+            Modifier.fillMaxWidth().padding(18.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             DomiPrivateBinderCover(
                 title = binder.name,
                 themeId = binder.coverStyle,
                 modifier = Modifier.size(94.dp, 122.dp),
             )
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text(binder.name, color = VaultText, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Surface(color = MewPlumDeep, shape = RoundedCornerShape(99.dp), border = BorderStroke(1.dp, MewRoseSoft)) {
-                        Text("PRIVAT", color = MewRose, fontSize = 8.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp))
-                    }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(12.dp)) {
+                    Text("Privat", color = MaterialTheme.colorScheme.onSecondaryContainer, fontSize = 10.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
                 }
+                Text(binder.name, color = VaultText, style = MaterialTheme.typography.titleLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 binder.description?.takeIf(String::isNotBlank)?.let {
-                    Text(it, color = VaultTextMuted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(it, color = VaultTextMuted, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                Text("${binder.ownedCards} Karten · unbegrenzte Seiten", color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text("${binder.ownedCards} Karten · unbegrenzte Seiten", color = VaultTextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                 Text(
                     if (binder.marketValueEur > 0.0) "Binderwert ${privateBinderEuro(binder.marketValueEur)}" else "Binderwert: Preisstand wird geprüft",
                     color = if (binder.marketValueEur > 0.0) VaultText else VaultTextMuted,
                     fontSize = 12.sp,
+                    lineHeight = 17.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
-                Text("Privaten Binder öffnen", color = MewRose, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Privaten Binder öffnen", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    DomiLineIcon(DomiIconKind.CHEVRON, MaterialTheme.colorScheme.primary, Modifier.size(14.dp))
+                }
             }
         }
     }
@@ -389,12 +405,13 @@ internal fun DomiPrivateBinderCover(
                 shape = RoundedCornerShape(99.dp),
                 border = BorderStroke(1.dp, MewRoseSoft),
             ) {
-                Text("PRIVATE", color = MewRose, fontWeight = FontWeight.Black, fontSize = 6.sp, letterSpacing = 1.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                Text("PRIVATE", color = MewRose, fontWeight = FontWeight.Black, fontSize = 6.sp, lineHeight = 8.sp, letterSpacing = 1.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
             }
             Text(
                 title,
                 color = VaultText,
                 fontSize = 7.sp,
+                lineHeight = 10.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
@@ -549,6 +566,7 @@ internal fun PrivateBinderReaderScreen(
     var editorOpen by rememberSaveable(binder.id) { mutableStateOf(false) }
     var deleteBinderConfirm by rememberSaveable(binder.id) { mutableStateOf(false) }
     var detailPlacementId by rememberSaveable(binder.id) { mutableStateOf<String?>(null) }
+    var priceDetailsEntryId by rememberSaveable(binder.id) { mutableStateOf<Long?>(null) }
     var holoEditorPlacementId by rememberSaveable(binder.id) { mutableStateOf<String?>(null) }
     var movingPlacementId by rememberSaveable(binder.id) { mutableStateOf<String?>(null) }
     var removalCandidate by remember { mutableStateOf<PrivateBinderCard?>(null) }
@@ -568,10 +586,11 @@ internal fun PrivateBinderReaderScreen(
     val movingSlotOnPage = moving?.position
         ?.takeIf { privateBinderPageForPosition(it) == page }
         ?.let(::privateBinderSlotForPosition)
-    val pricedCards = placements.map(PrivateBinderCard::card).filter { it.priceUpdatedAtEpochMillis != null }
+    val pricedCards = placements.map(PrivateBinderCard::card).filter { it.effectiveValueEur != null }
     val binderCardCount = placements.sumOf { it.card.quantity }
     val pricedCardCount = pricedCards.sumOf(CollectionCard::quantity)
-    val binderValue = pricedCards.sumOf { it.currentValueEur * it.quantity }
+    val binderValue = pricedCards.sumOf { (it.effectiveValueEur ?: 0.0) * it.quantity }
+    val alternativeCardCount = pricedCards.filter { it.usesPriceSelection }.sumOf(CollectionCard::quantity)
 
     LaunchedEffect(binder.id) {
         runCatching { repository.markPrivateBinderOpened(binder.id) }
@@ -615,15 +634,20 @@ internal fun PrivateBinderReaderScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Surface(onClick = onBack, color = VaultNightRaised, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, VaultOutlineSoft)) {
-                Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.BACK, VaultText, Modifier.size(18.dp)) }
+            Surface(
+                onClick = onBack,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.semantics { contentDescription = "Zur Binderübersicht" },
+            ) {
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.BACK, MaterialTheme.colorScheme.onSurface, Modifier.size(19.dp)) }
             }
             Column(Modifier.weight(1f)) {
                 Text(binder.name, color = VaultText, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("Privater Binder · Seite ${page + 1} von $pageCount", color = VaultTextMuted, fontSize = 10.sp)
+                Text("Privater Binder · Seite ${page + 1} von $pageCount", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 16.sp)
             }
             IconButton(onClick = { editorOpen = true }, enabled = !working, modifier = Modifier.semantics { contentDescription = "Privaten Binder bearbeiten" }) {
-                DomiLineIcon(DomiIconKind.MORE, MewIce, Modifier.size(19.dp))
+                DomiLineIcon(DomiIconKind.MORE, MaterialTheme.colorScheme.onSurfaceVariant, Modifier.size(19.dp))
             }
             PrivateBinderSharingAction(binder, enabled = !working)
             TextButton(onClick = { operationError = null; deleteBinderConfirm = true }, enabled = !working) {
@@ -634,10 +658,10 @@ internal fun PrivateBinderReaderScreen(
         DomiGlassCard(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("$binderCardCount Karten · ${if (pricedCards.isEmpty()) "Kein Marktwert verfügbar" else privateBinderEuro(binderValue)}", color = VaultText, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("Cardmarket-Trendwert · $pricedCardCount/$binderCardCount bepreist", color = VaultTextMuted, fontSize = 9.sp)
-                    moving?.let { Text("${it.card.name} gewählt · Zielplatz antippen", color = VaultPositive, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) }
-                        ?: Text("Karte lange drücken und ziehen – auch über den Seitenrand.", color = VaultTextFaint, fontSize = 9.sp)
+                    Text("$binderCardCount Karten · ${if (pricedCards.isEmpty()) "Kein Marktwert verfügbar" else privateBinderEuro(binderValue)}", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text(if (alternativeCardCount > 0) "Sammlungswert · $pricedCardCount/$binderCardCount bepreist · $alternativeCardCount Vergleichswerte" else "Cardmarket-Trendwert · $pricedCardCount/$binderCardCount bepreist", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, lineHeight = 14.sp)
+                    moving?.let { Text("${it.card.name} gewählt · Zielplatz antippen", color = MaterialTheme.colorScheme.tertiary, fontSize = 10.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold) }
+                        ?: Text("Karte lange drücken und ziehen – auch über den Seitenrand.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, lineHeight = 14.sp)
                 }
                 FilterChip(
                     selected = visualEffectsEnabled,
@@ -647,15 +671,15 @@ internal fun PrivateBinderReaderScreen(
                         visualPreferences.edit().putBoolean(PRIVATE_BINDER_EFFECTS_PREFERENCE, enabled).apply()
                     },
                     enabled = !working,
-                    label = { Text(if (visualEffectsEnabled) "Animation an" else "Animation aus", fontSize = 8.sp) },
+                    label = { Text(if (visualEffectsEnabled) "Animation an" else "Animation aus", fontSize = 9.sp, lineHeight = 13.sp) },
                     modifier = Modifier.semantics { contentDescription = "Animierte Binder-Effekte" },
                 )
                 Button(onClick = {
                     operationError = null
                     addPickerTargetPosition = null
                     addPickerOpen = true
-                }, enabled = !working) {
-                    DomiLineIcon(DomiIconKind.ADD, VaultText, Modifier.size(15.dp))
+                }, enabled = !working, shape = RoundedCornerShape(16.dp)) {
+                    DomiLineIcon(DomiIconKind.ADD, MaterialTheme.colorScheme.onPrimary, Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Karte")
                 }
@@ -666,8 +690,8 @@ internal fun PrivateBinderReaderScreen(
 
         Box(
             Modifier.weight(1f).fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Color(0xFF10121B), Color(0xFF06070C))), RoundedCornerShape(16.dp))
-                .border(2.dp, MewIce.copy(alpha = .26f), RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(20.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
                 .padding(10.dp),
         ) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -730,11 +754,15 @@ internal fun PrivateBinderReaderScreen(
                 Column(
                     Modifier.align(Alignment.Center).padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    DomiDexBrandMark(size = 40.dp)
-                    Text("Füge deine Lieblingskarten hinzu.", color = VaultText, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
-                    Text("Tippe auf einen freien Platz oder oben auf Karte.", color = VaultTextMuted, fontSize = 10.sp, textAlign = TextAlign.Center)
+                    Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(16.dp)) {
+                        Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
+                            DomiLineIcon(DomiIconKind.BINDER, MaterialTheme.colorScheme.onSecondaryContainer, Modifier.size(27.dp))
+                        }
+                    }
+                    Text("Füge deine Lieblingskarten hinzu.", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+                    Text("Tippe auf einen freien Platz oder oben auf Karte.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 18.sp, textAlign = TextAlign.Center)
                 }
             }
             Text("DOMIDEX", color = VaultText.copy(alpha = .05f), fontWeight = FontWeight.Black, fontSize = 38.sp, letterSpacing = 4.sp, modifier = Modifier.align(Alignment.Center))
@@ -742,7 +770,7 @@ internal fun PrivateBinderReaderScreen(
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = { page-- }, enabled = page > 0 && !working) { Text("‹ Zurück") }
-            Text("${page + 1} / $pageCount", color = VaultTextMuted, fontSize = 11.sp)
+            Text("${page + 1} / $pageCount", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 16.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (page == pageCount - 1) TextButton(
                     enabled = !working,
@@ -821,6 +849,7 @@ internal fun PrivateBinderReaderScreen(
             visibleInSetBinder = setBinderVisibility[placement.card.entryId] != false,
             animationsEnabled = animationsEnabled,
             onDismiss = { detailPlacementId = null },
+            onPriceDetails = { detailPlacementId = null; priceDetailsEntryId = placement.card.entryId },
             onHoloEffect = {
                 detailPlacementId = null
                 operationError = null
@@ -845,6 +874,9 @@ internal fun PrivateBinderReaderScreen(
                 }
             },
         )
+    }
+    placements.firstOrNull { it.card.entryId == priceDetailsEntryId }?.card?.let { card ->
+        CardPreviewDialog(card, repository, onDismiss = { priceDetailsEntryId = null }, onEdit = null)
     }
     placements.firstOrNull { it.placementId == holoEditorPlacementId }?.let { placement ->
         PrivateBinderHoloSelectorDialog(
@@ -1141,7 +1173,7 @@ private fun PrivateBinderCollectionPicker(
                                 Column(Modifier.weight(1f)) {
                                     Text(card.name, color = VaultText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text("${card.set} · ${card.number}", color = VaultTextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text("${card.finish} · ${if (card.priceUpdatedAtEpochMillis != null) privateBinderEuro(card.currentValueEur) else "Preis nicht verfügbar"}", color = MewIce, fontSize = 10.sp)
+                                    Text("${card.finish} · ${card.effectiveValueEur?.let(::privateBinderEuro) ?: "Preis nicht verfügbar"}" + if (card.usesPriceSelection) " · Vergleichswert" else "", color = MewIce, fontSize = 10.sp)
                                 }
                             }
                         }
@@ -1160,6 +1192,7 @@ private fun PrivateBinderCardDialog(
     visibleInSetBinder: Boolean,
     animationsEnabled: Boolean,
     onDismiss: () -> Unit,
+    onPriceDetails: () -> Unit,
     onHoloEffect: () -> Unit,
     onMove: () -> Unit,
     onRemove: () -> Unit,
@@ -1184,10 +1217,13 @@ private fun PrivateBinderCardDialog(
                 item { Text("${card.finish} · ${card.variant}", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
                 item {
                     Text(
-                        if (card.priceUpdatedAtEpochMillis != null) "Cardmarket-Trendpreis: ${privateBinderEuro(card.currentValueEur)}" else "Preis nicht verfügbar",
-                        color = if (card.priceUpdatedAtEpochMillis != null) VaultPositive else VaultTextMuted,
+                        card.effectiveValueEur?.let { "${card.valuationLabel}: ${privateBinderEuro(it)}" } ?: "Preis nicht verfügbar",
+                        color = if (card.effectiveValueEur != null) VaultPositive else VaultTextMuted,
                         fontWeight = FontWeight.Bold,
                     )
+                }
+                item {
+                    OutlinedButton(onClick = onPriceDetails, modifier = Modifier.fillMaxWidth()) { Text("Preisdetails & Vergleichswerte") }
                 }
                 item {
                     OutlinedButton(onClick = onHoloEffect, modifier = Modifier.fillMaxWidth()) {

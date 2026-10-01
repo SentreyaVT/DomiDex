@@ -1,36 +1,65 @@
-# CardVault Sicherheits- und Entitlement-Architektur
+# DomiDex – Sicherheits- und Entitlement-Architektur
 
-Diese Leitlinie bereitet spätere kostenpflichtige Funktionen vor. Sie aktiviert weder ein Pro-Angebot noch Käufe. Kein Clientschutz kann Manipulation absolut unmöglich machen; Ziel sind mehrere überprüfbare Schutzschichten und ein sicherer Fehlerzustand.
+Prüfstand: 1. Oktober 2026. Die folgenden Grenzen beschreiben gelesenen Code. Sie sind keine pauschale Aussage über jede historische Veröffentlichung oder die aktuellen Einstellungen aller Cloud-Dienste.
 
-## Autorität und Rollen
+## Aktive Identität statt Zukunftsentwurf
 
-- Die Android-App ist niemals Autorität für `ADMIN`, `SUPPORT_AGENT` oder `PRO`.
-- Google-Anmeldung liefert eine Identität. Ein kontrolliertes Backend validiert das ID-Token und ermittelt Rollen und Entitlements serverseitig.
-- Betreiber- und Supportrollen werden anhand serverseitig gepflegter Identitäten vergeben, nicht anhand einer lokal verglichenen E-Mail-Adresse.
-- Rollen steuern eine getrennte Oberfläche: normale Nutzer sehen keine Teamfunktionen; Support-Agenten sehen Inbox/Fälle und Admins gegebenenfalls Verwaltung. Diese Unsichtbarkeit ist nur UX und ersetzt nie die serverseitige Prüfung jeder Aktion.
-- Bei fehlender oder abgelaufener Bestätigung bleiben geschützte Funktionen geschlossen; lokale Sammlungsdaten bleiben weiterhin lesbar und sicher.
+Google-Anmeldung, Firebase Authentication, Firestore-/Storage-Integration und Cloud-Function-Quellcode sind vorhanden. Die frühere Aussage, diese Dienste seien insgesamt „noch nicht aktiv“, ist überholt. Das allein bestätigt nicht, welche lokale Regel-/Function-Version aktuell deployed ist.
 
-## Datenzugriff
+`FirebaseGoogleAuthGateway.kt` verwendet Credential Manager und Firebase Auth. Ein Konto mit Google-Verknüpfung wird als kanonischer Sammlungs-Owner verwendet. Kontoabbruch/-wechsel, Sign-out und Gastdaten sind getrennte Zustände; eine lokal eingegebene E-Mail-Adresse erteilt keine Rechte.
 
-- Firebase-Sicherheitsregeln gewähren standardmäßig keinen Zugriff und öffnen nur die kleinste benötigte Operation für den authentifizierten Eigentümer eines Datensatzes.
-- Nutzer dürfen nur ihre eigenen Supportfälle lesen und Nachrichten hinzufügen. Zustandswechsel und Adminübersichten erfordern serverseitig bestätigte Rollen.
-- Diagnosen, Fotos und Sammlung werden nie automatisch hochgeladen. Jede optionale Beilage braucht eine sichtbare, konkrete Einwilligung.
-- Support- und Adminaktionen erhalten Rate-Limits, Audit-Ereignisse und nachvollziehbare Fehlermeldungen ohne sensible Interna.
+## Autorität und Zugriff
 
-## Käufe und Pro-Entitlements
+- Android wertet serverseitig ausgestellte boolesche Claims wie `admin`, `appAccess` und `pretester` aus; es stellt diese Claims nicht selbst aus.
+- `accountAccess` und `accountDeletionLocks` können einen vorhandenen Zugriff zusätzlich sperren. Ein permissives lokales Flag ersetzt weder gültige Claims noch die serverseitige Prüfung.
+- Firestore-/Storage-Regeln beginnen mit Default-Deny und erlauben bestimmte ownergebundene oder administrativ eingeschränkte Operationen.
+- Berechtigungen müssen an jedem Backend-/Regelzugriff geprüft werden. Eine ausgeblendete Schaltfläche ist lediglich Darstellung.
+- Offline lesbare lokale Daten bedeuten keine offline erteilte Berechtigung für geschützte Cloud-Operationen.
 
-- Der Client darf einen Kauf starten und den Status anzeigen, aber kein Pro-Recht selbst aus einem lokalen Flag ableiten.
-- Ein Backend prüft Kauf-Token beim offiziellen Store, ordnet sie einer authentifizierten Identität zu und speichert den autoritativen Entitlement-Status.
-- Rückerstattung, Widerruf, Ablauf und erneute Prüfung werden serverseitig berücksichtigt. Offline-Caches sind kurzlebig, signiert bzw. an den Nutzer gebunden und niemals alleinige Autorität.
-- Play Integrity kann als zusätzliches Risikosignal für sensible Operationen dienen. Es ersetzt weder Kaufprüfung, Authentifizierung noch serverseitige Autorisierung und garantiert keine Manipulationsfreiheit.
+Belege: `auth/FirebaseEntitlements.kt`, `auth/FirebaseAppAccess.kt`, `auth/CanonicalCollectionOwner.kt`, `firestore.rules`, `storage.rules`; Kotlin-Pfade unter `app/src/main/java/com/dominik/cardvault/`.
 
-## App- und Betriebsschutz
+## Datensynchronisation ist nicht Support-Einwilligung
 
-- Produktionsversionen werden mit einem geschützten Release-Schlüssel signiert; Schlüsselmaterial und Backend-Secrets liegen nie im Repository oder APK.
-- Release-Builds verwenden R8-Minify/Obfuskation nach getesteten Keep-Regeln. Das erschwert Analyse, ist aber keine Sicherheitsgrenze.
-- Netzwerkzugriffe verwenden TLS; Backend und Regeln validieren alle Eingaben erneut. Fehler verbergen Tokens und interne Details.
-- Rollen-, Regel- und Entitlement-Änderungen werden vor Veröffentlichung in einer getrennten Testumgebung geprüft. Budgetwarnungen, Quoten, Missbrauchsalarme und Wiederherstellungsverfahren gehören zum Betrieb.
+Bei einem berechtigten Owner werden Sammlung und zugehörige Binder-Mutationen über ihre vorgesehenen Outboxes synchronisiert. „Sammlung wird nie automatisch hochgeladen“ wäre daher falsch.
 
-## Noch nicht aktiv
+Davon unabhängig bleiben:
 
-Google-Login, Firestore, Cloud Functions, Push, Play Integrity und Play-Billing sind in CardVault derzeit nicht produktiv aktiviert. Vor jeder Aktivierung sind Anbieter-, Datenschutz-, Kosten-, Regel- und Testentscheidungen ausdrücklich zu treffen.
+- ausdrücklicher manueller ScanLab-Fotoupload;
+- separate standardmäßig ausgeschaltete Community-Knowledge-Einwilligung;
+- ausdrücklich bestätigte optionale Katalogbild-Beiträge;
+- E-Mail-Support, den der Nutzer selbst prüft und absendet.
+
+Keine dieser Zustimmungen darf aus einer anderen abgeleitet werden. Insbesondere ist die Testerfreigabe keine automatische Fotoveröffentlichung.
+
+## Private Daten, Freigaben und Backups
+
+Owner-Namespaces, optimistische Revisionen und Tombstones schützen die private Replikation. Eine private Binderfreigabe erzeugt dagegen absichtlich einen lesbaren Link: Der Besitz des Tokens ermöglicht den Abruf, nicht eine zusätzliche Empfängerrolle. Erstellen und Widerrufen sind Besitzeroperationen. Freigabeoptionen für Preise, Summe und Anzeigename sind getrennt und standardmäßig aus.
+
+Das lokale ZIP-Backup ist nicht verschlüsselt. Es kann private Sammlungseinträge, UID, Notizen, Kaufdaten und Fotos enthalten, aber keine als Berechtigung wiederherzustellenden Rollen, Tokens oder Einwilligungen. Exportdateien müssen entsprechend vertraulich behandelt werden.
+
+## App Check, Integrity und Build-Schutz
+
+Die lokale Dependency-Auswertung enthält `firebase-appcheck:19.4.0` und `firebase-appcheck-interop:17.1.0` transitiv. Es wurde jedoch kein aktiver App-Check-Provider und keine Initialisierung im Android-Anwendungscode gefunden. Daraus folgt **kein nachgewiesenes App-Check-/Play-Integrity-Enforcement**. Transitive Bestandteile sind keine aktivierte Attestierung.
+
+Eine spätere App-Check-Einführung müsste Anbieter-/Console-Konfiguration, Debug-/Release-Verhalten, erlaubte Clients und Ausfallverhalten separat prüfen. Dieses Dokument aktiviert nichts und verändert keine bestehenden Firebase-Zugriffe.
+
+R8/Obfuskation und Signierung sind Build-/Integritätsbausteine, keine Autorisierungsgrenze. Vorhandene funktionierende R8-/Signing-Einstellungen werden durch diesen Audit weder zurückgebaut noch geändert. Der Upload von Debug-Symbolen beweist keine vollständige Verfügbarkeit herstellerseitig entfernter Symbole.
+
+## Nicht als aktive Produkte ausgeben
+
+`support/SupportContracts.kt` enthält Rollen-/Inbox-Verträge für einen möglichen Supportdienst. Daraus folgt keine eingerichtete Support-Agent-Inbox oder Push-Infrastruktur.
+
+Im geprüften aktiven Zugangspfad wurde kein umfassendes Play-Billing-/Kaufprüfungs-/PRO-Entitlement-Produkt belegt. Frühere Architekturentwürfe mit `PRO`, Storekaufprüfung oder Pro-Offline-Caches sind keine Beschreibung eines aktivierten Angebots.
+
+Monetarisierung wird gesondert entschieden. Dieses Dokument führt weder Abo noch Einmalkauf, Paywall oder neue Testerbedingungen ein und hebt keine bestehenden Testerzusagen auf.
+
+## Offene Prüf- und Härtungspunkte
+
+- Aktuell deployte Regeln/Backend-Versionen müssen getrennt vom lokalen Arbeitsverzeichnis nachgewiesen werden.
+- Admin SDK umgeht Clientregeln: Web-/Function-Handler brauchen eigene Autorisierung und Eingabeprüfung.
+- ScanLab-JPEG-Neukodierung entfernt Metadaten, aber keine im Bild sichtbaren privaten Inhalte. Der optionale Katalogbild-Beitrag überträgt aktuell Originaldateibytes; eine allgemeine Metadatenfreiheit darf nicht zugesagt werden.
+- Ein fehlendes Community-Knowledge-Remote-Dokument entfernt nach gelesenem Clientpfad einen zuvor gespeicherten Cacheeintrag nicht zwingend. Sofortiger globaler Widerruf ist nicht belegt.
+- Rate-Limits, serverseitige Quoten, Monitoring und Attestierung sind pro Endpunkt zu prüfen, nicht aus vorhandenen Rules abzuleiten.
+- Ein begrenzter Quelltext-/Dateinamen-Secretscan ist keine vollständige Prüfung der Git-Historie oder sämtlicher lokaler Dateien.
+
+Konkrete Pfade, Regeltestgrenzen und Uploadunterschiede: [FIREBASE_SECURITY.md](../FIREBASE_SECURITY.md).

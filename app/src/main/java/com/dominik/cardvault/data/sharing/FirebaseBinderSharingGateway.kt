@@ -1,5 +1,6 @@
 package com.dominik.cardvault.data.sharing
 
+import android.content.Context
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
@@ -39,16 +40,26 @@ internal class FirebaseBinderSharingGateway internal constructor(
     private val session: BinderSharingSession,
     private val transport: BinderSharingTransport,
     private val timeoutMillis: Long = 15_000,
+    private val readiness: BinderSharingReadiness = BinderSharingReadiness { _, _ -> },
 ) : BinderSharingGateway {
-    constructor() : this(FirebaseSharingSession(FirebaseAuth.getInstance()), OkHttpSharingTransport)
+    constructor(context: Context) : this(
+        FirebaseSharingSession(FirebaseAuth.getInstance()), OkHttpSharingTransport,
+        readiness = PrivateBinderSharingReadiness(context.applicationContext),
+    )
 
     override suspend fun list(expectedUid: String, binderId: String): List<BinderShareSummary> =
-        perform(expectedUid, "GET", BinderSharingContract.listUrl(binderId), null) {
+        perform(expectedUid, "GET", BinderSharingContract.listUrl(binderId), null, retryMissingAfter = {
+            // A new local binder may not exist remotely yet. Only this 404 case
+            // waits for sync; existing links remain immediately manageable.
+            readiness.awaitReady(expectedUid, binderId)
+        }) {
             BinderSharingContract.parseList(it.status, it.body)
         }
 
     override suspend fun create(expectedUid: String, binderId: String, options: BinderShareOptions, displayName: String?, confirmed: Boolean): CreatedBinderShare =
-        perform(expectedUid, "POST", BinderSharingContract.ENDPOINT, BinderSharingContract.createPayload(binderId, options, displayName, confirmed)) {
+        perform(expectedUid, "POST", BinderSharingContract.ENDPOINT, BinderSharingContract.createPayload(binderId, options, displayName, confirmed), prepare = {
+            readiness.awaitReady(expectedUid, binderId)
+        }) {
             BinderSharingContract.parseCreated(it.status, it.body, options)
         }
 
@@ -57,16 +68,25 @@ internal class FirebaseBinderSharingGateway internal constructor(
             BinderSharingContract.parseRevoked(it.status, it.body)
         }
 
-    private suspend fun <T> perform(expectedUid: String, method: String, url: String, body: String?, parse: (BinderSharingResponse) -> T): T {
+    private suspend fun <T> perform(
+        expectedUid: String, method: String, url: String, body: String?,
+        prepare: suspend () -> Unit = {}, retryMissingAfter: (suspend () -> Unit)? = null,
+        parse: (BinderSharingResponse) -> T,
+    ): T {
         try {
-            return withTimeout(timeoutMillis) {
-                coroutineScope {
+            return coroutineScope {
+                BinderSharingContract.requireAccount(expectedUid, session.currentUid)
+                // Also covers the bounded sync wait, including away-and-back account changes.
+                val removeListener = session.observeAccount { uid ->
+                    if (uid != expectedUid) cancel(AccountChangedSharingCancellation())
+                }
+                try {
+                    currentCoroutineContext().ensureActive()
                     BinderSharingContract.requireAccount(expectedUid, session.currentUid)
-                    // Covers token acquisition and response reading, including away-and-back account changes.
-                    val removeListener = session.observeAccount { uid ->
-                        if (uid != expectedUid) cancel(AccountChangedSharingCancellation())
-                    }
-                    try {
+                    prepare()
+                    currentCoroutineContext().ensureActive()
+                    BinderSharingContract.requireAccount(expectedUid, session.currentUid)
+                    suspend fun request(allowMissing: Boolean): ParsedSharingResult<T>? = withTimeout(timeoutMillis) {
                         currentCoroutineContext().ensureActive()
                         BinderSharingContract.requireAccount(expectedUid, session.currentUid)
                         val token = session.token(expectedUid)
@@ -76,12 +96,21 @@ internal class FirebaseBinderSharingGateway internal constructor(
                         val response = transport.send(method, url, token, body)
                         currentCoroutineContext().ensureActive()
                         BinderSharingContract.requireAccount(expectedUid, session.currentUid)
+                        if (allowMissing && method == "GET" && response.status == 404) return@withTimeout null
                         val result = parse(response)
                         currentCoroutineContext().ensureActive()
                         BinderSharingContract.requireAccount(expectedUid, session.currentUid)
-                        result
-                    } finally { removeListener() }
-                }
+                        ParsedSharingResult(result)
+                    }
+                    val first = request(allowMissing = retryMissingAfter != null)
+                    if (first != null) first.value else {
+                        requireNotNull(retryMissingAfter).invoke()
+                        currentCoroutineContext().ensureActive()
+                        BinderSharingContract.requireAccount(expectedUid, session.currentUid)
+                        // Only GET retries, once. An ambiguous POST is never replayed.
+                        requireNotNull(request(allowMissing = false)).value
+                    }
+                } finally { removeListener() }
             }
         } catch (_: AccountChangedSharingCancellation) {
             currentCoroutineContext().ensureActive()
@@ -98,6 +127,8 @@ internal class FirebaseBinderSharingGateway internal constructor(
         }
     }
 }
+
+private data class ParsedSharingResult<T>(val value: T)
 
 private class AccountChangedSharingCancellation : CancellationException("Binder sharing account changed")
 

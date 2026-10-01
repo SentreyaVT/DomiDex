@@ -7,6 +7,21 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class BinderMasterSlotTest {
+    @Test fun rgbMewLettersStayInSeparateSlotsAndOwnedGreenDoesNotReplaceRedOrBlue() {
+        val references = listOf("R", "G", "B").map { letter ->
+            sourceCard("Holo").copy(
+                id = "rgb-$letter", name = "Mew", number = "$letter/RGB", set = "30 Jahre",
+                sourceSetId = "30th", sourceCardId = "30th-rgb-${letter.lowercase()}",
+            )
+        }
+        val ownedGreen = references[1].copy(entryId = 59L, quantity = 1, condition = "Nicht geprüft")
+        val slots = arrangeBinderCards("30 Jahre", listOf(ownedGreen), 161, references)
+        assertEquals(3, slots.size)
+        assertEquals(ownedGreen, slots.single { it?.number == "G/RGB" })
+        assertEquals(0, slots.single { it?.number == "R/RGB" }?.quantity)
+        assertEquals(0, slots.single { it?.number == "B/RGB" }?.quantity)
+    }
+
     @Test fun openIndexPlaceholderFollowsSourceDeclaredHoloAfterDetailLoading() {
         val clicked = sourceCard("Normal").copy(id = "sv03-001-normal")
         val detailed = sourceCard("Holo").copy(id = "sv03-001-source-print-id", marketExpansionId = "900")

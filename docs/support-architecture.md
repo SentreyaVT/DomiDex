@@ -1,34 +1,51 @@
-# CardVault Support-Architektur
+# DomiDex – Support, Datenschutzkontakt und Kontolöschung
 
-## Aktueller Stand
+Prüfstand: 1. Oktober 2026.
 
-Die App enthält eine bewusst deaktivierte E-Mail-Kontaktstelle und fachliche Verträge für eine spätere In-App-Support-Inbox. Die lokale Firebase-Konfigurationsdatei wurde für `com.dominik.cardvault` geprüft und bleibt von Git ausgeschlossen. Google-Services-Plugin, Firebase Authentication und Credential Manager sind eingebunden. Der Google-Login wird ausschließlich durch den sichtbaren Nutzer-Button gestartet und bestätigt zunächst nur die Identität; er vergibt keine Teamrechte. Es sind weder eine Betreiberadresse noch eine Google-UID oder Cloud-Geheimnisse im Quellcode eingebaut. Firestore und Push sind nicht aktiviert; es findet durch CardVault keine Support-Hintergrundübertragung statt.
+## Tatsächlich vorhandene Kontaktwege
 
-## Produktionsanforderung
+Die normale Android-Supportstelle ist **konfiguriert**, nicht deaktiviert. `ui/AppSupportConfig.kt` enthält den bestätigten öffentlichen Kontakt und die öffentliche Datenschutzerklärungs-URL. `ui/SettingsPrivacy.kt` öffnet einen Android-`ACTION_SENDTO`-Entwurf.
 
-Eine echte Inbox braucht einen externen, vom Betreiber kontrollierten Backend-Dienst mit:
+Der Nutzer prüft und sendet die E-Mail selbst. Das Öffnen der Mail-App sendet noch keine Nachricht und fügt keine vollständige Sammlung oder Diagnosedateien automatisch hinzu.
 
-- Google-OIDC-Anmeldung für Nutzer und Betreiber;
-- serverseitig gepflegten Rollen `USER`, `SUPPORT_AGENT`, `ADMIN`;
-- Zugriffskontrolle pro Supportfall und unveränderlichem Nachrichtenverlauf;
-- Push-Token-Registrierung nur nach Einwilligung sowie serverseitigem Versand;
-- Aufbewahrungs-, Lösch- und Datenschutzregeln;
-- Rate-Limits, Audit-Protokoll und verständlichen Offline-/Fehlerzuständen.
+Die lokale Firebase-/Google-Anmeldung sowie Collection-/Binder-Synchronisation sind hiervon unabhängig vorhanden. Die frühere Support-Dokumentation mit „Firestore nicht aktiviert“ ist deshalb überholt.
 
-Der Android-Client darf eine Adminrolle niemals aus einer E-Mail-Adresse oder lokalen Einstellung ableiten. Das Backend validiert das Google-ID-Token und liefert eine signierte/authoritative Rolle. Die konkrete Betreiber-E-Mail und Google-UID werden erst nach ausdrücklicher Nennung serverseitig zugeordnet.
+Kotlin-Quellen befinden sich unter `app/src/main/java/com/dominik/cardvault/`.
 
-## Rollenbasierte Oberfläche
+## Drei unterschiedliche Konfigurationen
 
-- Abgemeldete und normale Nutzer erhalten ausschließlich die normale CardVault- und eigene Supportansicht. Betreiber-/Teamnavigation, globale Inbox und Fallverwaltung werden nicht dargestellt.
-- `SUPPORT_AGENT` darf nach serverseitig bestätigter Rolle Inbox und Fallverwaltung sehen, aber keine administrative Konfiguration.
-- `ADMIN` darf zusätzliche Verwaltungsbereiche sehen. Welche einzelne Aktion erlaubt ist, entscheidet trotzdem immer das Backend anhand des aktuellen Tokens.
-- Die UI-Fähigkeitsmatrix ist ausschließlich UX. Ausgeblendete Schaltflächen sind keine Sicherheitsgrenze. Direkte Requests, manipulierte Clients und abgelaufene Rollen werden durch Firebase-Regeln bzw. Backend-Autorisierung abgewiesen.
-- Es gibt keinen lokalen Adminschalter und keine Ableitung aus E-Mail, Anzeigename, Build-Variante oder Gerätezustand.
+| Bereich | Nachgewiesener Stand |
+| --- | --- |
+| `AppSupportConfig` | öffentlicher Support-/Datenschutzkontakt und Community-Verweis konfiguriert |
+| `ProjectSupportConfig` | Ziel leer; kein dadurch aktivierter Finanzierungs-/Unterstützungskanal |
+| `OwnerSupportConfig` | `isSecureBackendConfigured = false`; kein konfigurierter privilegierter Fernsupport |
 
-## Kleinster nächster Einrichtungsschritt
+Das leere zweite bzw. deaktivierte dritte Objekt bedeutet nicht, dass die normale Support-E-Mail nicht funktioniert.
 
-Der Google-Anbieter, der Debug-SHA-Fingerprint und der Web-Client wurden für den aktuellen lokalen Test konfiguriert. Eine spätere Release-Signatur benötigt ihren eigenen Fingerprint. Die Admin-Zuordnung erfolgt erst später serverseitig anhand einer ausdrücklich genannten Betreiberidentität; nie anhand einer lokalen E-Mail-Abfrage. Firestore-Regeln, Backend-Rollen und Push erfordern eine gesonderte Datenschutz-, Kosten- und Betriebsfreigabe. Geheimnisse gehören nicht in die App. Bis dahin bleibt die Inbox sichtbar als nicht konfiguriert und es wird keine Produktionsfunktion vorgetäuscht.
+Der Community-Verweis im gelesenen Android-Code weicht vom später bestätigten dauerhaften Discord-Link ab. Das ist ein gesonderter Inhaltsabgleich für einen künftigen Änderungsauftrag; dieser Dokumentationslauf verändert die App-Konfiguration nicht.
 
-## Datenschutz
+## Kontolöschung
 
-Sammlung, Fotos und Diagnoseinformationen werden nie automatisch an den Support gesendet. Eine spätere Diagnosebeilage ist standardmäßig aus und muss pro Anfrage sichtbar bestätigt werden. Der normale E-Mail-Weg verwendet ausschließlich einen Android-`ACTION_SENDTO`-Entwurf.
+Der Android-Dialog erklärt die Konsequenzen, verlangt eine Bestätigung zur Vorbereitung und öffnet anschließend eine **E-Mail-Löschanfrage**. Er löscht weder das Firebase-Konto noch lokale Daten selbst.
+
+Im separaten Web-Projekt DomiDex-Web existiert außerdem `/api/account/delete` mit serverseitigen Prüfungen und Löschablauf. „Kontolöschung ist nirgendwo implementiert“ wäre falsch; ebenso falsch wäre die Behauptung, der Android-Maildialog löse bereits diesen Ablauf automatisch aus.
+
+Eine vollständige Löschung betrifft je nach vorhandenen Daten Auth-Konto, Sammlung/Binder, zugeordnete Dateien und Berichte. Allgemeine Referenz-/Scannerdaten sind nicht pauschal Eigentum eines einzelnen Kontos. Umfang, Fristen und tatsächlicher Vollzug müssen am Backend und an den Datenschutzinformationen nachvollziehbar geprüft werden.
+
+## Vorhandene Verträge, keine fertige Inbox
+
+`support/SupportContracts.kt` definiert `SupportBackend`, Fall-/Nachrichtenmodelle, Rollen `USER`, `SUPPORT_AGENT`, `ADMIN` und Push-Token-Methoden. Das ist ein vorbereiteter Vertrag, kein Nachweis einer aktiven In-App-Inbox, eines Fall-Backends oder versandter Push-Nachrichten.
+
+Die Firestore-Regel `supportRequests` erlaubt nur eng begrenzte requestergebundene Metadaten. Sie ist keine vollständige Supportkonversation und kein Zugang zu Kamera, Bildschirmübertragung, Rohlogs oder Fernsteuerung.
+
+Für einen künftig ausdrücklich beauftragten Dienst wären serverseitige Rollenprüfung, Zugriff pro Fall, Aufbewahrung/Löschung, Rate-Limits, Audit und verständliches Offlineverhalten gesondert erforderlich. Hierdurch wird dieser Dienst weder geplant priorisiert noch eingerichtet.
+
+## Datenschutzgrenzen
+
+- Support-E-Mail, Sammlungssync, ScanLab-Fotoupload und Community-Knowledge-Opt-in bleiben getrennte Zwecke.
+- Eine Testerrolle oder Testervereinbarung aktiviert keinen Fotoanhang.
+- Authentifizierung bestätigt Identität; eine Team-/Adminberechtigung kommt ausschließlich vom autorisierten Backend.
+- Diagnose- oder Bildbeilagen benötigen einen konkreten, sichtbaren und begrenzten Übermittlungsschritt.
+- Die öffentliche Datenschutzerklärung liegt außerhalb dieses Android-Repositories. Der vorhandene ältere „Online-Text noch nicht vollständig“-Hinweis in der Android-UI ist kein aktuelles rechtliches Gutachten und muss separat gegen die tatsächliche Website abgeglichen werden.
+
+Dieses Dokument ändert weder öffentliche Rechtstexte noch Betreiberinformationen, Berechtigungen oder bestehende Testerzusagen.

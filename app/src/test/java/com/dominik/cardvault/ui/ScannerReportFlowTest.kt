@@ -10,6 +10,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ScannerReportFlowTest {
+    @Test fun `both privacy surfaces name the explicitly authorized lab reviewers`() {
+        val reviewers = "Administratoren und ausdrücklich freigeschaltete Scanner-Lab-Prüfer"
+        for (message in listOf(SCANNER_REPORT_PRIVACY_DETAILS, SCANNER_REPORT_UPLOAD_CONSENT)) {
+            assertTrue(message.contains(reviewers))
+            assertFalse(message.contains("Nur Administratoren können"))
+        }
+        assertTrue(SCANNER_REPORT_UPLOAD_CONSENT.contains("Mit „Hochladen“ stimmst du zu"))
+        assertTrue(SCANNER_REPORT_UPLOAD_CONSENT.contains("Analysekennung"))
+    }
+
     private fun scan(origin: ScanCaptureOrigin = ScanCaptureOrigin.MANUAL) = QueuedCardScan(
         id = "test-scan", file = File("capture.jpg"), qualityEligible = false,
         origin = origin, stage = ScanPipelineStage.MANUAL_REVIEW,

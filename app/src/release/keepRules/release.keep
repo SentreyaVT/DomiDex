@@ -1,0 +1,18 @@
+# Conservative first R8 rollout for the closed alpha. Identifier minification
+# remains enabled and produces the genuine mapping bundled for Google Play.
+# Defer code deletion/inlining and resource shrinking to a separate tested pass.
+-dontshrink
+-dontoptimize
+
+# OpenCV's prebuilt JNI library resolves this exception by its Java class name.
+# Its AAR has no consumer keep rules; native method names are covered by AGP.
+-keep class org.opencv.core.CvException {
+    public <init>(java.lang.String);
+}
+
+# grpc-okhttp 1.62.2 exposes legacy OkHttp 2 overloads with a compileOnly
+# dependency. Neither DomiDex nor Firestore uses them; default TLS uses gRPC's
+# own internal types. Suppress only these verified optional compatibility types.
+-dontwarn com.squareup.okhttp.CipherSuite
+-dontwarn com.squareup.okhttp.ConnectionSpec
+-dontwarn com.squareup.okhttp.TlsVersion

@@ -6,6 +6,8 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dominik.cardvault.data.local.CardVaultDatabase
 import com.dominik.cardvault.data.local.GUEST_OWNER_UID
+import com.dominik.cardvault.data.sync.PRICE_SELECTION_VALUE_FIELDS
+import com.dominik.cardvault.data.sync.parsePriceSelectionSidecar
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -30,6 +32,7 @@ class UserBackupStore(private val database: CardVaultDatabase, private val owner
                 put("private_binders", rows(db, "SELECT * FROM private_binders WHERE ownerUid=? AND deletedAtEpochMillis IS NULL", ownerUid))
                 put("private_binder_placements", rows(db, "SELECT p.* FROM private_binder_placements p JOIN private_binders b ON b.ownerUid=p.ownerUid AND b.id=p.binderId JOIN collection_entries e ON e.id=p.collectionEntryId AND e.ownerUid=p.ownerUid WHERE p.ownerUid=? AND p.deletedAtEpochMillis IS NULL AND b.deletedAtEpochMillis IS NULL AND e.deletedAtEpochMillis IS NULL", ownerUid))
                 put("collection_layout", rows(db, "SELECT l.* FROM collection_layout l JOIN collection_entries e ON e.id=l.collectionEntryId WHERE l.ownerUid=? AND e.deletedAtEpochMillis IS NULL", ownerUid))
+                put("collection_price_selections", rows(db, "SELECT p.* FROM collection_price_selections p JOIN collection_entries e ON e.id=p.collectionEntryId AND e.ownerUid=p.ownerUid WHERE p.ownerUid=? AND e.deletedAtEpochMillis IS NULL", ownerUid))
                 put("grading_analyses", rows(db, "SELECT g.* FROM grading_analyses g JOIN collection_entries e ON e.id=g.collectionEntryId WHERE e.ownerUid=? AND e.deletedAtEpochMillis IS NULL", ownerUid))
             })
         }.toString()
@@ -41,6 +44,10 @@ class UserBackupStore(private val database: CardVaultDatabase, private val owner
         require(root.getString("format") == FORMAT && root.getInt("version") == VERSION) { "Nicht unterstützte Backupversion." }
         require(root.getInt("databaseVersion") <= database.openHelper.readableDatabase.version) { "Das Backup stammt aus einer neueren DomiDex-Version." }
         val tables = root.getJSONObject("tables")
+        // v26 backups contain the same seven business tables but predate this additive sidecar.
+        if (root.getInt("databaseVersion") < 13 && !tables.has("collection_price_selections")) {
+            tables.put("collection_price_selections", JSONArray())
+        }
         require(tables.keys().asSequence().toSet() == TABLES.toSet()) { "Unvollständiges Backup." }
         var count = 0
         TABLES.forEach { table ->
@@ -64,6 +71,7 @@ class UserBackupStore(private val database: CardVaultDatabase, private val owner
                     require(row.getLong("slotPosition") in 0..899_999)
                     require(row.getDouble("holoIntensity") in 0.0..1.0)
                 }
+                if (table == "collection_price_selections") validatePriceSelection(row)
             }
         }
         validateRelations(tables)
@@ -152,6 +160,15 @@ class UserBackupStore(private val database: CardVaultDatabase, private val owner
                 val syncId = scalar(db, "SELECT syncId FROM collection_entries WHERE id=?", entryId)!!
                 queuePrivate(db, "LAYOUT", syncId, row.getLong("updatedAtEpochMillis"))
             }
+            each(tables, "collection_price_selections") { row ->
+                val entryId = entries.getValue(row.getLong("collectionEntryId"))
+                // A merge never overwrites a later selection/clear on an existing owned entry.
+                if (entryId !in newEntries) return@each
+                val syncId = scalar(db, "SELECT syncId FROM collection_entries WHERE id=?", entryId)!!
+                row.put("collectionEntryId", entryId); row.put("entrySyncId", syncId); localize(row)
+                insert(db, "collection_price_selections", row)
+                queuePrivate(db, "PRICE_SELECTION", syncId, row.getLong("updatedAtEpochMillis"))
+            }
             each(tables, "grading_analyses") { row ->
                 val entryId = entries.getValue(row.getLong("collectionEntryId"))
                 if (entryId !in newEntries) return@each
@@ -191,10 +208,19 @@ class UserBackupStore(private val database: CardVaultDatabase, private val owner
         unique("private_binder_placements", "id")
         val slots = mutableSetOf<String>(); val members = mutableSetOf<String>()
         unique("collection_layout", "collectionEntryId")
+        unique("collection_price_selections", "collectionEntryId")
+        unique("collection_price_selections", "entrySyncId")
+        val entryRows = mutableMapOf<Long, JSONObject>()
         each(tables, "collection_entries") {
+            entryRows[it.getLong("id")] = it
             require(it.getString("cardId") in cards)
             require(it.getString("binderId") == "inbox" || it.getString("binderId") in setBinders) { "Set-Binder fehlt im Backup." }
             require(it.getString("syncId").isNotBlank() && it.getString("syncId") != "pending") { "Sammlungsidentität fehlt im Backup." }
+        }
+        each(tables, "collection_price_selections") { row ->
+            val entry = entryRows[row.getLong("collectionEntryId")]
+            require(entry != null && entry.getString("syncId") == row.getString("entrySyncId") &&
+                entry.getString("ownerUid") == row.getString("ownerUid")) { "Widersprüchliche Preiswahl im Backup." }
         }
         each(tables, "private_binder_placements") {
             require(it.getString("binderId") in binders && it.getLong("collectionEntryId").toString() in entries)
@@ -207,7 +233,16 @@ class UserBackupStore(private val database: CardVaultDatabase, private val owner
     companion object {
         const val FORMAT = "domidex.collection.backup"
         const val VERSION = 2
-        private val TABLES = listOf("catalog_cards", "binders", "collection_entries", "private_binders", "private_binder_placements", "collection_layout", "grading_analyses")
+        private val TABLES = listOf("catalog_cards", "binders", "collection_entries", "private_binders", "private_binder_placements", "collection_layout", "collection_price_selections", "grading_analyses")
+        private fun validatePriceSelection(row: JSONObject) {
+            require(row.get("cleared") is Number && row.getDouble("cleared") in setOf(0.0, 1.0))
+            val data = PRICE_SELECTION_VALUE_FIELDS.associateWith { key -> row.get(key).takeUnless { it == JSONObject.NULL } } +
+                mapOf("schemaVersion" to 1L, "revision" to 1L, "lastMutationId" to "backup-validation",
+                    "ownerUid" to row.getString("ownerUid"), "entrySyncId" to row.getString("entrySyncId"),
+                    "updatedAtClient" to row.get("updatedAtEpochMillis"), "cleared" to (row.getInt("cleared") == 1))
+            require(parsePriceSelectionSidecar(data, row.getString("ownerUid"), row.getString("entrySyncId"),
+                row.getLong("collectionEntryId")) != null) { "Ungültige Preiswahl im Backup." }
+        }
         private fun each(tables: JSONObject, table: String, action: (JSONObject) -> Unit) {
             val list = tables.getJSONArray(table)
             for (i in 0 until list.length()) action(list.getJSONObject(i))

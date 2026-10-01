@@ -3,6 +3,7 @@ package com.dominik.cardvault.ui
 import com.dominik.cardvault.data.catalog.PokemonPrintVariant
 import com.dominik.cardvault.data.catalog.PokemonSet
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
+import com.dominik.cardvault.data.catalog.supplementalThirtyYearsCards
 import com.dominik.cardvault.model.CardLanguage
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionCard
@@ -17,6 +18,45 @@ import kotlinx.coroutines.runBlocking
 
 /** All prices and auxiliary product ids are deterministic local fixtures, never live quotes. */
 class SourceDeclaredCardmarketLinkerTest {
+    @Test fun rgbMewUsesItsExactColorProductWithoutBorrowingNormalOrAnotherColorPrice() {
+        val set = PokemonSet("30th", "30 Jahre", "Mega-Entwicklung", 128, 161, "", null, "30C")
+        val rgbCards = supplementalThirtyYearsCards(set)
+        val candidates = listOf(
+            product(907672L, "Mew [Psychic | 30C]", "6601", 1.0),
+            product(909509L, "Mew [Psychic | 30C]", "6601", null),
+            product(909510L, "Mew [Psychic | 30C]", "6601", null),
+            product(909511L, "Mew [Psychic | 30C]", "6601", null),
+        )
+        val expectedProducts = mapOf("R/RGB" to 909509L, "G/RGB" to 909510L, "B/RGB" to 909511L)
+        for (card in rgbCards) {
+            val linked = visualCardmarketProducts(card, rgbCards, candidates, "6601").single()
+            assertEquals(expectedProducts[card.number], linked.productId)
+            assertNull(linked.trendPriceEur)
+            val selected = catalogResultForVisualCard(card, linked)
+            assertEquals(card.id, selected.sourceCardId)
+            assertEquals(card.number, selected.collectorNumber)
+            assertNull(selected.trendPriceEur)
+            assertTrue(selected.hasMarketProduct)
+            val otherColors = candidates.filterNot { it.productId == expectedProducts[card.number] }
+                .map { it.copy(trendPriceEur = 2000.0) }
+            assertTrue(visualCardmarketProducts(card, rgbCards, otherColors, "6601").isEmpty())
+        }
+    }
+
+    @Test fun anniversaryMewPromoUsesItsOwnVerifiedIdAndCanRemainHonestlyUnpriced() {
+        val set = PokemonSet("mep", "MEP Black Star Promos", "Mega-Entwicklung", 0, 105, "", null, "MEP")
+        val cards = supplementalThirtyYearsCards(set)
+        val mew = cards.single { it.number == "105" }
+        val linked = visualCardmarketProducts(mew, cards, listOf(
+            product(907672L, "Mew [Psychic | 30C]", "6601", 1.0),
+            product(895621L, "Mew [Psychic | MEP]", "6232", null),
+        )).single()
+        assertEquals(895621L, linked.productId)
+        assertEquals("105", linked.collectorNumber)
+        assertNull(linked.trendPriceEur)
+        assertEquals(mew.id, catalogResultForVisualCard(mew, linked).sourceCardId)
+    }
+
     private val paldea = PokemonVisualCard(
         "sv08.5-137", "Freunde aus Paldea", "137", "Ultra Rare", "small", "large",
         PokemonSet("sv08.5", "Prismatische Entwicklungen", "Test", 131, 180, "", null, null),
@@ -127,6 +167,17 @@ class SourceDeclaredCardmarketLinkerTest {
 
         assertTrue(binderReferenceCardmarketProducts(slot.copy(sourceSetId = "other-set"), paldea, listOf(paldea), candidates).isEmpty())
         assertTrue(binderReferenceCardmarketProducts(slot.copy(sourceCardId = "sv08.5-001"), paldea, listOf(paldea), candidates).isEmpty())
+    }
+
+    @Test fun printedCollectorMustAgreeIncludingAnExplicitDenominator() {
+        val slot = reference(paldea)
+        val candidates = listOf(product(805531L, "Friends in Paldea", "5944", 24.39))
+        assertTrue(binderReferenceCardmarketProducts(slot.copy(number = "138/131"), paldea, listOf(paldea), candidates).isEmpty())
+        assertTrue(binderReferenceCardmarketProducts(slot.copy(number = "137/132"), paldea, listOf(paldea), candidates).isEmpty())
+        assertEquals(805531L, binderReferenceCardmarketProducts(slot.copy(number = "0137/0131"), paldea, listOf(paldea), candidates).single().productId)
+        val classic = paldea.copy(number = "89/149", set = paldea.set.copy(id = "30th-c", printedTotal = 0), id = "30th-c-017")
+        assertTrue(referenceMatchesSourceCard(reference(classic), classic))
+        assertFalse(referenceMatchesSourceCard(reference(classic).copy(number = "89/148"), classic))
     }
 
     @Test fun oneCharacterCardNameLoadsItsDeclaredProductWithoutNameSearch() = runBlocking {

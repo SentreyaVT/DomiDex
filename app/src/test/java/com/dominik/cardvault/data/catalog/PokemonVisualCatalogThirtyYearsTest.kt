@@ -30,7 +30,7 @@ class PokemonVisualCatalogThirtyYearsTest {
 
         val anniversarySets = sets.filter { it.id.startsWith("30th") }
         assertEquals(listOf("30th", "30th-c"), anniversarySets.map { it.id })
-        assertEquals(listOf(158, 30), anniversarySets.map { it.total })
+        assertEquals(listOf(161, 30), anniversarySets.map { it.total })
         assertTrue(anniversarySets.all { it.logoUrl.orEmpty().contains("30th_logo_169_de.png") })
         val classic = catalog.cards(sets.single { it.id == "30th-c" }).single()
         assertEquals("89/149", classic.number)

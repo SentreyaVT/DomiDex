@@ -1,5 +1,7 @@
 # DomiDex – Google Play Internal Test: Übergabe
 
+> Historischer Bericht / Entwurf des im Titel genannten Stands; keine aktuelle Release- oder Produktfreigabe. Maßgeblich sind [Projektstatus vom 01.10.2026](PROJECT_STATUS.md) und [Versionshistorie](RELEASE_HISTORY.md). Aussagen zu R8, ScanLab/Knowledge, Grading, Cloud, Test-Tracks und Geschäftsmodell dürfen nicht ungeprüft übernommen werden. Alte lokale Artefaktverweise können außerhalb der Arbeitsstation fehlen.
+
 > Historischer UNSIGNED-Vorbereitungslauf. Aktuelle Signierung, technische Freigabe und Live-Website-Befunde stehen in [GOOGLE_PLAY_SIGNED_RC_2026-09-04.md](GOOGLE_PLAY_SIGNED_RC_2026-09-04.md). Die unten beschriebene UNSIGNED-Datei ist nicht die finale Upload-Datei.
 
 Stand: 04.09.2026. Nur Vorbereitung, keine Veröffentlichung. Keine App-Funktion wurde in diesem Vorbereitungslauf geändert. Der zuvor erarbeitete Stand einschließlich Portrait und manuell bestätigtem ScanLab-Upload wurde unverändert gebaut.
@@ -36,21 +38,21 @@ Interne Tests dürfen laut Google vor vollständigem App-Setup beginnen; ein feh
 | debuggable | `false` im Release; `BuildConfig.DEBUG=false` |
 | R8 / Minifizierung | deaktiviert (`optimization.enable=false`); unverändert |
 
-Konfiguration: [app/build.gradle.kts](C:/Users/Dominik/AndroidStudioProjects/CardVault/app/build.gradle.kts:31). Portrait steht in [AndroidManifest.xml](C:/Users/Dominik/AndroidStudioProjects/CardVault/app/src/main/AndroidManifest.xml:22). Kein Landscape-Lock und keine neue Rotation-/EXIF-Logik eingeführt. Der Phone-AVD hält bei 0/90/180/270 Grad dieselbe Activity in Portrait. Android kann auf großen Displays feste Ausrichtungen übergehen; die bestehende Lint-Warnung dazu ist kein getesteter Tablet-Nachweis und wurde nicht durch einen Umbau umgangen.
+Konfiguration: app/build.gradle.kts (`app/build.gradle.kts:31`, lokaler Quell-/Artefaktverweis). Portrait steht in AndroidManifest.xml (`app/src/main/AndroidManifest.xml:22`, lokaler Quell-/Artefaktverweis). Kein Landscape-Lock und keine neue Rotation-/EXIF-Logik eingeführt. Der Phone-AVD hält bei 0/90/180/270 Grad dieselbe Activity in Portrait. Android kann auf großen Displays feste Ausrichtungen übergehen; die bestehende Lint-Warnung dazu ist kein getesteter Tablet-Nachweis und wurde nicht durch einen Umbau umgangen.
 
 Der manuelle ScanLab-Dialog benötigt weiterhin die einzelne Freigabe. Alte Dauereinwilligung startet keinen automatischen Foto-Upload; auch keine Zwei-Fehlscan-Pflicht aktiviert. Separat vorhandene Scan-Evidence ohne Foto bleibt unverändert und wird in F transparent aufgeführt.
 
 ## C. AAB
 
 - Dateiname: **DomiDex-1.0-pre-beta-v17-UNSIGNED.aab**
-- Vollständiger Pfad: [Bundle](C:/Users/Dominik/AndroidStudioProjects/CardVault/releases/google-play-internal-2026-09-04/DomiDex-1.0-pre-beta-v17-UNSIGNED.aab)
+- Vollständiger Pfad: Bundle (`releases/google-play-internal-2026-09-04/DomiDex-1.0-pre-beta-v17-UNSIGNED.aab`, lokaler Quell-/Artefaktverweis)
 - Größe: **35.743.776 Bytes**, rund 35,74 MB / 34,09 MiB. Das ist Bundle-Dateigröße, nicht Play-Downloadgröße.
 - SHA-256: `8F9EDE624AE260C8544AF63A94125ECF2AD547240EA12CFA9558B6C81FE923CF`
 - Signing: **UNSIGNED**, `jarsigner -verify` meldet nicht signiert; keine Signaturdateien im Bundle.
 - Play App Signing: reguläres AAB-Format grundsätzlich geeignet; noch **nicht eingerichtet oder durch Play angenommen**. Der fehlende Upload-Schlüssel ist ein harter Upload-Blocker.
-- Unverändertes Gradle-Original: [app-release.aab](C:/Users/Dominik/AndroidStudioProjects/CardVault/app/build/outputs/bundle/release/app-release.aab); Kopie hat denselben Hash.
+- Unverändertes Gradle-Original: app-release.aab (`app/build/outputs/bundle/release/app-release.aab`, lokaler Quell-/Artefaktverweis); Kopie hat denselben Hash.
 
-`keystore.properties` fehlt. [keystore.properties.example](C:/Users/Dominik/AndroidStudioProjects/CardVault/keystore.properties.example) enthält ausschließlich Platzhalter. Schlüssel, Passwörter und echte lokale Konfiguration gehören weder in Git noch in Chat/Store-Listing. Die vorhandene Gradle-Konfiguration fällt ohne Release-Schlüssel bewusst nicht auf eine Debug-Signatur zurück.
+`keystore.properties` fehlt. keystore.properties.example (`keystore.properties.example`, lokaler Quell-/Artefaktverweis) enthält ausschließlich Platzhalter. Schlüssel, Passwörter und echte lokale Konfiguration gehören weder in Git noch in Chat/Store-Listing. Die vorhandene Gradle-Konfiguration fällt ohne Release-Schlüssel bewusst nicht auf eine Debug-Signatur zurück.
 
 Nach Freigabe: Schlüsselbestand prüfen, Upload-Key einrichten und sichern, signiert neu bauen, Signatur/Zertifikat und neue SHA-256 dokumentieren. Play App Signing signiert die installierte App mit dem App-Signing-Key; dieser ist vom Upload-Key zu unterscheiden. Das Play-Zertifikat muss für Google-/Firebase-Anmeldung passen. Google dokumentiert dafür insbesondere den SHA-1-Fingerprint; SHA-256 des Zertifikats ebenfalls dokumentieren und für verwendete Firebase-/Integritätsdienste prüfen. Keine Firebase-Einstellung wurde jetzt geändert. [Android: App-Signierung](https://developer.android.com/studio/publish/app-signing), [Firebase: Google-Anmeldung](https://firebase.google.com/docs/auth/android/google-signin)
 
@@ -75,9 +77,9 @@ Noch kein fertiges Listingpaket:
 - Featuregrafik: 1024×500 JPEG oder RGB-PNG ohne Alpha fehlt. Keine generierte Web-Designreferenz als Android-Screenshot verwenden.
 - Rechte an Marken-/Kartenmotiven und personenbezogenen Bildinhalten vor Verwendung bestätigen.
 
-Exakte Dateien, Maße und Sichtprüfung: [Asset-/Website-Bericht](C:/Users/Dominik/AndroidStudioProjects/CardVault/docs/PLAY_ASSETS_AND_WEBSITE_2026-09-04.md). Formate nach [Google: Vorschau-Assets](https://support.google.com/googleplay/android-developer/answer/9866151?hl=en). Ein vollständiges Listing ist von der anfänglichen Internal-Test-Einrichtung zu unterscheiden.
+Exakte Dateien, Maße und Sichtprüfung: [Asset-/Website-Bericht](PLAY_ASSETS_AND_WEBSITE_2026-09-04.md). Formate nach [Google: Vorschau-Assets](https://support.google.com/googleplay/android-developer/answer/9866151?hl=en). Ein vollständiges Listing ist von der anfänglichen Internal-Test-Einrichtung zu unterscheiden.
 
-Fertige deutsche Textvorschläge für Kurzbeschreibung, vollständige Beschreibung, Pre-Beta-/Tester-Hinweise und Versionshinweise: [Store-Texte](C:/Users/Dominik/AndroidStudioProjects/CardVault/docs/GOOGLE_PLAY_STORE_TEXT_DE_2026-09-04.md). Nur aktuell vorhandene Funktionen, kein KI-/Grading- oder Vollständigkeitsversprechen. Keine dauerhafte Kostenfreiheit zugesagt.
+Fertige deutsche Textvorschläge für Kurzbeschreibung, vollständige Beschreibung, Pre-Beta-/Tester-Hinweise und Versionshinweise: [Store-Texte](GOOGLE_PLAY_STORE_TEXT_DE_2026-09-04.md). Nur aktuell vorhandene Funktionen, kein KI-/Grading- oder Vollständigkeitsversprechen. Keine dauerhafte Kostenfreiheit zugesagt.
 
 ## E. WEBSITE / LEGAL
 
@@ -96,7 +98,7 @@ Keine Website-, Firebase-Regel-, Auth-, Hosting- oder Produktionsänderung ausge
 
 ## F. DATA SAFETY
 
-Vollständige technische Matrix mit Quellen, Zweck, Optionalität, Empfängern, TLS und Löschgrenzen: [Data-Safety-Bericht](C:/Users/Dominik/AndroidStudioProjects/CardVault/docs/PLAY_DATA_SAFETY_TECHNICAL_2026-09-04.md). Nicht ungeprüft als verbindliche Formularantwort abschicken.
+Vollständige technische Matrix mit Quellen, Zweck, Optionalität, Empfängern, TLS und Löschgrenzen: [Data-Safety-Bericht](PLAY_DATA_SAFETY_TECHNICAL_2026-09-04.md). Nicht ungeprüft als verbindliche Formularantwort abschicken.
 
 | Datengruppe | Erhebung / Zweck / Freiwilligkeit | Löschung und Weitergabe |
 | --- | --- | --- |
@@ -168,9 +170,9 @@ Clean-Neubau: `:app:bundleRelease`, `:app:assembleRelease`, gefiltertes `:app:te
 
 Binder-Identität, manuelle Nummernpositionen und Schutz bestehender Karten sind durch die gezielten Unit-/UI-Tests abgedeckt; kein neues Binder-/Room-/Varianten-Refactoring vorgenommen.
 
-Lint: **0 Errors/Fatals, 146 Warnungen und 2 Hinweise**. Hauptgruppen: ungenutzte Ressourcen, KTX-/Dependency-/Icon-/EXIF-Hinweise. Zusätzlich CredentialManager-Exception-Hinweis und Hinweis zur festen Orientation auf großen Geräten. Nicht als „warnungsfrei“ deklarieren und in diesem Vorbereitungslauf keine fachfremde Bereinigung starten. [Lint-Bericht](C:/Users/Dominik/AndroidStudioProjects/CardVault/app/build/reports/lint-results-release.html)
+Lint: **0 Errors/Fatals, 146 Warnungen und 2 Hinweise**. Hauptgruppen: ungenutzte Ressourcen, KTX-/Dependency-/Icon-/EXIF-Hinweise. Zusätzlich CredentialManager-Exception-Hinweis und Hinweis zur festen Orientation auf großen Geräten. Nicht als „warnungsfrei“ deklarieren und in diesem Vorbereitungslauf keine fachfremde Bereinigung starten. Lint-Bericht (`app/build/reports/lint-results-release.html`, lokaler Quell-/Artefaktverweis)
 
-Paket/Manifest/Secret-/ELF-/ZIP-Prüfungen siehe C. Testberichte: [JVM-HTML](C:/Users/Dominik/AndroidStudioProjects/CardVault/app/build/reports/tests/testDebugUnitTest/index.html).
+Paket/Manifest/Secret-/ELF-/ZIP-Prüfungen siehe C. Testberichte: JVM-HTML (`app/build/reports/tests/testDebugUnitTest/index.html`, lokaler Quell-/Artefaktverweis).
 
 ### Grenzen
 

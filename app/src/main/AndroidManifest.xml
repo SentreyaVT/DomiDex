@@ -17,6 +17,27 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.CardVault">
         <activity
+            android:name=".SharedBinderActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:launchMode="singleTop"
+            android:persistableMode="persistNever"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.CardVault">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <!-- The activity additionally validates the complete canonical URI. -->
+                <data
+                    android:scheme="https"
+                    android:host="domidex.web.app"
+                    android:pathPrefix="/share/" />
+            </intent-filter>
+        </activity>
+        <activity
             android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"

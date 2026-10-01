@@ -6,9 +6,9 @@
     <string name="nav_settings">Settings</string>
     <string name="nav_collection">Sammlung</string>
     <string name="nav_grading">Zustand</string>
-    <string name="dashboard_eyebrow">DomiDex</string>
+    <string name="dashboard_eyebrow">Willkommen bei DomiDex</string>
     <string name="dashboard_title">Deine Sammlung</string>
-    <string name="dashboard_subtitle">Deine Karten. Dein Wert.</string>
+    <string name="dashboard_subtitle">Deine Lieblingskarten. Alles an einem Ort.</string>
     <string name="catalog_growth_note">Katalog und Inhalte wachsen schrittweise weiter. Dein lokaler Bestand bleibt dabei erhalten · Inhaltsstand: %1$s.</string>
     <string name="arrival_private_badge">DEIN PRIVATER TRESOR</string>
     <string name="arrival_title">Willkommen bei DomiDex</string>

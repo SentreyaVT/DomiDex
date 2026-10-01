@@ -1,5 +1,7 @@
 # DomiDex – deutsche Play-Textvorschläge
 
+> Historischer Bericht / Entwurf des im Titel genannten Stands; keine aktuelle Release- oder Produktfreigabe. Maßgeblich sind [Projektstatus vom 01.10.2026](PROJECT_STATUS.md) und [Versionshistorie](RELEASE_HISTORY.md). Aussagen zu R8, ScanLab/Knowledge, Grading, Cloud, Test-Tracks und Geschäftsmodell dürfen nicht ungeprüft übernommen werden. Alte lokale Artefaktverweise können außerhalb der Arbeitsstation fehlen.
+
 Stand: 04.09.2026. Entwürfe zur manuellen Freigabe, nichts veröffentlicht. App-Name: **DomiDex**, Sprache: **de-DE**, Typ: **App**, empfohlene Kategorie: **Produktivität**. Interne Pre-Beta, kein öffentlicher Release. Aktuell privat entwickeltes, werbefreies Projekt; keine Zusage dauerhaft kostenloser oder dauerhaft nichtkommerzieller Verfügbarkeit.
 
 ## Kurze Beschreibung

@@ -200,7 +200,35 @@ data class CollectionLayoutEntity(
     @ColumnInfo(defaultValue = "0") val remoteRevision: Long = 0L,
 )
 
-/** Durable, coalesced mutations for private binder metadata, placements and set visibility. */
+/** Explicit price choice lives outside collection_entries so old clients cannot overwrite it. */
+@Entity(
+    tableName = "collection_price_selections",
+    foreignKeys = [ForeignKey(entity = CollectionEntryEntity::class, parentColumns = ["id"], childColumns = ["collectionEntryId"], onDelete = ForeignKey.CASCADE)],
+    indices = [Index(value = ["ownerUid", "entrySyncId"], unique = true)],
+)
+data class CollectionPriceSelectionEntity(
+    @PrimaryKey val collectionEntryId: Long,
+    val ownerUid: String,
+    val entrySyncId: String,
+    val cleared: Boolean,
+    val sourceSetId: String? = null,
+    val sourceCardId: String? = null,
+    val collectorNumber: String? = null,
+    val finish: String? = null,
+    val variant: String? = null,
+    val language: String? = null,
+    val productId: Long? = null,
+    val metric: String? = null,
+    val amountMinor: Long? = null,
+    val currency: String? = null,
+    val sourceAt: Long? = null,
+    val selectedAt: Long? = null,
+    val updatedAtEpochMillis: Long,
+    @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val syncState: String = SYNC_LOCAL_ONLY,
+    @ColumnInfo(defaultValue = "0") val remoteRevision: Long = 0L,
+)
+
+/** Durable, coalesced mutations for private binder metadata, placements and user sidecars. */
 @Entity(
     tableName = "private_binder_sync_outbox",
     indices = [Index(value = ["ownerUid", "createdAtEpochMillis"])],
@@ -440,6 +468,14 @@ data class CatalogSearchProjection(
     val holoMarketValueMinor: Long?,
     val currency: String?,
     val rarity: String?,
+    val averageValueMinor: Long? = null,
+    val lowValueMinor: Long? = null,
+    val average1DayValueMinor: Long? = null,
+    val average7DayValueMinor: Long? = null,
+    val average30DayValueMinor: Long? = null,
+    val holoAverageValueMinor: Long? = null,
+    val holoLowValueMinor: Long? = null,
+    val priceSourceAt: Long? = null,
 )
 
 /** Small Room projection: the price value is chosen for the exact finish by the DAO. */

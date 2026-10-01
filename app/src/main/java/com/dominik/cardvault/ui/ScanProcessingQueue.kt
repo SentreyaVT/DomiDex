@@ -8,6 +8,7 @@ import com.dominik.cardvault.data.catalog.classic30thLocalIdForPrintedCollector
 import com.dominik.cardvault.data.catalog.collectorIdentityForSourceLookup
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionRepository
+import com.dominik.cardvault.data.feedback.ScannerReportKnowledgeContext
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -103,6 +104,8 @@ internal data class QueuedCardScan(
     val stageDurationsMillis: Map<ScanPipelineStage, Long> = emptyMap(),
     val totalProcessingMillis: Long? = null,
     val message: String = ScanPipelineStage.CAPTURED.label,
+    /** Captured before visual descriptors are discarded or a manual identity edits the analysis. */
+    val knowledgeContext: ScannerReportKnowledgeContext? = null,
 )
 
 /** Stages are intentionally explicit for the live bottom queue and debug diagnostics. */

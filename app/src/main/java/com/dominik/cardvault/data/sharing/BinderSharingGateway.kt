@@ -17,7 +17,11 @@ internal data class BinderShareSummary(val shareId: String, val createdAt: Long,
 internal data class CreatedBinderShare(val share: BinderShareSummary, val url: String) {
     override fun toString() = "CreatedBinderShare(link=<private>)"
 }
-internal class BinderSharingException(message: String) : Exception(message)
+internal open class BinderSharingException(message: String) : Exception(message)
+internal class BinderSharingSyncException(
+    message: String,
+    val activeShares: List<BinderShareSummary>? = null,
+) : BinderSharingException(message)
 
 internal interface BinderSharingGateway {
     suspend fun list(expectedUid: String, binderId: String): List<BinderShareSummary>

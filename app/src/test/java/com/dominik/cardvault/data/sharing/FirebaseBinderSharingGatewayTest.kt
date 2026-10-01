@@ -134,6 +134,123 @@ class FirebaseBinderSharingGatewayTest {
         assertEquals(1, session.removals)
     }
 
+    @Test(timeout = 5_000) fun existingShareListDoesNotWaitForBlockedReadiness() = runBlocking {
+        var preparations = 0
+        var requests = 0
+        val gateway = FirebaseBinderSharingGateway(FakeSession("owner-a"), BinderSharingTransport { _, _, _, _ ->
+            requests++
+            emptyListResponse()
+        }, readiness = BinderSharingReadiness { _, _ -> preparations++; awaitCancellation() })
+        assertTrue(gateway.list("owner-a", "selected").isEmpty())
+        assertEquals(1, requests)
+        assertEquals(0, preparations)
+    }
+
+    @Test(timeout = 5_000) fun missingRemoteBinderWaitsForSelectedBinderAndRetriesGetOnce() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val ready = CompletableDeferred<Unit>()
+        val session = FakeSession("owner-a")
+        var requests = 0
+        val gateway = FirebaseBinderSharingGateway(session, BinderSharingTransport { _, _, _, _ ->
+            requests++
+            if (requests == 1) BinderSharingResponse(404, "") else emptyListResponse()
+        }, readiness = BinderSharingReadiness { owner, binder ->
+            assertEquals("owner-a", owner)
+            assertEquals("selected", binder)
+            started.complete(Unit)
+            ready.await()
+        })
+        val pending = async { gateway.list("owner-a", "selected") }
+        started.await()
+        assertEquals(1, requests)
+        assertEquals(1, session.tokens)
+        ready.complete(Unit)
+        assertTrue(pending.await().isEmpty())
+        assertEquals(2, requests)
+        assertEquals(1, session.removals)
+    }
+
+    @Test fun repeatedMissingRemoteBinderDoesNotLoopOrCreate() = runBlocking {
+        var requests = 0
+        var preparations = 0
+        val gateway = FirebaseBinderSharingGateway(FakeSession("owner-a"), BinderSharingTransport { method, _, _, _ ->
+            assertEquals("GET", method)
+            requests++
+            BinderSharingResponse(404, "")
+        }, readiness = BinderSharingReadiness { _, _ -> preparations++ })
+        failure { gateway.list("owner-a", "selected") }
+        assertEquals(2, requests)
+        assertEquals(1, preparations)
+    }
+
+    @Test fun nonMissingHttpFailuresNeverRequestSyncOrRetry() = runBlocking {
+        for (status in listOf(401, 403, 429, 500, 503)) {
+            var requests = 0
+            val gateway = FirebaseBinderSharingGateway(FakeSession("owner-a"), BinderSharingTransport { _, _, _, _ ->
+                requests++
+                BinderSharingResponse(status, "")
+            }, readiness = BinderSharingReadiness { _, _ -> fail("Unexpected sync") })
+            failure { gateway.list("owner-a", "selected") }
+            assertEquals(1, requests)
+        }
+    }
+
+    @Test fun pendingSyncNeverCreatesAPublicLink() = runBlocking {
+        var requests = 0
+        val session = FakeSession("owner-a")
+        val gateway = FirebaseBinderSharingGateway(session, BinderSharingTransport { _, _, _, _ ->
+            requests++
+            emptyListResponse()
+        }, readiness = BinderSharingReadiness { _, _ -> throw BinderSharingSyncException("Bitte synchronisieren.") })
+        val error = failure { gateway.create("owner-a", "selected", BinderShareOptions(), null, true) }
+        assertTrue(error is BinderSharingSyncException)
+        assertEquals(0, requests)
+        assertEquals(0, session.tokens)
+        assertEquals(1, session.removals)
+    }
+
+    @Test fun pendingSyncStillRetrievesExistingSharesForRevocation() = runBlocking {
+        val shareId = "a".repeat(64)
+        val methods = mutableListOf<String>()
+        var preparations = 0
+        val session = FakeSession("owner-a")
+        val gateway = FirebaseBinderSharingGateway(session, BinderSharingTransport { method, _, _, _ ->
+            methods += method
+            if (method == "DELETE") BinderSharingResponse(200, "{\"ok\":true}")
+            else BinderSharingResponse(200, """{"shares":[{"shareId":"$shareId","createdAt":1,"options":{"showPrices":false,"showTotal":false,"showDisplayName":false}}]}""")
+        }, readiness = BinderSharingReadiness { _, _ ->
+            preparations++
+            throw BinderSharingSyncException("Bitte synchronisieren.")
+        })
+        assertEquals(shareId, gateway.list("owner-a", "selected").single().shareId)
+        gateway.revoke("owner-a", shareId)
+        assertEquals(listOf("GET", "DELETE"), methods)
+        assertEquals(0, preparations)
+    }
+
+    @Test(timeout = 5_000) fun accountChangeDuringSyncWaitCannotFallBackToHttp() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val session = FakeSession("owner-a")
+        var requests = 0
+        var cancelled = false
+        val gateway = FirebaseBinderSharingGateway(session, BinderSharingTransport { _, _, _, _ ->
+            requests++
+            BinderSharingResponse(404, "")
+        }, readiness = BinderSharingReadiness { _, _ ->
+            started.complete(Unit)
+            try { awaitCancellation() } finally { cancelled = true }
+        })
+        val pending = async { failure { gateway.list("owner-a", "selected") } }
+        started.await()
+        session.change("owner-b")
+        session.change("owner-a")
+        assertTrue(pending.await().message.orEmpty().contains("Konto"))
+        assertTrue(cancelled)
+        assertEquals(1, requests)
+        assertEquals(1, session.tokens)
+        assertEquals(1, session.removals)
+    }
+
     private suspend fun failure(block: suspend () -> Unit): BinderSharingException {
         try { block() } catch (failure: BinderSharingException) { return failure }
         throw AssertionError("Expected safe BinderSharingException")

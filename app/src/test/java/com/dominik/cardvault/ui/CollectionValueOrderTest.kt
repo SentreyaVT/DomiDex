@@ -10,6 +10,7 @@ class CollectionValueOrderTest {
         val missingHighRawValue = card(1, "Ohne Preis", 999.0, quantity = 5, priced = false)
         val highUnitValue = card(2, "Hoher Einzelwert", 30.0, quantity = 1, priced = true)
         val highestDisplayedTotal = card(3, "Höchster Anzeigewert", 12.0, quantity = 3, priced = true)
+        // A source timestamp alone does not make 0 EUR an available trend price.
         val zeroButAvailable = card(4, "Nullpreis", 0.0, quantity = 1, priced = true)
         val anotherMissingPrice = card(5, "Noch offen", 0.0, quantity = 1, priced = false)
 
@@ -18,7 +19,7 @@ class CollectionValueOrderTest {
         )
 
         assertEquals(
-            listOf(highestDisplayedTotal, highUnitValue, zeroButAvailable, anotherMissingPrice, missingHighRawValue),
+            listOf(highestDisplayedTotal, highUnitValue, anotherMissingPrice, zeroButAvailable, missingHighRawValue),
             ordered,
         )
     }

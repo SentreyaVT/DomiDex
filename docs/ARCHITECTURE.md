@@ -1,26 +1,90 @@
-# CardVault architecture
+# DomiDex – Architektur und Datenfluss
 
-CardVault is local-first and account-free. Room is the source of truth for the catalog cache, the user's owned entries, raw price history, graded market evidence, and grading pre-screen history. Network importers are future adapters; they must consume permitted downloadable datasets and must never scrape listings or embed personal keys.
+Prüfstand: 1. Oktober 2026. Dieses Dokument beschreibt den gelesenen Android-Quellstand, nicht automatisch den Inhalt eines veröffentlichten AAB. Die Repository-/Release-Zuordnung und aktuelle Testresultate stehen im übergeordneten Auditbericht.
 
-## Persistence boundaries
+## Standgrenzen
 
-- `catalog_cards` stores stable identity across TCG, set, collector number, language, finish, and printing variant. Pokémon is first; the `tcg` field allows later One Piece, Yu-Gi-Oh!, and Dragon Ball catalogs.
-- `collection_entries` stores only owned cards and user data. Catalog import must never imply ownership.
-- `raw_price_snapshots` stores timestamped source/currency price variants. Portfolio totals derive from the newest persisted market value; history derives from snapshots.
-- `graded_market_records` keeps company, numerical grade, sale/snapshot type, date, source, currency, aggregation confidence, and sample size separate from raw prices.
-- `grading_analyses` is append-only history tied to the exact owned entry/variant. It is ready for front/back/angled photo references, four category findings, range/confidence, analyzer version, timestamps, and later submission economics. No analyzer exists yet.
-- Schema JSON is exported. Every later database version requires explicit migrations; destructive fallback is forbidden.
+- Der geprüfte lokale HEAD ist `096aa35` vom 22. September 2026.
+- Im Arbeitsverzeichnis liegen umfangreiche, teils unversionierte Weiterentwicklungen für Release 27. Sie sind weder durch diesen Dokumentationslauf implementiert noch zur Veröffentlichung freigegeben.
+- Die lokale Room-Konfiguration verwendet Schema **13**; der geprüfte HEAD enthält Schema **12**. Die neue Preisalternativen-Tabelle gehört zur lokalen Erweiterung.
+- Der offiziell genutzte Release 26 und der lokale Quellstand sind nicht gleichzusetzen. Ein erfolgreicher lokaler Test beweist nicht rückwirkend den Inhalt oder Zustand eines älteren Releases.
+- Die Web-App und ihre serverseitigen HTTP-Endpunkte werden im separaten Projekt **DomiDex-Web** gepflegt. Dieses Android-Repository ist nicht die vollständige Website oder Backend-Implementierung.
 
-## Batch-scan readiness (future)
+## Android-Kern
 
-Continuous scanning should resolve a catalog identity, then show only plausible variants (set/number, language, normal/reverse holo/holo/foil/other printing). The most likely variant may be preselected, but uncertain condition or variant requires the smallest possible confirmation. A confirmed duplicate should increment the matching owned entry in one tap, with haptic/sound feedback and immediate undo—never repeated form navigation.
+DomiDex ist eine Kotlin-/Jetpack-Compose-App mit Room als lokaler Datenbasis für die Oberfläche. Firebase Authentication, Firestore, Storage und WorkManager sind eingebunden; „account-free“ und „Netzwerkimporte erst geplant“ beschreiben den aktuellen Code nicht mehr.
 
-Capture quality and recognition confidence are separate signals. Capture guidance uses a red/yellow/green state derived from sharpness, motion stability, exposure, glare, card coverage, perspective, and visibility of all edges/corners. Green means capture-ready, not recognized. Auto-capture occurs only after a short stable-green interval. Concise German hints include “Näher herangehen”, “Ruhig halten”, “Spiegelung reduzieren”, and “Alle Ecken zeigen”.
+Der wesentliche Datenfluss ist:
 
-Every owned-card detail exposes a `Grading` entry point. The future guided flow captures front, back, and required angled/lighting views, stores rerunnable results against that exact entry, and clearly presents only a photo-based pre-screening range—not a guaranteed PSA grade.
+1. Katalog-/Preisdaten werden unabhängig vom Kartenbesitz importiert oder abgefragt.
+2. Ein bestätigter Karteneintrag wird mit seiner fachlichen Identität in Room gespeichert.
+3. Bei berechtigtem Google-Konto werden ownergebundene Änderungen über dauerhafte Outboxes synchronisiert.
+4. Remote-Änderungen werden unter Revisions- und Konfliktschutz in die lokale Darstellung übernommen.
 
-## Private branding and public-release boundary
+Die Tabellen und expliziten Migrationen stehen in `app/src/main/java/com/dominik/cardvault/data/local/Entities.kt` und `CardVaultDatabase.kt`. Es gibt keinen konfigurierten destruktiven Migrations-Fallback.
 
-App behavior and persisted data do not depend on the private Mew hero. UI code references the generic `brand_dashboard_hero` and `brand_dashboard_hero_description` resources, currently mapped to the private asset in `branding.xml`. Before any public build, introduce explicit private/public product flavors, move the Mew bitmap into the private source set, and override both generic brand resources in the public source set with original or properly licensed art. Do not ship the private asset merely hidden or unused in a public artifact.
+## Identität und Besitz
 
-A future Google Play release may use a one-time purchase, but no publishing is currently authorized. Before commercial release, separately verify ownership/licensing of all branding, Cardmarket and other catalog/price-data commercial terms, privacy disclosures, Google Play policy and billing requirements, data-source attribution, and regional pricing/tax obligations. A passing technical build is not legal or policy clearance.
+`catalog_cards` beschreibt Referenzkarten. `collection_entries` enthält tatsächlichen Besitz einschließlich Menge, Zustand, Notizen, Anschaffungsdaten und lokaler Bildverweise. Ein Katalogimport erzeugt keine besessenen Karten.
+
+Set/Karten-ID, Sammlernummer, Sprache, Finish/Variante und verifizierte Quellen-/Produktidentität dürfen nicht auf einen bloßen Kartennamen reduziert werden. Karten oberhalb der gedruckten Main-Set-Gesamtzahl sowie eigenständig nummerierte RGB-Karten sind keine pauschal ungültigen Set-Mitglieder.
+
+Ein berechtigtes, mit Google verbundenes Firebase-Konto bildet den kanonischen Owner. Gastdaten liegen separat unter `__domidex_guest__`. Ihre Übernahme erfordert einen ausdrücklichen, serverseitig verifizierten Schritt. Ein GitHub-Zugang für optionale Update-Funktionen ersetzt diesen Owner nicht.
+
+## Binder, Sammlung und Portfolio
+
+- Referenz-/Set-Binder nutzen Katalogidentitäten und die vorhandenen Karten.
+- Private Binder besitzen eigene Metadaten, Cover, Seiten und geordnete Platzierungen mit Holo-Auswahl.
+- Eine private Platzierung referenziert einen vorhandenen Sammlungseintrag; Verschieben bedeutet nicht, dass neuer Besitz entsteht. Der Repository-Pfad behandelt auch belegte Zielplätze.
+- Summen verwenden den effektiven Einzelwert mal Menge und unterscheiden bepreiste von unbepreisten Einträgen.
+- Die historische Kurve berechnet frühere Preissnapshots mit den **gegenwärtigen Mengen**. Sie ist keine vollständige Transaktions-, Rendite- oder historische Vermögensbuchhaltung.
+- Die manuell ausgewählte Startseitenkarte ist eine lokale Präsentationseinstellung (`dashboard_focus`). Eine eigenständige synchronisierte Favoritenliste wurde nicht gefunden.
+
+Zentrale Implementierung: `data/RoomCollectionRepository.kt`, `model/CardModels.kt` und `ui/CardVaultApp.kt` unter dem Kotlin-Paket `com/dominik/cardvault`.
+
+## Preise und Katalog
+
+Der aktuelle visuelle Pokémon-Katalog verwendet TCGdex für deutsche und englische Metadaten. Der offizielle öffentliche Cardmarket-Produkt-/Preisdownload ist eine getrennte Quelle. Verifizierte ergänzende Produktzuordnungen schließen bestimmte bekannte Lücken, nicht beliebige Variantenlücken.
+
+Echte positive Trendwerte bleiben vorrangig. Im lokalen Release-27-Stand existiert zusätzlich eine ausdrücklich bestätigte, identitätsgebundene Vergleichspreis-Auswahl, wenn kein geeigneter Trendwert vorhanden ist. Sie wird nicht als Cardmarket-Trendhistorie ausgegeben. Details und bekannte Abdeckungslücken: [Cardmarket-Import](cardmarket-import.md).
+
+## Offline- und Synchronisationsgrenzen
+
+Room bleibt für lokale Ansichten verfügbar. Collection-Outboxes speichern Mutationen zusammen mit der fachlichen Änderung; stabile IDs, Mutation-IDs, erwartete Revisionen und Tombstones schützen vor blindem Überschreiben bzw. Wiederauferstehen gelöschter Einträge.
+
+`CollectionFirebaseSync.kt` verarbeitet einen ownergebundenen Firestore-Listener. `PrivateBinderFirebaseSync.kt` nutzt zusätzlich begrenzte Abrufe, ereignisbezogene Arbeit und periodische Arbeit im 15-Minuten-Raster. Das ist **keine garantierte verzögerungsfreie Zwei-Geräte-Replikation**.
+
+Konflikte und terminale Payload-/Regelfehler sind getrennte Zustände. Lokale/Cloud-Auflösung erfolgt explizit. Vollständig manuelle, nicht verknüpfte Karten, die unabhängig auf zwei Offline-Geräten angelegt werden, können getrennte Einträge bleiben.
+
+Die neuen Preis-Sidecars hängen an bestätigten Parent-Einträgen und werden über eine eigene Datenstruktur synchronisiert; sie erweitern nicht ungeprüft den bestehenden Collection-Entry-Vertrag.
+
+## Private Binder teilen
+
+Der Android-Client verwendet den Web-Endpunkt `https://domidex.web.app/api/binder-shares` für Erstellen, Auflisten und Widerrufen. Freigaben benötigen das Besitzerkonto und eine ausdrückliche Bestätigung. Preise, Gesamtwert und Anzeigename sind getrennte Optionen, standardmäßig ausgeschaltet.
+
+Der lokale Weiterentwicklungsstand enthält priorisierte Vorbereitung der betroffenen Binder-/Kartendaten sowie einen eigenen Android-Leser für `/share/{token}`. Ein Timeout, Offline-Zustand oder unbekanntes Ergebnis eines POSTs darf nicht als erfolgreiche Freigabe dargestellt werden.
+
+Der gelesene Web-Vertrag ist eine **Linkfreigabe**: Wer den geheimen Link besitzt, kann den freigegebenen Binder lesen; eine zusätzliche Empfängerrollenprüfung ist nicht Teil dieses Vertrags. Widerruf und Gültigkeit des Besitzers werden serverseitig geprüft. Private Linktokens gehören nicht in Logs oder öffentliche Dokumentation.
+
+## Scanner, Bilder und gemeinsames Wissen
+
+Scanner-Erkennung, lokale Analyse und Scanner-Lab-Uploads sind unterschiedliche Abläufe. Dieses Dokument verspricht keine gemessene Beschleunigung oder Erkennungsquote; dafür sind reproduzierbare Messungen gegen einen definierten Vergleichsstand nötig.
+
+- Fehlscan-Fotos werden über den bestehenden **manuellen** ScanLab-Prozess übermittelt, nicht durch allgemeine Testerzustimmung automatisch.
+- Gemeinsames Scannerwissen hat eine separate, standardmäßig ausgeschaltete versionierte Einwilligung und überträgt technische Hinweise/Korrekturen, keine Fotos.
+- `functions/knowledge-aggregate.js` aggregiert Beiträge zu Kandidaten/stabilen Hinweisen. Das ist keine dokumentierte automatische Neutrainierung eines ML-Modells.
+- Ein optionaler Katalogbild-Beitrag ist nochmals ein eigener Uploadpfad. Seine Datenschutzmerkmale sind nicht mit denen eines ScanLab-JPEGs gleichzusetzen.
+
+Siehe [Firebase-Sicherheitsgrenzen](../FIREBASE_SECURITY.md).
+
+## Backup und Wiederherstellung
+
+Das benutzergesteuerte Backup ist eine ZIP-/JSON-Datei mit lokalen Sammlungs-/Binderinformationen und gegebenenfalls Fotos. Das aktuelle Format V2 unterstützt auch die lokale Preis-Sidecar-Erweiterung. Es ist **nicht anwendungsseitig verschlüsselt** und kann UID, Notizen und Kaufdaten enthalten.
+
+Auth-Tokens, Rollen/Entitlements und Einwilligungen werden nicht als wiederherstellbare Berechtigungen exportiert. Importgrenzen, Pfad-/CRC-Prüfung, Datenbanktransaktionen und ein Wiederherstellungsjournal schützen den technischen Import. Sie ersetzen kein sicheres externes Aufbewahrungskonzept. Android-Systembackup ist in der Manifest-Konfiguration deaktiviert.
+
+## Keine daraus abzuleitenden Produktversprechen
+
+`graded_market_records` und `grading_analyses` sind vorhandene Daten-/Vertragsstrukturen. Daraus folgt keine aktive professionelle Grading-Analyse, PSA-Bewertung oder aktuelle Grading-Roadmap-Priorität.
+
+Mehrere TCGs in einem Datenfeld bedeuten nicht, dass mehrere Spiele vollständig unterstützt werden. Ein geprüftes Build-/Regeltestresultat ist auch keine Lizenz-, Datenschutz- oder Sicherheitszertifizierung. Monetarisierung und bestehende Testerzusagen sind gesonderte Produktentscheidungen; dieses Dokument führt kein neues Kauf-, Abo- oder Pro-Modell ein.

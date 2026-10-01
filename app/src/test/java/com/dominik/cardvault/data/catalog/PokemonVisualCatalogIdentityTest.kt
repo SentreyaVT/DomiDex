@@ -44,6 +44,9 @@ class PokemonVisualCatalogIdentityTest {
         assertEquals(907956L, verifiedCardmarketProductId("30th-c-021"))
         assertEquals(907950L, verifiedCardmarketProductId("30th-c-022"))
         assertEquals(907945L, verifiedCardmarketProductId("30th-c-029"))
-        assertEquals(null, verifiedCardmarketProductId("30th-001"))
+        assertEquals(907607L, verifiedCardmarketProductId("30th-001"))
+        // Official numbered Cardmarket pages now distinguish the base and illustration printing.
+        assertEquals(907608L, verifiedCardmarketProductId("30th-002"))
+        assertEquals(907737L, verifiedCardmarketProductId("30th-129"))
     }
 }

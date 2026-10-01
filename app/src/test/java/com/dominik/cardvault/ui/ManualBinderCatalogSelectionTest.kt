@@ -101,4 +101,14 @@ class ManualBinderCatalogSelectionTest {
         assertFalse(selected.matchesManualCatalogSelection(card.name, "Anderes Set", "025"))
         assertFalse(selected.matchesManualCatalogSelection(card.name, set.name, "026"))
     }
+
+    @Test fun editedFinishOrSpecialVariantCannotReuseTheSelectedPrintingProduct() {
+        val selected = product.copy(finish = "Holo", variant = "Standard")
+        assertTrue(selected.matchesManualPrinting("holo", " standard "))
+        assertFalse(selected.matchesManualPrinting("Normal", "Standard"))
+        assertFalse(selected.matchesManualPrinting("Reverse Holo", "Standard"))
+        assertFalse(selected.matchesManualPrinting("Holo", "GameStop"))
+        assertFalse(selected.copy(finish = null).matchesManualPrinting("Holo", "Standard"))
+        assertFalse(selected.copy(variant = null).matchesManualPrinting("Holo", "Standard"))
+    }
 }

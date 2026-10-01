@@ -88,7 +88,7 @@ class SettingsNavigationInstrumentedTest {
         tap("Fertig")
         scrollTo("Über DomiDex")
         tap("Über DomiDex")
-        waitText("Pre-Beta · privat · Non-Profit")
+        waitText("Geschlossene Alpha · privat · Non-Profit")
         waitText("Version ${BuildConfig.VERSION_NAME}\nBuild ${BuildConfig.VERSION_CODE}")
         tap("Fertig")
         scrollTo("Konto löschen")

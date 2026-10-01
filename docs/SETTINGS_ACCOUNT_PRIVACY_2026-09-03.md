@@ -1,5 +1,7 @@
 # Einstellungen / Konto / Datenschutz – 3. September 2026
 
+> Historischer Bericht / Entwurf des im Titel genannten Stands; keine aktuelle Release- oder Produktfreigabe. Maßgeblich sind [Projektstatus vom 01.10.2026](PROJECT_STATUS.md) und [Versionshistorie](RELEASE_HISTORY.md). Aussagen zu R8, ScanLab/Knowledge, Grading, Cloud, Test-Tracks und Geschäftsmodell dürfen nicht ungeprüft übernommen werden. Alte lokale Artefaktverweise können außerhalb der Arbeitsstation fehlen.
+
 ## Umfang und Ergebnis
 
 Nur Einstellungen, Kontodarstellung, Kontakt/Löschanfrage und die vorhandene Scanner-Einwilligung wurden in diesem Lauf geändert. Bereits vorhandene Änderungen im Arbeitsverzeichnis wurden erhalten. Keine Änderung an Scanner-Erkennung, Binder-, Preis-, Room-, Sammlungs- oder Firebase-Sync-Implementierung; keine Webänderung, kein Deployment, kein Commit/Push. Keine realen Nutzerdaten gelöscht, keine Testberichte hochgeladen, keine E-Mail versendet.

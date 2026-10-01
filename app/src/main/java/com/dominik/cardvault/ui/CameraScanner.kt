@@ -916,11 +916,7 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 600) : AutoC
         return try {
             gray.create(height, width, CvType.CV_8UC1)
             gray.put(0, 0, lumaBytes)
-            // Local contrast normalization keeps edges usable in uneven room lighting. It only
-            // affects frame finding; the original camera image is never altered or saved.
-            clahe.apply(gray, normalized)
             Imgproc.GaussianBlur(gray, rawBlurred, Size(5.0, 5.0), 0.0)
-            Imgproc.GaussianBlur(normalized, blurred, Size(5.0, 5.0), 0.0)
             // Webcam feeds tend to have softer, lower-contrast card edges than phone cameras.
             // Combine a conventional edge pass with an adaptive local-contrast pass so a card
             // against a similarly bright desk can still propose its outer contour.
@@ -986,6 +982,10 @@ internal class CardFrameDetector(private val maxAnalysisEdge: Int = 600) : AutoC
             }
             inspectContours(edges, false)
             if (bestScore < CardScanConfiguration.FALLBACK_GEOMETRY_TRIGGER) {
+                // Uneven-light contrast work belongs to the existing fallback, not every frame.
+                // Inputs and thresholds stay identical; the original camera image is untouched.
+                clahe.apply(gray, normalized)
+                Imgproc.GaussianBlur(normalized, blurred, Size(5.0, 5.0), 0.0)
                 Imgproc.Canny(blurred, contrastEdges, 20.0, 82.0)
                 Imgproc.adaptiveThreshold(blurred, adaptiveEdges, 255.0, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 31, 7.0)
                 Imgproc.threshold(blurred, luminanceEdges, 0.0, 255.0, Imgproc.THRESH_BINARY_INV or Imgproc.THRESH_OTSU)

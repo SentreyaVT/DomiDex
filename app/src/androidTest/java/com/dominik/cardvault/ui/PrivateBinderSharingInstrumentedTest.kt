@@ -38,9 +38,11 @@ class PrivateBinderSharingInstrumentedTest {
         var createError = false
         var deferred: CompletableDeferred<CreatedBinderShare>? = null
         var listDeferred: CompletableDeferred<List<BinderShareSummary>>? = null
+        var listError: BinderSharingException? = null
         var lists = 0
         override suspend fun list(expectedUid: String, binderId: String): List<BinderShareSummary> {
             lists++
+            listError?.let { throw it }
             listDeferred?.let { return it.await() }
             return existing
         }
@@ -178,6 +180,33 @@ class PrivateBinderSharingInstrumentedTest {
         compose.onNodeWithText("Link teilen").assertDoesNotExist()
         compose.onNodeWithText("Aktive Freigaben (1)").assertExists()
         assertEquals(1, gateway.creates.size)
+    }
+
+    @Test fun pendingSyncKeepsExistingLinksRevocableAndCreationDisabled() {
+        val existing = BinderShareSummary(shareId, 1L, BinderShareOptions())
+        val gateway = FakeGateway().apply {
+            this.existing = listOf(existing)
+            listError = BinderSharingSyncException("Bitte die Internetverbindung prüfen und Freigaben aktualisieren.", this.existing)
+        }
+        show(gateway)
+        compose.onNodeWithTag("sharing-notice").assertExists()
+        compose.onNodeWithTag("share-confirm").performScrollTo().performClick()
+        compose.onNodeWithTag("share-create").assertIsNotEnabled()
+        compose.onNodeWithText("Freigabe beenden").performScrollTo().performClick()
+        compose.onNodeWithText("Beenden bestätigen").performScrollTo().performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("owner-a" to shareId), gateway.revokes)
+        assertTrue(gateway.creates.isEmpty())
+    }
+
+    @Test fun failedRefreshDoesNotHidePreviouslyLoadedLinks() {
+        val gateway = FakeGateway().apply { existing = listOf(BinderShareSummary(shareId, 1L, BinderShareOptions())) }
+        show(gateway)
+        compose.runOnIdle { gateway.listError = BinderSharingException("Verbindung unterbrochen.") }
+        compose.onNodeWithText("Freigaben aktualisieren").performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Freigabe beenden").performScrollTo().assertIsEnabled()
+        compose.onNodeWithTag("share-create").assertIsNotEnabled()
     }
 
     @Test fun realPrivateBinderReaderContainsShareEntryWithoutChangingOwnership() {

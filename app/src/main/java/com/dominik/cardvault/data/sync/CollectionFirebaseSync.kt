@@ -1,13 +1,16 @@
 package com.dominik.cardvault.data.sync
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.room.withTransaction
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -272,9 +275,9 @@ class FirebaseCollectionSession(
             return
         }
         if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return
-        CollectionSyncScheduler.schedule(context, uid)
+        CollectionSyncScheduler.schedule(context, uid, userInitiated = true)
         // Separate bounded worker/outbox: no second full-collection listener is introduced.
-        PrivateBinderSyncScheduler.schedule(context, uid)
+        PrivateBinderSyncScheduler.schedule(context, uid, userInitiated = true)
         PrivateBinderSyncScheduler.ensurePeriodic(context, uid)
         refreshCloudState()
     }
@@ -617,19 +620,31 @@ internal suspend fun applyRemoteDocumentToRoom(
 
 internal object CollectionSyncScheduler {
     internal const val INPUT_OWNER_UID = "ownerUid"
-    fun schedule(context: Context, ownerUid: String? = canonicalCollectionOwnerUid(FirebaseAuth.getInstance().currentUser)) {
+    fun schedule(
+        context: Context,
+        ownerUid: String? = canonicalCollectionOwnerUid(FirebaseAuth.getInstance().currentUser),
+        userInitiated: Boolean = false,
+    ) {
         if (ownerUid.isNullOrBlank()) return
-        val request = OneTimeWorkRequestBuilder<CollectionSyncWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .setInputData(workDataOf(INPUT_OWNER_UID to ownerUid))
-            .build()
         // Per-owner chains prevent account B from replacing account A's work. APPEND_OR_REPLACE
         // also guarantees a wake-up queued during a running worker is not silently dropped.
         WorkManager.getInstance(context).enqueueUniqueWork(
             collectionSyncWorkName(ownerUid),
             ExistingWorkPolicy.APPEND_OR_REPLACE,
-            request,
+            request(ownerUid, userInitiated),
         )
+    }
+
+    internal fun request(ownerUid: String, userInitiated: Boolean, sdk: Int = Build.VERSION.SDK_INT): OneTimeWorkRequest {
+        val request = OneTimeWorkRequestBuilder<CollectionSyncWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setInputData(workDataOf(INPUT_OWNER_UID to ownerUid))
+        // On Android 12+, prioritize fresh local edits while retaining durable work if quota
+        // is exhausted. Older versions would require a foreground-service notification.
+        if (userInitiated && sdk >= 31) {
+            request.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        }
+        return request.build()
     }
 }
 
@@ -643,6 +658,8 @@ class CollectionSyncWorker(
         val uid = inputData.getString(CollectionSyncScheduler.INPUT_OWNER_UID)
             ?.takeIf(String::isNotBlank)
             ?: return@withContext Result.success()
+        val sharingBinderId = inputData.getString(SHARING_BINDER_ID)
+        if (sharingBinderId != null && !validSharingBinderId(sharingBinderId)) return@withContext Result.failure()
         suspend fun accessStillCurrent(): Boolean {
             val account = auth.currentVerifiedFirebaseEntitlementAccount(forceRefresh = false) ?: return false
             return shouldRunEntitledCollectionSync(
@@ -675,7 +692,9 @@ class CollectionSyncWorker(
             // An auth switch ends this owner's run immediately. Its durable outbox remains for
             // the next time that same UID signs in; it is never sent under the new identity.
             if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) return@withContext Result.success()
-            val mutation = dao.pendingSyncOutbox(uid, 1).firstOrNull() ?: return@withContext Result.success()
+            val mutation = (if (sharingBinderId == null) dao.pendingSyncOutbox(uid, 1)
+                else dao.pendingSharingCollectionOutbox(uid, sharingBinderId, 1))
+                .firstOrNull() ?: return@withContext Result.success()
             val entry = dao.collectionSyncProjection(uid, mutation.syncId)
             if (entry == null) {
                 dao.deleteSyncOutboxIfCurrent(mutation.entryKey, mutation.mutationId)
@@ -760,6 +779,9 @@ class CollectionSyncWorker(
             }
             processed++
         }
+        // The dependent priority binder worker schedules another scoped batch
+        // when needed; ordinary sync continuation remains exactly as before.
+        if (sharingBinderId != null) return@withContext Result.success()
         val hasPending = dao.pendingSyncOutbox(uid, 1).isNotEmpty()
         val mayContinue = try {
             accessStillCurrent()

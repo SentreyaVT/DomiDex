@@ -13,18 +13,18 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Color(0xFF7442B8),
-    onPrimary = VaultText,
+    primary = MewPlum,
+    onPrimary = VaultOnAccent,
     primaryContainer = MewPlumDeep,
     onPrimaryContainer = VaultText,
-    secondary = MewPlum,
-    onSecondary = Color(0xFF2E1747),
-    secondaryContainer = MewPlumDeep,
-    onSecondaryContainer = Color(0xFFEAD9FF),
-    tertiary = MewIce,
-    onTertiary = Color(0xFF003547),
-    tertiaryContainer = MewIceDeep,
-    onTertiaryContainer = Color(0xFFC6EEFF),
+    secondary = MewIce,
+    onSecondary = Color(0xFF061D26),
+    secondaryContainer = MewIceDeep,
+    onSecondaryContainer = Color(0xFFD7F9FF),
+    tertiary = MewRose,
+    onTertiary = VaultOnAccent,
+    tertiaryContainer = MewPeachDeep,
+    onTertiaryContainer = Color(0xFFF1E6FF),
     background = VaultNight,
     onBackground = VaultText,
     surface = VaultNightRaised,
@@ -39,6 +39,7 @@ private val DarkColorScheme = darkColorScheme(
     surfaceContainerHigh = VaultPlumSurfaceHigh,
     surfaceContainerHighest = VaultGlassHigh,
     error = VaultError,
+    onError = Color(0xFF2E0714),
 )
 
 private val DomiDexShapes = Shapes(
@@ -46,7 +47,7 @@ private val DomiDexShapes = Shapes(
     small = CardVaultShapes.thumbnail,
     medium = CardVaultShapes.field,
     large = CardVaultShapes.card,
-    extraLarge = CardVaultShapes.sheet,
+    extraLarge = RoundedCornerShape(28.dp),
 )
 
 @Composable

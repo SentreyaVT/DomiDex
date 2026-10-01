@@ -5,6 +5,7 @@ import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import com.dominik.cardvault.data.catalog.PokemonVisualCard
 import com.dominik.cardvault.data.catalog.isPokemonPocketSet
 import com.dominik.cardvault.data.catalog.isQuarantinedCardmarketIdentity
+import com.dominik.cardvault.data.catalog.collectorIdentityForSourceLookup
 import com.dominik.cardvault.model.CatalogSearchResult
 import com.dominik.cardvault.model.CollectionCard
 import com.dominik.cardvault.model.CollectionRepository
@@ -78,7 +79,7 @@ internal fun binderReferenceCardmarketProducts(
     cardsInSet: List<PokemonVisualCard>,
     candidates: List<CatalogSearchResult>,
 ): List<CatalogSearchResult> {
-    if (reference.sourceSetId != sourceCard.set.id.lowercase() || reference.sourceCardId != sourceCard.id.lowercase()) return emptyList()
+    if (!referenceMatchesSourceCard(reference, sourceCard)) return emptyList()
     val matchingPrintings = sourceCard.printVariants.filter {
         it.finish.equals(reference.finish, true) && it.variant.equals(reference.variant, true)
     }
@@ -98,6 +99,38 @@ internal fun binderReferenceCardmarketProducts(
             sourceCardId = reference.sourceCardId,
         )
     }
+}
+
+/** A stored source ID is not permission to ignore a contradictory printed collector number. */
+internal fun referenceMatchesSourceCard(reference: CollectionCard, sourceCard: PokemonVisualCard): Boolean {
+    if (!reference.sourceSetId.equals(sourceCard.set.id, true) ||
+        !reference.sourceCardId.equals(sourceCard.id, true)) return false
+    val stored = reference.number.trim().split('/')
+    val source = sourceCard.number.trim().split('/')
+    if (stored.size !in 1..2 || source.size !in 1..2 ||
+        stored.any { it.isBlank() } || source.any { it.isBlank() }) return false
+    if (collectorIdentityForSourceLookup(reference.number, sourceCard.set.id) !=
+        collectorIdentityForSourceLookup(sourceCard.number, sourceCard.set.id)) return false
+    if (stored.size == 2) {
+        val expectedTotal = source.getOrNull(1)
+            ?: sourceCard.set.printedTotal.takeIf { it > 0 }?.toString()
+            ?: return false
+        fun total(value: String) = value.trim().uppercase(java.util.Locale.ROOT).trimStart('0').ifEmpty { "0" }
+        if (total(stored[1]) != total(expectedTotal)) {
+            // Existing ME04 master-binder rows use /122 (the numbered checklist),
+            // while the live source reports printedTotal=86. Accept only that
+            // maintained, exact source/collector/printing row, never an arbitrary
+            // denominator or another set's similarly numbered card.
+            val maintainedLegacySlot = com.dominik.cardvault.data.WachsendesChaosMasterSet.cards.any {
+                it.sourceSetId.equals(reference.sourceSetId, true) &&
+                    it.sourceCardId.equals(reference.sourceCardId, true) &&
+                    it.number.equals(reference.number, true) &&
+                    it.finish.equals(reference.finish, true) && it.variant.equals(reference.variant, true)
+            }
+            if (!maintainedLegacySlot) return false
+        }
+    }
+    return true
 }
 
 /** Use the existing local price guide by exact product ID, even when titles differ. */

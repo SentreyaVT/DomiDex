@@ -1,5 +1,7 @@
 # DomiDex – signierter Google-Play-Pre-Beta-Release-Candidate
 
+> Historischer Bericht / Entwurf des im Titel genannten Stands; keine aktuelle Release- oder Produktfreigabe. Maßgeblich sind [Projektstatus vom 01.10.2026](PROJECT_STATUS.md) und [Versionshistorie](RELEASE_HISTORY.md). Aussagen zu R8, ScanLab/Knowledge, Grading, Cloud, Test-Tracks und Geschäftsmodell dürfen nicht ungeprüft übernommen werden. Alte lokale Artefaktverweise können außerhalb der Arbeitsstation fehlen.
+
 Stand: 04.09.2026. Dieser Bericht ersetzt die **Build-/Signing- und Live-Website-Befunde** der älteren, unsignierten Übergabe vom selben Datum. Die alte UNSIGNED-Datei bleibt als historisches Artefakt erhalten und darf nicht hochgeladen werden.
 
 ## A. Release-Status

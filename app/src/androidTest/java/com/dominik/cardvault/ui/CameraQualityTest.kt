@@ -12,11 +12,12 @@ class CameraQualityTest {
         for (y in 70 until 410) for (x in 195 until 445) {
             if (x < 203 || x >= 437 || y < 78 || y >= 402) framed[y * width + x] = 230.toByte()
         }
-        val detector = CardFrameDetector()
-        val card = detector.detect(ByteBuffer.wrap(framed), width, height, width, 1)
-        assertTrue(card.found)
-        assertTrue(card.coverage > .25f)
-        assertTrue(card.perspective > .65f)
-        assertFalse(detector.detect(ByteBuffer.wrap(ByteArray(width * height) { 80 }), width, height, width, 1).found)
+        CardFrameDetector().use { detector ->
+            val card = detector.detect(ByteBuffer.wrap(framed), width, height, width, 1)
+            assertTrue(card.found)
+            assertTrue(card.coverage > .25f)
+            assertTrue(card.perspective > .65f)
+            assertFalse(detector.detect(ByteBuffer.wrap(ByteArray(width * height) { 80 }), width, height, width, 1).found)
+        }
     }
 }

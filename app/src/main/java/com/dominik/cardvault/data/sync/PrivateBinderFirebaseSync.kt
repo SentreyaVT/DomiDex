@@ -1,6 +1,7 @@
 package com.dominik.cardvault.data.sync
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.room.withTransaction
 import androidx.work.Constraints
@@ -8,7 +9,9 @@ import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -44,10 +47,38 @@ import kotlinx.coroutines.withContext
 internal const val PRIVATE_SYNC_BINDER = "BINDER"
 internal const val PRIVATE_SYNC_PLACEMENT = "PLACEMENT"
 internal const val PRIVATE_SYNC_LAYOUT = "LAYOUT"
+internal const val PRIVATE_SYNC_PRICE_SELECTION = "PRICE_SELECTION"
 internal const val PRIVATE_SYNC_UPSERT = "UPSERT"
 internal const val PRIVATE_SYNC_DELETE = "DELETE"
 
 internal enum class PrivatePushAction { APPLY, ALREADY_APPLIED, REMOTE_WINS }
+
+internal enum class PrivateSyncContinuation { COMPLETE, APPEND, RETRY }
+
+internal fun privateSyncContinuation(
+    parentDependencyPending: Boolean,
+    hasMoreRemoteDocuments: Boolean,
+    hasPendingMutations: Boolean,
+): PrivateSyncContinuation = when {
+    parentDependencyPending -> PrivateSyncContinuation.RETRY
+    hasMoreRemoteDocuments || hasPendingMutations -> PrivateSyncContinuation.APPEND
+    else -> PrivateSyncContinuation.COMPLETE
+}
+
+/** Recheck only dependencies deferred in this bounded run; do not poll or touch another owner. */
+internal suspend fun deferredPriceSelectionParentPending(
+    dao: CardVaultDao,
+    ownerUid: String,
+    entryKeys: Set<String>,
+): Boolean {
+    for (entryKey in entryKeys) {
+        val selection = dao.privateBinderSyncOutbox(entryKey) ?: continue
+        if (selection.ownerUid != ownerUid || selection.recordType != PRIVATE_SYNC_PRICE_SELECTION) continue
+        // Any state (including CONFLICT/ERROR) remains blocked until collection sync resolves it.
+        if (dao.syncOutbox("$ownerUid:${selection.recordId}") != null) return true
+    }
+    return false
+}
 
 internal enum class PrivatePushCommitAction {
     COMPLETE_CURRENT,
@@ -123,6 +154,8 @@ internal fun privateBinderPlacementPath(uid: String, placementId: String) =
     "users/$uid/privateBinderPlacements/$placementId"
 internal fun collectionLayoutPath(uid: String, entrySyncId: String) =
     "users/$uid/collectionLayouts/$entrySyncId"
+internal fun collectionPriceSelectionPath(uid: String, entrySyncId: String) =
+    "users/$uid/collectionPriceSelections/$entrySyncId"
 
 internal const val PRIVATE_BINDER_PERIODIC_SYNC_INTERVAL_MINUTES = 15L
 
@@ -141,17 +174,28 @@ private const val PRIVATE_BINDER_PERIODIC_SYNC_TAG = "domidex-private-binder-per
 internal object PrivateBinderSyncScheduler {
     internal const val INPUT_OWNER_UID = "privateBinderOwnerUid"
 
-    fun schedule(context: Context, ownerUid: String? = canonicalCollectionOwnerUid(FirebaseAuth.getInstance().currentUser)) {
+    fun schedule(
+        context: Context,
+        ownerUid: String? = canonicalCollectionOwnerUid(FirebaseAuth.getInstance().currentUser),
+        userInitiated: Boolean = false,
+    ) {
         if (ownerUid.isNullOrBlank() || ownerUid == GUEST_OWNER_UID) return
-        val request = OneTimeWorkRequestBuilder<PrivateBinderSyncWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .setInputData(workDataOf(INPUT_OWNER_UID to ownerUid))
-            .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             privateBinderSyncWorkName(ownerUid),
             ExistingWorkPolicy.APPEND_OR_REPLACE,
-            request,
+            request(ownerUid, userInitiated),
         )
+    }
+
+    internal fun request(ownerUid: String, userInitiated: Boolean, sdk: Int = Build.VERSION.SDK_INT): OneTimeWorkRequest {
+        val request = OneTimeWorkRequestBuilder<PrivateBinderSyncWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setInputData(workDataOf(INPUT_OWNER_UID to ownerUid))
+        // Match collection sync: preserve normal work on older Android and as quota fallback.
+        if (userInitiated && sdk >= 31) {
+            request.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        }
+        return request.build()
     }
 
     fun ensurePeriodic(
@@ -193,6 +237,8 @@ class PrivateBinderSyncWorker(
         val uid = inputData.getString(PrivateBinderSyncScheduler.INPUT_OWNER_UID)
             ?.takeIf(String::isNotBlank)
             ?: return@withContext Result.success()
+        val sharingBinderId = inputData.getString(SHARING_BINDER_ID)
+        if (sharingBinderId != null && !validSharingBinderId(sharingBinderId)) return@withContext Result.failure()
         val auth = FirebaseAuth.getInstance()
         suspend fun accessStillCurrent(): Boolean {
             val account = auth.currentVerifiedFirebaseEntitlementAccount(forceRefresh = false) ?: return false
@@ -207,14 +253,30 @@ class PrivateBinderSyncWorker(
         val database = CardVaultDatabase.get(applicationContext)
         val dao = database.cardVaultDao()
         val firestore = FirebaseFirestore.getInstance()
+        if (sharingBinderId != null && dao.pendingSharingCollectionOutbox(uid, sharingBinderId, 1).isNotEmpty()) {
+            BinderSharingSyncScheduler.continueBatch(applicationContext, uid, sharingBinderId)
+            return@withContext Result.success()
+        }
         var processed = 0
+        val deferredPriceSelections = mutableSetOf<String>()
         while (processed < MAX_MUTATIONS_PER_RUN) {
             if (!runCatching { accessStillCurrent() }.getOrElse { return@withContext Result.retry() }) {
                 return@withContext Result.success()
             }
-            val mutation = dao.pendingPrivateBinderSyncOutbox(uid, 1).firstOrNull() ?: break
+            val candidates = if (sharingBinderId == null) dao.pendingPrivateBinderSyncOutbox(uid, deferredPriceSelections.size + 1)
+                else dao.pendingSharingPrivateBinderOutbox(uid, sharingBinderId, 1)
+            val mutation = candidates.firstOrNull { it.entryKey !in deferredPriceSelections } ?: break
             val payload = mutationPayload(dao, mutation) ?: run {
                 dao.deletePrivateBinderSyncOutboxIfCurrent(mutation.entryKey, mutation.mutationId)
+                continue
+            }
+            // A newly added entry and its sidecar are committed locally together. Let the existing
+            // collection worker publish the parent before rules validate this dependent document.
+            if (mutation.recordType == PRIVATE_SYNC_PRICE_SELECTION &&
+                dao.syncOutbox("$uid:${mutation.recordId}") != null) {
+                // A conflicted parent must not starve unrelated binder/layout changes.
+                deferredPriceSelections.add(mutation.entryKey)
+                processed++
                 continue
             }
             val reference = firestore.document(remotePath(mutation))
@@ -258,6 +320,7 @@ class PrivateBinderSyncWorker(
                             PRIVATE_SYNC_BINDER -> dao.markPrivateBinderSynced(uid, mutation.recordId, pushOutcome.revision)
                             PRIVATE_SYNC_PLACEMENT -> dao.markPrivateBinderPlacementSynced(uid, mutation.recordId, pushOutcome.revision)
                             PRIVATE_SYNC_LAYOUT -> dao.markCollectionLayoutSynced(uid, mutation.recordId, pushOutcome.revision)
+                            PRIVATE_SYNC_PRICE_SELECTION -> dao.markPriceSelectionSynced(uid, mutation.recordId, pushOutcome.revision)
                         }
                     }
                     PrivatePushCommitAction.APPLY_REMOTE -> {
@@ -273,6 +336,7 @@ class PrivateBinderSyncWorker(
                             }
                             PRIVATE_SYNC_PLACEMENT -> applyRemotePlacement(dao, uid, remoteDocument)
                             PRIVATE_SYNC_LAYOUT -> applyRemoteLayout(dao, uid, remoteDocument)
+                            PRIVATE_SYNC_PRICE_SELECTION -> applyRemotePriceSelection(dao, uid, remoteDocument)
                             else -> PrivateRemoteApplyResult.Checkpoint
                         }
                         if (shouldRestorePrivateMutationAfterRemoteApply(applyResult)) {
@@ -286,6 +350,7 @@ class PrivateBinderSyncWorker(
                             PRIVATE_SYNC_BINDER -> dao.rebasePendingPrivateBinder(uid, mutation.recordId, pushOutcome.revision)
                             PRIVATE_SYNC_PLACEMENT -> dao.rebasePendingPrivateBinderPlacement(uid, mutation.recordId, pushOutcome.revision)
                             PRIVATE_SYNC_LAYOUT -> dao.rebasePendingCollectionLayout(uid, mutation.recordId, pushOutcome.revision)
+                            PRIVATE_SYNC_PRICE_SELECTION -> dao.rebasePendingPriceSelection(uid, mutation.recordId, pushOutcome.revision)
                         }
                     }
                     PrivatePushCommitAction.KEEP_SUCCESSOR,
@@ -300,11 +365,28 @@ class PrivateBinderSyncWorker(
         if (!runCatching { accessStillCurrent() }.getOrElse { return@withContext Result.retry() }) {
             return@withContext Result.success()
         }
+        if (sharingBinderId != null) {
+            if (dao.pendingSharingCollectionOutbox(uid, sharingBinderId, 1).isNotEmpty() ||
+                dao.pendingSharingPrivateBinderOutbox(uid, sharingBinderId, 1).isNotEmpty()) {
+                BinderSharingSyncScheduler.continueBatch(applicationContext, uid, sharingBinderId)
+            }
+            // No unrelated binder/layout pull on this foreground sharing path.
+            return@withContext Result.success()
+        }
         val pullResult = runCatching { pullBoundedSnapshot(database, firestore, uid) }
             .onFailure { Log.w(LOG_TAG, "Private-Binder-Abruf wird später wiederholt (${it.javaClass.simpleName}).") }
             .getOrElse { return@withContext Result.retry() }
-        if (pullResult == PrivateRemotePullResult.MORE_DOCUMENTS || dao.pendingPrivateBinderSyncOutbox(uid, 1).isNotEmpty()) {
-            PrivateBinderSyncScheduler.schedule(applicationContext, uid)
+        // The collection worker can finish while this worker performs its bounded remote pull.
+        // A remembered dependency is not itself a failure: only a still-pending parent needs backoff.
+        val parentStillPending = database.withTransaction {
+            deferredPriceSelectionParentPending(dao, uid, deferredPriceSelections)
+        }
+        when (privateSyncContinuation(parentStillPending,
+            pullResult == PrivateRemotePullResult.MORE_DOCUMENTS,
+            dao.pendingPrivateBinderSyncOutbox(uid, 1).isNotEmpty())) {
+            PrivateSyncContinuation.RETRY -> return@withContext Result.retry()
+            PrivateSyncContinuation.APPEND -> PrivateBinderSyncScheduler.schedule(applicationContext, uid)
+            PrivateSyncContinuation.COMPLETE -> Unit
         }
         Result.success()
     }
@@ -355,6 +437,14 @@ class PrivateBinderSyncWorker(
                 "updatedAt" to FieldValue.serverTimestamp(),
             )
         }
+        PRIVATE_SYNC_PRICE_SELECTION -> dao.priceSelection(mutation.ownerUid, mutation.recordId)
+            ?.takeIf {
+                dao.getCollectionEntryBySyncId(mutation.ownerUid, mutation.recordId)
+                    ?.let { entry -> entry.deletedAtEpochMillis == null } == true
+            }
+            ?.let { selection ->
+                selection.priceSelectionPayload(mutation.mutationId) + ("updatedAt" to FieldValue.serverTimestamp())
+            }
         else -> null
     }
 
@@ -362,6 +452,7 @@ class PrivateBinderSyncWorker(
         PRIVATE_SYNC_BINDER -> privateBinderPath(mutation.ownerUid, mutation.recordId)
         PRIVATE_SYNC_PLACEMENT -> privateBinderPlacementPath(mutation.ownerUid, mutation.recordId)
         PRIVATE_SYNC_LAYOUT -> collectionLayoutPath(mutation.ownerUid, mutation.recordId)
+        PRIVATE_SYNC_PRICE_SELECTION -> collectionPriceSelectionPath(mutation.ownerUid, mutation.recordId)
         else -> error("Unbekannter Private-Binder-Synchronisationstyp.")
     }
 
@@ -387,7 +478,7 @@ private suspend fun pullBoundedSnapshot(
     val dao = database.cardVaultDao()
     val ownerKey = UUID.nameUUIDFromBytes(uid.toByteArray(StandardCharsets.UTF_8)).toString()
     val phaseKey = "private-sync-pull-phase-$ownerKey"
-    var phase = dao.metadata(phaseKey)?.toIntOrNull()?.coerceIn(0, 3) ?: 0
+    var phase = dao.metadata(phaseKey)?.toIntOrNull()?.coerceIn(0, 4) ?: 0
     var remaining = MAX_REMOTE_DOCUMENTS_PER_RUN
     val groups = listOf(
         RemotePullGroup("privateBinders") { document ->
@@ -396,6 +487,7 @@ private suspend fun pullBoundedSnapshot(
         },
         RemotePullGroup("privateBinderPlacements") { document -> applyRemotePlacement(dao, uid, document) },
         RemotePullGroup("collectionLayouts") { document -> applyRemoteLayout(dao, uid, document) },
+        RemotePullGroup("collectionPriceSelections") { document -> applyRemotePriceSelection(dao, uid, document) },
     )
     while (phase < groups.size) {
         val group = groups[phase]
@@ -650,6 +742,27 @@ private suspend fun applyRemoteLayout(
     dao.upsertCollectionLayout(
         CollectionLayoutEntity(entry.id, uid, visible, updatedAt, SYNC_CLEAN, revision),
     )
+    return checkpoint
+}
+
+private suspend fun applyRemotePriceSelection(
+    dao: CardVaultDao,
+    uid: String,
+    document: DocumentSnapshot,
+): PrivateRemoteApplyResult {
+    val checkpoint = PrivateRemoteApplyResult.Checkpoint
+    val data = document.data ?: return checkpoint
+    // Validate the whole envelope before requesting any dependency from a remote path.
+    val parsed = parsePriceSelectionSidecar(data, uid, document.id, 0L) ?: return checkpoint
+    if (dao.privateBinderSyncOutbox("$uid:$PRIVATE_SYNC_PRICE_SELECTION:${document.id}") != null) return checkpoint
+    val entry = dao.getCollectionEntryBySyncId(uid, document.id)
+        ?: return PrivateRemoteApplyResult.RetryDependency(PrivateRemoteDependencyType.COLLECTION_ENTRY, document.id)
+    if (entry.deletedAtEpochMillis != null) return checkpoint
+    val existing = dao.priceSelection(uid, document.id)
+    if (existing != null && existing.remoteRevision >= parsed.remoteRevision) return checkpoint
+    // Retain a newer complete snapshot even if the entry identity changed. Evaluation rejects it;
+    // retaining its revision prevents an older local choice from being resurrected later.
+    dao.upsertPriceSelection(parsed.copy(collectionEntryId = entry.id))
     return checkpoint
 }
 

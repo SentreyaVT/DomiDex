@@ -71,6 +71,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -149,7 +152,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import com.google.firebase.auth.FirebaseAuth
 
-private enum class Destination(@param:StringRes val label: Int, val icon: DomiIconKind, val showInNavigation: Boolean = true) {
+internal enum class Destination(@param:StringRes val label: Int, val icon: DomiIconKind, val showInNavigation: Boolean = true) {
     DASHBOARD(R.string.nav_portfolio, DomiIconKind.HOME),
     SCANNER(R.string.nav_scanner, DomiIconKind.SCAN),
     BINDER(R.string.nav_binder, DomiIconKind.BINDER),
@@ -247,16 +250,24 @@ private val relaxedTutorialSteps = listOf(
 }
 
 /** GPU-friendly, screen-local navigation; the Binder remains the visual center action. */
-@Composable private fun DomiDexBottomNavigation(selected: Destination, onSelected: (Destination) -> Unit) {
+@Composable internal fun DomiDexBottomNavigation(selected: Destination, onSelected: (Destination) -> Unit) {
+    val largeLabels = LocalDensity.current.fontScale > 1.2f
     DomiDexBottomBarFrame {
         Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = CardVaultSpacing.navHorizontal, vertical = CardVaultSpacing.navVertical),
-            color = VaultGlassHigh,
-            shape = RoundedCornerShape(22.dp),
-            border = BorderStroke(1.dp, VaultOutline.copy(alpha = .72f)),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = if (largeLabels) 0.dp else CardVaultSpacing.navHorizontal, vertical = CardVaultSpacing.navVertical),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(.8.dp, MewPlum.copy(alpha = .22f)),
             shadowElevation = 8.dp,
         ) {
-            Row(Modifier.fillMaxWidth().height(CardVaultSpacing.bottomNavHeight).padding(horizontal = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val twoLineLabels = largeLabels || maxWidth < 340.dp
+            val navHeight = when {
+                largeLabels -> 88.dp
+                twoLineLabels -> 76.dp
+                else -> CardVaultSpacing.bottomNavHeight
+            }
+            Row(Modifier.fillMaxWidth().height(navHeight).padding(horizontal = if (largeLabels) 0.dp else 3.dp), verticalAlignment = Alignment.CenterVertically) {
                 Destination.entries.filter { it.showInNavigation }.forEach { item ->
                     val active = selected == item
                     val iconLift by animateFloatAsState(if (active) -2f else 0f, tween(DomiMotion.Fast), label = "nav-lift-${item.name}")
@@ -265,34 +276,35 @@ private val relaxedTutorialSteps = listOf(
                     Box(
                         Modifier
                             .weight(1f)
-                            .fillMaxHeight()
+                            .fillMaxHeight().padding(vertical = 5.dp)
+                            .clip(RoundedCornerShape(16.dp))
                             .semantics(mergeDescendants = true) {
                                 role = Role.Tab
                                 this.selected = active
                             }
-                            .clickable(interactionSource = interaction, indication = null) { onSelected(item) },
+                            .clickable(interactionSource = interaction, indication = ripple()) { onSelected(item) }
+                            .padding(horizontal = if (largeLabels) 0.dp else 2.dp)
+                            .background(Brush.verticalGradient(if (active) listOf(DomiDexVioletDeep, MewPlumDeep)
+                                else listOf(Color.Transparent, Color.Transparent)), RoundedCornerShape(16.dp))
+                            .then(if (active) Modifier.border(.8.dp, MewRose.copy(alpha = .52f), RoundedCornerShape(16.dp)) else Modifier),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, modifier = Modifier.graphicsLayer { translationY = iconLift }) {
-                            val iconBox = if (item == Destination.BINDER) 38.dp else 30.dp
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth().graphicsLayer { translationY = iconLift }) {
+                            val iconBox = if (twoLineLabels) 30.dp else 34.dp
                             Box(
                                 Modifier.size(iconBox).graphicsLayer { scaleX = iconScale; scaleY = iconScale }
-                                    .background(
-                                        if (active) MewPlumDeep.copy(alpha = .82f) else Color.Transparent,
-                                        RoundedCornerShape(if (item == Destination.BINDER) 13.dp else 10.dp),
-                                    )
-                                    .then(
-                                        if (active) Modifier.border(1.dp, MewRose.copy(alpha = .48f), RoundedCornerShape(if (item == Destination.BINDER) 13.dp else 10.dp))
-                                        else Modifier,
-                                    ),
+                                    .background(Color.Transparent),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 DomiLineIcon(item.icon, if (active) MewRose else VaultTextMuted, Modifier.size(if (item == Destination.BINDER) 21.dp else 18.dp))
                             }
-                            Text(stringResource(item.label), color = if (active) VaultText else VaultTextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(stringResource(item.label), modifier = Modifier.fillMaxWidth(), color = if (active) VaultText else VaultTextMuted,
+                                fontSize = 11.sp, lineHeight = 14.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                                textAlign = TextAlign.Center, maxLines = if (twoLineLabels) 2 else 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -363,14 +375,14 @@ private val relaxedTutorialSteps = listOf(
         "Support & App-Informationen" to listOf(
             SettingEntry("Support kontaktieren", "Fragen und Datenschutzkontakt", DomiIconKind.INFO),
             SettingEntry("Hilfe", "Schnellstart, Korrekturen und Support", DomiIconKind.INFO),
-            SettingEntry("Über DomiDex", "Pre-Beta · privat · Non-Profit · Version & Build", DomiIconKind.CARD),
+            SettingEntry("Über DomiDex", "Geschlossene Alpha · privat · Non-Profit · Version & Build", DomiIconKind.CARD),
         ),
         "Konto- & Datenverwaltung" to listOf(
             SettingEntry("Konto löschen", "Löschanfrage · nichts wird sofort gelöscht", DomiIconKind.SHIELD),
         ),
     )
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(CardVaultSpacing.section)) {
-        item { DomiScreenTitle("Einstellungen", eyebrow = "DomiDex", subtitle = "Ruhig, verständlich und vollständig bei dir.") }
+        item { DomiScreenTitle("Einstellungen", eyebrow = "Dein DomiDex", subtitle = "So, wie es zu dir passt.") }
         groups.forEach { (groupTitle, entries) ->
             item(key = "header-$groupTitle") { DomiSectionTitle(groupTitle) }
             item(key = "group-$groupTitle") {
@@ -378,7 +390,7 @@ private val relaxedTutorialSteps = listOf(
                     Column {
                         entries.forEachIndexed { index, entry ->
                             DomiSettingRow(entry.icon, entry.title, entry.subtitle, entry.value) { detail = entry.title }
-                            if (index != entries.lastIndex) HorizontalDivider(color = VaultOutlineSoft, modifier = Modifier.padding(start = 60.dp))
+                            if (index != entries.lastIndex) HorizontalDivider(color = VaultOutlineSoft.copy(alpha = .45f), modifier = Modifier.padding(start = 66.dp, end = 14.dp))
                         }
                     }
                 }
@@ -653,7 +665,7 @@ private val relaxedTutorialSteps = listOf(
             }
             else -> {
                 val version = remember(context) { installedDomiDexVersion(context) }
-                Text("Pre-Beta · privat · Non-Profit", fontWeight = FontWeight.SemiBold)
+                Text("Geschlossene Alpha · privat · Non-Profit", fontWeight = FontWeight.SemiBold)
                 Text("Version ${version.name}\nBuild ${version.code}")
                 SettingsInfoBlock("DomiDex", "Dein visueller Begleiter für Pokémon-Karten: Binder zuerst, Kartenplätze nachvollziehbar, Preise klar gekennzeichnet und Scanner-Hinweise ohne falsche Gewissheit.")
                 SettingsInfoBlock("Unser Fokus", "DomiDex zeigt auch nicht besessene Karten als gedimmte Referenz, damit du deinen Fortschritt siehst – nicht nur eine Liste leerer Plätze.")
@@ -1107,19 +1119,19 @@ private fun isOnline(context: Context): Boolean {
     }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(CardVaultSpacing.screen), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            item { DomiScreenTitle("Deine Binder", eyebrow = "DomiDex Binder", subtitle = "Sammeln, öffnen und wie in einem echten Album blättern.") }
+            item { DomiScreenTitle("Deine Binder", eyebrow = "Platz für Lieblingskarten", subtitle = "Öffne dein Album. Entdecke deine Sammlung.") }
             item { BinderFocusHero() }
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { choosingCatalog = true }, modifier = Modifier.weight(1f).height(CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card, colors = ButtonDefaults.buttonColors(containerColor = MewPlumDeep, contentColor = VaultText), border = BorderStroke(1.dp, MewRose.copy(alpha = .72f))) {
+                    Button(onClick = { choosingCatalog = true }, modifier = Modifier.weight(1f).heightIn(min = CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card) {
                         DomiLineIcon(DomiIconKind.ADD, MaterialTheme.colorScheme.onPrimary, Modifier.size(17.dp))
                         Spacer(Modifier.width(8.dp))
                         Text("Karte hinzufügen", fontWeight = FontWeight.Bold)
                     }
-                    OutlinedButton(onClick = { privateBinderError = null; creatingPrivateBinder = true }, modifier = Modifier.weight(1f).height(CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card) {
-                        DomiLineIcon(DomiIconKind.BINDER, MewIce, Modifier.size(17.dp))
+                    OutlinedButton(onClick = { privateBinderError = null; creatingPrivateBinder = true }, modifier = Modifier.weight(1f).heightIn(min = CardVaultSpacing.buttonHeight), shape = CardVaultShapes.card) {
+                        DomiLineIcon(DomiIconKind.BINDER, MewRose, Modifier.size(17.dp))
                         Spacer(Modifier.width(7.dp))
-                        Text("Privater Binder", maxLines = 1)
+                        Text("Privater Binder")
                     }
                 }
             }
@@ -1175,7 +1187,7 @@ private fun isOnline(context: Context): Boolean {
                     kind = BinderOverviewKind.SET,
                     ownedCards = setCards.sumOf { it.quantity },
                     totalSlots = capacity,
-                    marketValueEur = setCards.filter { it.priceUpdatedAtEpochMillis != null }.sumOf { it.currentValueEur * it.quantity },
+                    marketValueEur = setCards.sumOf { (it.effectiveValueEur ?: 0.0) * it.quantity },
                     lastOpenedAtEpochMillis = setLastOpenedByName[setName],
                     completedSlots = progress,
                 )
@@ -1224,13 +1236,13 @@ private fun isOnline(context: Context): Boolean {
                         val setName = record.name
                         val setCards = grouped[setName].orEmpty()
                         val capacity = record.totalSlots
-                        val pricedCards = setCards.filter { it.priceUpdatedAtEpochMillis != null }
+                        val pricedCards = setCards.filter { it.effectiveValueEur != null }
                         DomiBinderShelfCard(
                             title = setName,
                             owned = record.completedSlots ?: record.ownedCards,
                             total = capacity,
                             cardCount = setCards.sumOf { it.quantity },
-                            marketValue = if (pricedCards.isEmpty()) "Kein Trendpreis verfügbar" else "Binderwert ${euro(record.marketValueEur)}",
+                            marketValue = if (pricedCards.isEmpty()) "Preis nicht verfügbar" else "Binderwert ${euro(record.marketValueEur)}" + if (pricedCards.any { it.usesPriceSelection }) " · mit Vergleichswerten" else "",
                             logoUrl = coverFor(setName),
                             selected = openingBinder == setName,
                             onClick = {
@@ -1300,18 +1312,13 @@ private fun isOnline(context: Context): Boolean {
 
 @Composable private fun BinderFocusHero() {
     DomiGlassCard(Modifier.fillMaxWidth(), highlighted = true) {
-        Box(Modifier.fillMaxWidth().height(152.dp), contentAlignment = Alignment.CenterStart) {
-            Canvas(Modifier.matchParentSize().clearAndSetSemantics { }) {
-                val center = Offset(size.width * .83f, size.height * .5f)
-                drawCircle(MewRose.copy(alpha = .08f), size.minDimension * .72f, center)
-                drawCircle(MewIce.copy(alpha = .10f), size.minDimension * .42f, center, style = Stroke(2f))
+        Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("DEIN SAMMELUNIVERSUM", color = MewRose, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.2.sp)
+                Text("Dein Stil.\nDein Binder.", color = VaultText, style = MaterialTheme.typography.headlineMedium)
+                Text("Nach Sets geordnet oder frei gestaltet. Deine Karten stehen im Mittelpunkt.", color = VaultTextMuted, fontSize = 12.sp, lineHeight = 18.sp)
             }
-            Column(Modifier.padding(18.dp).fillMaxWidth(.62f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text("DEIN FOKUS", color = MewRose, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.4.sp)
-                Text("Binder zuerst.", color = VaultText, style = MaterialTheme.typography.headlineMedium)
-                Text("Deine Karten bleiben sichtbar, greifbar und nach Sets oder ganz frei geordnet.", color = VaultTextMuted, fontSize = 11.sp, lineHeight = 15.sp)
-            }
-            DomiPhysicalBinder("DomiDex", 0f, Modifier.align(Alignment.CenterEnd).padding(end = 13.dp).size(112.dp, 112.dp))
+            DomiPrivateBinderCover("DomiDex", "aurora", Modifier.size(100.dp, 140.dp))
         }
     }
 }
@@ -1418,8 +1425,9 @@ private fun isOnline(context: Context): Boolean {
     var removalCandidate by remember { mutableStateOf<CollectionCard?>(null) }
     var removalStage by rememberSaveable { mutableIntStateOf(0) }
     val ownedBinderId = remember(cards) { cards.map { it.binderId }.filter { it.isNotBlank() }.distinct().singleOrNull() }
-    val binderValue = remember(cards) { cards.filter { it.priceUpdatedAtEpochMillis != null }.sumOf { it.currentValueEur * it.quantity } }
-    val pricedBinderCards = remember(cards) { cards.filter { it.priceUpdatedAtEpochMillis != null }.sumOf { it.quantity } }
+    val binderValue = remember(cards) { cards.sumOf { (it.effectiveValueEur ?: 0.0) * it.quantity } }
+    val pricedBinderCards = remember(cards) { cards.filter { it.effectiveValueEur != null }.sumOf { it.quantity } }
+    val alternativeBinderCards = remember(cards) { cards.filter { it.usesPriceSelection }.sumOf { it.quantity } }
     val binderCards = remember(cards) { cards.sumOf { it.quantity } }
     var binderDeletionStage by rememberSaveable { mutableIntStateOf(0) }
     var pageDragFraction by remember { mutableFloatStateOf(0f) }
@@ -1465,7 +1473,7 @@ private fun isOnline(context: Context): Boolean {
             Row(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(if (pricedBinderCards == 0) "Kein Marktwert verfügbar" else euro(binderValue), color = if (pricedBinderCards == 0) VaultTextMuted else VaultText, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Text("Cardmarket-Trendwert · $pricedBinderCards/$binderCards bepreist", color = VaultTextMuted, fontSize = 9.sp)
+                    Text(if (alternativeBinderCards > 0) "Sammlungswert · $pricedBinderCards/$binderCards bepreist · $alternativeBinderCards Vergleichswerte" else "Cardmarket-Trendwert · $pricedBinderCards/$binderCards bepreist", color = VaultTextMuted, fontSize = 9.sp)
                     if (referencesLoading) Text("Deutsche Setvarianten werden geprüft …", color = MewIce, fontSize = 9.sp)
                 }
                 if (ownedBinderId != null || onHideReferenceBinder != null) TextButton(onClick = { binderDeletionStage = 1 }) {
@@ -1584,6 +1592,7 @@ private fun isOnline(context: Context): Boolean {
                                 cardmarketExpansionId = product.expansionId,
                                 sourceSetId = card.sourceSetId,
                                 sourceCardId = card.sourceCardId,
+                                priceSelection = product.confirmedPriceSelection,
                             ),
                             target,
                         )
@@ -2206,12 +2215,15 @@ private fun ArrivalMoment(ready: Boolean, onContinue: () -> Unit) {
 }
 
 @Composable private fun DashboardQuickAction(label: String, icon: DomiIconKind, modifier: Modifier, onClick: () -> Unit, highlighted: Boolean = false) {
+    val accent = if (highlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
     DomiGlassCard(modifier, highlighted = highlighted, onClick = onClick) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Box(Modifier.size(34.dp).background(if (highlighted) MewPlumDeep else VaultNightRaised, RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) {
-                DomiLineIcon(icon, if (highlighted) MewRose else MewIce, Modifier.size(18.dp))
+        Row(Modifier.fillMaxWidth().heightIn(min = 68.dp).padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(Modifier.size(36.dp).background(accent.copy(alpha = .12f), RoundedCornerShape(10.dp))
+                .border(.7.dp, accent.copy(alpha = .30f), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                DomiLineIcon(icon, accent, Modifier.size(20.dp))
             }
-            Text(label, color = VaultText, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(label, color = VaultText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            DomiLineIcon(DomiIconKind.CHEVRON, accent.copy(alpha = .8f), Modifier.size(10.dp))
         }
     }
 }
@@ -2219,8 +2231,9 @@ private fun ArrivalMoment(ready: Boolean, onContinue: () -> Unit) {
 /** Shows only locally available Cardmarket data; missing prices are never estimated. */
 @Composable internal fun CurrentBinderValueCard(binders: List<BinderSummary>, openBinder: () -> Unit) {
     val bindersWithCards = binders.filter { it.ownedCards > 0 }
-    val pricedBinders = bindersWithCards.filter { it.lastPriceUpdatedAtEpochMillis != null }
+    val pricedBinders = bindersWithCards.filter { it.lastPriceUpdatedAtEpochMillis != null || it.alternativePricedCards > 0 }
     val currentValue = pricedBinders.sumOf { it.marketValueEur }
+    val alternativeCount = pricedBinders.sumOf { it.alternativePricedCards }
     DomiGlassCard(Modifier.fillMaxWidth(), onClick = openBinder) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(CardVaultSpacing.card),
@@ -2237,7 +2250,8 @@ private fun ArrivalMoment(ready: Boolean, onContinue: () -> Unit) {
                 if (bindersWithCards.isNotEmpty()) {
                     Text(
                         if (pricedBinders.isEmpty()) "Für deine Binder liegen noch keine verlässlichen Cardmarket-Trendpreise vor."
-                        else "Wert verfügbarer Cardmarket-Preise · ${pricedBinders.size}/${bindersWithCards.size} Binder mit Preisdaten. Fehlende Preise sind nicht enthalten.",
+                        else "Wert verfügbarer Cardmarket-Preise · ${pricedBinders.size}/${bindersWithCards.size} Binder mit Preisdaten. Fehlende Preise sind nicht enthalten." +
+                            if (alternativeCount > 0) " Enthält $alternativeCount ausdrücklich gewählte Vergleichswerte, keine Trendpreise." else "",
                         color = VaultTextMuted,
                         fontSize = 12.sp,
                     )
@@ -2412,42 +2426,96 @@ private fun openDiscordCommunity(context: Context) {
     }
 }
 
+internal fun portfolioValuationDescription(portfolio: PortfolioSummary): String {
+    val trends = portfolio.trendPricedCards
+    val alternatives = portfolio.alternativePricedCards
+    val total = portfolio.totalCards
+    if (total > 0 && trends == total) return "Cardmarket-Trendpreis für alle $total Karten verfügbar"
+    val summary = "Bewertet: ${trends + alternatives} von $total Karten"
+    return when {
+        alternatives > 0 -> "$summary · Trendpreise: $trends · gewählte Vergleichswerte: $alternatives"
+        trends > 0 -> "$summary · Trendpreise"
+        else -> "$summary · Preis nicht verfügbar"
+    }
+}
+
 @Composable private fun PortfolioHero(portfolio: PortfolioSummary, focusChoice: String, onFocusChoice: (String) -> Unit) {
     var choosingFocus by remember { mutableStateOf(false) }
-    val automatic = portfolio.cards.maxByOrNull { it.currentValueEur }
+    val automatic = portfolio.cards.maxByOrNull { it.effectiveValueEur ?: 0.0 }
     val manual = focusChoice.removePrefix("entry:").toLongOrNull()?.let { id -> portfolio.cards.firstOrNull { it.entryId == id } }
     val focusCard = if (focusChoice == "auto") automatic else manual ?: automatic
-    DomiGlassCard(Modifier.fillMaxWidth(), highlighted = true) {
-        Box(Modifier.fillMaxWidth().height(CardVaultSpacing.heroHeight).background(Brush.linearGradient(listOf(Color(0xFF161124), Color(0xFF0D0D18), Color(0xFF0A131B))))) {
+    val valueText = if (portfolio.hasPricedCards) euro(portfolio.totalValue) else "Kein Trendpreis verfügbar"
+    val valueStyle = (if (portfolio.hasPricedCards) MaterialTheme.typography.displaySmall else MaterialTheme.typography.titleLarge)
+        .copy(fontWeight = FontWeight.Bold)
+    val textMeasurer = rememberTextMeasurer()
+    val heroGlow = DomiDexViolet.copy(alpha = .38f)
+    DomiGlassCard(Modifier.fillMaxWidth().testTag("dashboard-portfolio-hero"), highlighted = true) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // A 360dp phone leaves 324dp after the dashboard margins: keep that normal
+            // case compact, reserving a vertical flow for narrow or large-text layouts.
+            val stacked = maxWidth < 300.dp || LocalDensity.current.fontScale > 1.25f
+            val focusWidth = if (stacked) 152.dp else (maxWidth * .42f).coerceIn(132.dp, 144.dp)
+            val besideCardWidthPx = with(LocalDensity.current) { (maxWidth - 28.dp - 12.dp - focusWidth).toPx() }
+            // Preserve every digit at the selected accessible text size. Only the value
+            // block moves above the row when a large total cannot fit alongside the card.
+            val fullWidthTotals = stacked || textMeasurer.measure(
+                text = valueText, style = valueStyle, softWrap = false, maxLines = 1,
+            ).size.width > besideCardWidthPx
             Canvas(Modifier.matchParentSize().clearAndSetSemantics { }) {
-                drawCircle(MewIce.copy(alpha = .10f), radius = size.minDimension * .52f, center = Offset(size.width * .84f, size.height * .20f))
-                drawCircle(MewRose.copy(alpha = .08f), radius = size.minDimension * .34f, center = Offset(size.width * .60f, size.height * .92f))
+                val center = Offset(size.width * .86f, size.height * .56f)
+                drawCircle(Brush.radialGradient(listOf(heroGlow, Color.Transparent), center, size.minDimension * .65f), size.minDimension * .65f, center)
+                val orbit = Path().apply {
+                    val r = size.minDimension * .45f
+                    repeat(6) { i ->
+                        val angle = -kotlin.math.PI / 2 + i * kotlin.math.PI / 3
+                        val x = center.x + kotlin.math.cos(angle).toFloat() * r
+                        val y = center.y + kotlin.math.sin(angle).toFloat() * r
+                        if (i == 0) moveTo(x, y) else lineTo(x, y)
+                    }
+                    close()
+                }
+                drawPath(orbit, MewRose.copy(alpha = .20f), style = Stroke(.8.dp.toPx()))
             }
-            Row(Modifier.fillMaxSize().padding(start = 20.dp, end = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Surface(color = MewPlumDeep.copy(alpha = .72f), shape = CardVaultShapes.pill, border = BorderStroke(1.dp, MewRose.copy(alpha = .32f))) { Text(stringResource(R.string.portfolio_private_badge), Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = VaultText, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
-                    Text("Gesamtportfolio · alle Binder", color = VaultTextMuted, fontSize = 13.sp)
-                    Text(if (portfolio.hasPricedCards) euro(portfolio.totalValue) else "Kein Trendpreis verfügbar", fontSize = if (portfolio.hasPricedCards) 30.sp else 18.sp, fontWeight = FontWeight.Black, color = VaultText, maxLines = 1)
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth().background(MewPlumDeep.copy(alpha = .32f), RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    DomiLineIcon(DomiIconKind.BINDER, MewRose, Modifier.size(18.dp))
+                    Text(stringResource(R.string.portfolio_private_badge), color = MewRose, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .8.sp)
+                }
+                val totals: @Composable () -> Unit = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Gesamtportfolio · alle Binder", color = VaultTextMuted, fontSize = 12.sp, lineHeight = 16.sp)
+                    Text(
+                        valueText,
+                        style = valueStyle,
+                        color = VaultText,
+                    )
+                } }
+                val details: @Composable () -> Unit = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         if (portfolio.history.size > 1) "Preisänderung des heutigen Bestands: ${String.format(Locale.GERMANY, "%+.1f", portfolio.changePercent)} %" else "Noch nicht genügend echte Preisverlaufsdaten",
-                        color = if (portfolio.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error,
+                        color = if (portfolio.history.size < 2) VaultTextMuted else if (portfolio.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 12.sp,
+                        lineHeight = 16.sp,
                     )
                     Text(
-                        if (portfolio.unpricedCards == 0) "Cardmarket-Trendpreis für alle ${portfolio.pricedCards} Karten verfügbar"
-                        else "Trendpreis: ${portfolio.pricedCards} von ${portfolio.totalCards} Karten",
+                        portfolioValuationDescription(portfolio),
                         color = VaultTextMuted,
-                        fontSize = 10.sp,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
                     )
-                    TextButton(onClick = { choosingFocus = true }, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)) { Text(stringResource(if (focusChoice == "auto") R.string.focus_automatic else R.string.focus_manual), color = MewRose, fontSize = 10.sp) }
+                } }
+                if (fullWidthTotals) totals()
+                if (stacked) {
+                    InteractiveFocusCard(focusCard, Modifier.align(Alignment.CenterHorizontally).width(focusWidth).aspectRatio(63f / 88f).testTag("dashboard-focus-card"), interactive = true, sensorEnabled = false)
+                    details()
+                } else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (!fullWidthTotals) totals()
+                        details()
+                    }
+                    InteractiveFocusCard(focusCard, Modifier.width(focusWidth).aspectRatio(63f / 88f).testTag("dashboard-focus-card"), interactive = true, sensorEnabled = false)
                 }
-                InteractiveFocusCard(
-                    focusCard,
-                    Modifier.size(116.dp, 164.dp),
-                    interactive = true,
-                    sensorEnabled = false,
-                )
+                TextButton(onClick = { choosingFocus = true }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)) { Text(stringResource(if (focusChoice == "auto") R.string.focus_automatic else R.string.focus_manual), color = MewRose, fontSize = 12.sp, lineHeight = 16.sp) }
             }
         }
     }
@@ -2573,7 +2641,7 @@ private enum class PriceHistoryRange(val label: String, val days: Long?) {
     }
     val change = visibleHistory.takeIf { it.size >= 2 }?.let { points -> points.last().valueEur - points.first().valueEur }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("AKTUELLER WERT", fontWeight = FontWeight.Bold, color = MewRoseSoft)
+        Text("TRENDPREIS-VERLAUF", fontWeight = FontWeight.Bold, color = MewRoseSoft)
         if (current == null) {
             Text("Kein Marktwert verfügbar", color = VaultTextMuted, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Text("Für diese konkrete deutsche Variante ist noch kein eindeutig verknüpfter Cardmarket-Trendpreis gespeichert.", color = VaultTextMuted, fontSize = 11.sp)
@@ -2651,8 +2719,7 @@ private fun formatPriceDate(timestamp: Long): String = java.time.Instant.ofEpoch
 
 internal fun collectionCardsByDisplayedMarketValue(cards: List<CollectionCard>): List<CollectionCard> {
     fun displayedValue(card: CollectionCard): Double? {
-        if (card.priceUpdatedAtEpochMillis == null) return null
-        return (card.currentValueEur * card.quantity).takeIf(Double::isFinite)
+        return card.effectiveValueEur?.let { it * card.quantity }?.takeIf(Double::isFinite)
     }
 
     return cards.sortedWith(
@@ -2735,7 +2802,10 @@ internal fun collectionCardsByDisplayedMarketValue(cards: List<CollectionCard>):
         onDismiss = { adding = false; catalogDraft = null },
         onSaved = { addOutcome = it },
     )
-    viewing?.let { card -> CardPreviewDialog(card, repository, onDismiss = { viewing = null }, onEdit = { viewing = null; editing = card }) }
+    viewing?.let { selected ->
+        val card = cards.firstOrNull { it.entryId == selected.entryId } ?: selected
+        CardPreviewDialog(card, repository, onDismiss = { viewing = null }, onEdit = { viewing = null; editing = card })
+    }
     editing?.let { card -> EditEntryDialog(card, onDismiss = { editing = null }, onDelete = { editing = null; deleting = card }, onLink = { editing = null; linking = card }, onSave = { update -> scope.launch { repository.updateEntry(card.entryId, update) }; editing = null }) }
     linking?.let { card -> CatalogLinkDialog(card, repository, onDismiss = { linking = null }, onLinked = { productId -> scope.launch { repository.linkCatalogProduct(card.entryId, productId) }; linking = null }) }
     deleting?.let { card -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text(stringResource(R.string.delete_entry_title)) }, text = { Text(stringResource(R.string.delete_entry_body, card.name)) }, confirmButton = { TextButton(onClick = { scope.launch { repository.deleteEntry(card.entryId) }; deleting = null }) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.action_cancel)) } }) }
@@ -2780,14 +2850,15 @@ internal fun collectionCardsByDisplayedMarketValue(cards: List<CollectionCard>):
     val historyFlow = remember(repository, card.entryId, card.id, card.finish) { repository.priceHistory(card) }
     val priceHistory by historyFlow.collectAsState(initial = emptyList())
     var referenceProducts by remember(card.id, card.marketExpansionId) { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
-    var selectedMarketProductId by rememberSaveable(card.entryId, card.sourceSetId, card.sourceCardId, card.finish, card.variant) { mutableStateOf(card.externalProductId) }
-    var priceChoicesExpanded by rememberSaveable(card.entryId) { mutableStateOf(false) }
+    var confirmedAlternative by remember(card.entryId, card.id, card.finish, card.variant, card.priceSelection) { mutableStateOf<CardPriceSelection?>(null) }
+    var alternativeCleared by remember(card.entryId, card.id, card.finish, card.variant, card.priceSelection) { mutableStateOf(false) }
+    var savingAlternative by remember { mutableStateOf(false) }
+    var alternativeError by remember { mutableStateOf<String?>(null) }
     var priceLookupComplete by remember(card.id, card.sourceCardId, card.finish, card.variant) { mutableStateOf(false) }
     val catalogSync by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
     val isReferenceAdd = onAdd != null
     LaunchedEffect(card.id, card.externalProductId, card.marketExpansionId, card.marketSearchName, card.finish, card.variant, sourceSetCards, catalogSync.lastSuccessAtEpochMillis) {
         priceLookupComplete = false
-        val query = card.marketSearchName ?: card.name
         referenceProducts = if (isReferenceAdd) {
             val sourceCard = sourceSetCards.firstOrNull {
                 it.set.id.equals(card.sourceSetId, ignoreCase = true) && it.id.equals(card.sourceCardId, ignoreCase = true)
@@ -2801,30 +2872,29 @@ internal fun collectionCardsByDisplayedMarketValue(cards: List<CollectionCard>):
                     catch (_: Exception) { emptyList() }
                 binderReferenceCardmarketProducts(card, detailed, sourceSetCards, matches)
             }.orEmpty()
-        } else if (card.externalProductId != null) {
-            // Reopening an owned card must retain its explicit product, not pick
-            // the first cheaper main-set namesake returned by a name search.
-            val products = try { repository.catalogProducts(listOf(card.externalProductId)) }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { emptyList() }
-            products.map { it.copy(trendPriceEur = it.realTrendFor(card.finish)) }
         } else {
-            val matches = runCatching { repository.searchCatalog(query, 100) }.getOrDefault(emptyList())
-            val linkedProduct = card.externalProductId?.let { productId -> matches.firstOrNull { it.productId == productId } }
-            val verifiedExpansion = card.marketExpansionId ?: linkedProduct?.expansionId
-            verifiedExpansion?.let { expansion ->
-                matches.filter { it.expansionId == expansion && isSameNamePriceCandidate(query, it) }
-            } ?: linkedProduct?.let(::listOf).orEmpty()
+            // Repair source-backed old entries in every set. Never substitute a
+            // namesake, a different collector number or another physical printing.
+            val matches = try {
+                ownedCardPriceProducts(card, repository, visualCatalog, sourceSetCards)
+            } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { emptyList() }
+            matches.singleOrNull()?.takeIf { card.entryId > 0L && card.externalProductId == null }?.let { product ->
+                try { repository.linkCatalogProduct(card.entryId, product.productId) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { android.util.Log.w("DomiDexPrices", "Exact source price link could not be saved", error) }
+            }
+            matches
         }
         priceLookupComplete = true
     }
-    val marketPriceChoices = binderCardmarketPriceChoices(card, referenceProducts)
-    val preferredMarketProduct = defaultBinderCardmarketProduct(card, referenceProducts)
-        ?.takeIf { it.trendPriceEur != null }
-    val selectedMarketProduct = marketPriceChoices.firstOrNull { it.productId == selectedMarketProductId }
-        ?: preferredMarketProduct
-    val storedTrendPrice = card.currentValueEur.takeIf { card.priceUpdatedAtEpochMillis != null && it > 0.0 }
-    val displayedTrendPrice = selectedMarketProduct?.trendPriceEur ?: storedTrendPrice
+    val preferredMarketProduct = referenceProducts.singleOrNull()
+    val displayedTrendPrice = preferredMarketProduct?.realTrendFor(card.finish) ?: card.trendValueEur
+    val savedAlternative = if (alternativeCleared) null else confirmedAlternative ?: card.priceSelection
+    val validAlternative = savedAlternative?.takeIf {
+        displayedTrendPrice == null && it.matches(card.copy(externalProductId = preferredMarketProduct?.productId ?: card.externalProductId))
+    }
+    val displayedValue = displayedTrendPrice ?: validAlternative?.valueEur
     val priceDate = card.priceUpdatedAtEpochMillis?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, Locale.GERMANY).format(java.util.Date(it)) }
     AlertDialog(
         onDismissRequest = { if (!addInProgress) onDismiss() },
@@ -2834,12 +2904,13 @@ internal fun collectionCardsByDisplayedMarketValue(cards: List<CollectionCard>):
         text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = if (isReferenceAdd) 430.dp else 590.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { InteractiveFocusCard(card, Modifier.size(174.dp, 246.dp), interactive = true) }
         item {
-            DomiGlassCard(Modifier.fillMaxWidth(), highlighted = displayedTrendPrice != null) {
+            DomiGlassCard(Modifier.fillMaxWidth(), highlighted = displayedValue != null) {
                 Row(Modifier.fillMaxWidth().padding(13.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(Modifier.size(36.dp).background(MewPlumDeep.copy(alpha = .68f), RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) { DomiLineIcon(DomiIconKind.MARKET, MewRose, Modifier.size(19.dp)) }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("CARDMARKET-TRENDPREIS", color = VaultTextMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
-                        Text(displayedTrendPrice?.let(::euro) ?: if (priceLookupComplete) "Preis nicht verfügbar" else "Wird abgeglichen …", color = if (displayedTrendPrice != null) VaultText else VaultTextMuted, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                        Text(if (validAlternative != null) "GEWÄHLTER VERGLEICHSWERT" else "CARDMARKET-TRENDPREIS", color = VaultTextMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
+                        Text(displayedValue?.let(::euro) ?: if (priceLookupComplete) "Preis nicht verfügbar" else "Wird abgeglichen …", color = if (displayedValue != null) VaultText else VaultTextMuted, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                        validAlternative?.let { Text(it.metric.label, color = VaultTextMuted, fontSize = 10.sp) }
                     }
                     if (displayedTrendPrice != null) DomiLineIcon(DomiIconKind.CHECK, VaultPositive, Modifier.size(18.dp))
                 }
@@ -2851,58 +2922,43 @@ internal fun collectionCardsByDisplayedMarketValue(cards: List<CollectionCard>):
                 onChange = onChangeSelection,
                 enabled = !addInProgress)
         }
-        if (!isReferenceAdd) {
-            if (card.entryId > 0L && marketPriceChoices.isNotEmpty()) item {
-                DomiGlassCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(
-                            Modifier.fillMaxWidth().clickable { priceChoicesExpanded = !priceChoicesExpanded },
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        ) {
-                            DomiLineIcon(DomiIconKind.MARKET, MewIce, Modifier.size(18.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("Cardmarket-Preis auswählen", color = VaultText, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Text("Standardmäßig wird der Trendpreis verwendet.", color = VaultTextMuted, fontSize = 10.sp)
-                            }
-                            Text(if (priceChoicesExpanded) "▲" else "▼", color = VaultTextMuted, fontSize = 11.sp)
-                        }
-                        if (priceChoicesExpanded) {
-                            HorizontalDivider(color = VaultOutlineSoft)
-                            LazyColumn(
-                                Modifier.fillMaxWidth().heightIn(max = 190.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                items(marketPriceChoices, key = { it.productId }) { product ->
-                                    val selected = product.productId == selectedMarketProduct?.productId
-                                    Surface(
-                                        onClick = {
-                                            selectedMarketProductId = product.productId
-                                            scope.launch { repository.linkCatalogProduct(card.entryId, product.productId) }
-                                        },
-                                        color = if (selected) MewPlumDeep.copy(alpha = .72f) else Color.Transparent,
-                                        shape = CardVaultShapes.cardCompact,
-                                        border = BorderStroke(1.dp, if (selected) MewRoseSoft else VaultOutlineSoft),
-                                    ) {
-                                        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            RadioButton(
-                                                selected = selected,
-                                                onClick = null,
-                                                colors = RadioButtonDefaults.colors(selectedColor = MewRose, unselectedColor = VaultTextMuted),
-                                            )
-                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                Text(product.name, color = VaultText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                                Text(product.visualSetName ?: "Cardmarket-Erweiterung ${product.expansionId}", color = VaultTextMuted, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            }
-                                            Text(euro(product.trendPriceEur!!), color = MewIce, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
+        if (savedAlternative != null || (displayedTrendPrice == null && preferredMarketProduct != null)) item {
+            CardPriceAlternativePicker(
+                card = card, product = preferredMarketProduct, saved = savedAlternative,
+                enabled = !addInProgress && !savingAlternative,
+                onConfirm = { selection ->
+                    alternativeError = null
+                    if (isReferenceAdd) { confirmedAlternative = selection; alternativeCleared = false }
+                    else scope.launch {
+                        savingAlternative = true
+                        try {
+                            repository.setPriceSelection(card.entryId, selection)
+                            confirmedAlternative = selection
+                            alternativeCleared = false
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (error: Exception) { alternativeError = binderUiError(error, "Der Vergleichswert konnte nicht gespeichert werden.") }
+                        finally { savingAlternative = false }
                     }
-                }
-            }
+                },
+                onClear = savedAlternative?.let { {
+                    alternativeError = null
+                    if (isReferenceAdd) { confirmedAlternative = null; alternativeCleared = true }
+                    else scope.launch {
+                        savingAlternative = true
+                        try {
+                            repository.clearPriceSelection(card.entryId)
+                            confirmedAlternative = null
+                            alternativeCleared = true
+                        }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (error: Exception) { alternativeError = binderUiError(error, "Der Vergleichswert konnte nicht entfernt werden.") }
+                        finally { savingAlternative = false }
+                    }
+                } },
+            )
+        }
+        alternativeError?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) } }
+        if (!isReferenceAdd) {
             item { Text(stringResource(R.string.card_preview_variant, card.language.label, card.finish, card.variant), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
             item { Text("Visueller Effekt: ${effect.profile.label}", color = MewIce, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
             item { HorizontalDivider(color = VaultOutline) }
@@ -2911,7 +2967,7 @@ internal fun collectionCardsByDisplayedMarketValue(cards: List<CollectionCard>):
         }
     } }, confirmButton = {
         Row {
-            if (onAdd != null) Button(enabled = preferredMarketProduct != null && !addInProgress, onClick = { onAdd(preferredMarketProduct!!) }) { Text(if (addInProgress) "Wird hinzugefügt …" else "In diesen Binder hinzufügen") }
+            if (onAdd != null) Button(enabled = preferredMarketProduct != null && !addInProgress, onClick = { onAdd(preferredMarketProduct!!.copy(confirmedPriceSelection = validAlternative)) }) { Text(if (addInProgress) "Wird hinzugefügt …" else "In diesen Binder hinzufügen") }
             if (onDelete != null) TextButton(onClick = onDelete) { Text("Aus Binder entfernen", color = MaterialTheme.colorScheme.error) }
             if (onEdit != null) TextButton(onClick = onEdit) { Text(stringResource(R.string.card_preview_edit)) }
         }
@@ -3030,7 +3086,11 @@ private fun openOfficialPage(context: Context, url: String) {
         StaticCardEffectLayer(effect, Modifier.matchParentSize().clearAndSetSemantics { })
     }
     Column(Modifier.weight(1f)) { Text(card.name, fontWeight = FontWeight.Bold); Text("${card.set} · ${card.number}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.card_metadata, card.language.label, card.condition, card.quantity), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp); if (card.externalProductId != null) Text(stringResource(R.string.catalog_linked_badge), color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
-    Column(horizontalAlignment = Alignment.End) { Text(if (card.priceUpdatedAtEpochMillis == null) stringResource(R.string.no_market_price) else euro(card.currentValueEur * card.quantity), fontWeight = FontWeight.Bold, fontSize = if (card.priceUpdatedAtEpochMillis == null) 11.sp else 14.sp); if (card.priceUpdatedAtEpochMillis != null) Text((if (card.changePercent >= 0) "+" else "") + "%.1f%%".format(Locale.US, card.changePercent), color = if (card.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error, fontSize = 12.sp) }
+    Column(horizontalAlignment = Alignment.End) {
+        Text(card.effectiveValueEur?.let { euro(it * card.quantity) } ?: stringResource(R.string.no_market_price), fontWeight = FontWeight.Bold, fontSize = if (card.effectiveValueEur == null) 11.sp else 14.sp)
+        if (card.usesPriceSelection) Text("Vergleichswert", color = MewIce, fontSize = 10.sp)
+        else if (card.trendValueEur != null) Text((if (card.changePercent >= 0) "+" else "") + "%.1f%%".format(Locale.US, card.changePercent), color = if (card.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error, fontSize = 12.sp)
+    }
 } } }
 
 @Composable private fun AddModeDialog(onDismiss: () -> Unit, onCatalog: () -> Unit, onManual: () -> Unit) = AlertDialog(
@@ -3359,6 +3419,8 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
     val identitySelection = selectedCatalog?.takeIf { it.matchesManualCatalogSelection(name, set, number) }
     val sourceSelection = identitySelection?.takeIf { !it.sourceSetId.isNullOrBlank() && !it.sourceCardId.isNullOrBlank() }
     val sourceConfirmed = sourceSelection != null
+    val sourcePrintingChanged = sourceSelection != null && !sourceSelection.matchesManualPrinting(finish, variant)
+    var confirmedAlternative by remember(selectedCatalog, name, set, number, finish, variant, language) { mutableStateOf<CardPriceSelection?>(null) }
     val priceSearchName = identitySelection?.marketSearchName ?: name
     fun clearCatalogSelection() {
         selectedCatalog = null
@@ -3366,8 +3428,13 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
         marketProducts = emptyList()
         saveError = null
     }
-    LaunchedEffect(selectedCatalog, name, set, number, finish, priceSearchName, catalogSync.lastSuccessAtEpochMillis) {
+    LaunchedEffect(selectedCatalog, name, set, number, finish, variant, priceSearchName, catalogSync.lastSuccessAtEpochMillis) {
         marketProducts = emptyList()
+        if (sourcePrintingChanged) {
+            marketLoading = false
+            selectedMarketProductId = null
+            return@LaunchedEffect
+        }
         if (name.trim().length < 2 || set.isBlank() || number.isBlank()) {
             marketLoading = false
             selectedMarketProductId = identitySelection?.takeIf { it.hasMarketProduct }?.productId
@@ -3397,6 +3464,16 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
         }
     }
     val selectedMarketProduct = marketProducts.firstOrNull { it.productId == selectedMarketProductId }
+        ?.takeUnless { sourcePrintingChanged }
+    val pricePreviewCard = CollectionCard(
+        entryId = 0L, id = sourceSelection?.sourceCardId.orEmpty(), name = name, set = set, number = number,
+        language = language, finish = finish, variant = variant, condition = condition, quantity = 1,
+        currentValueEur = 0.0, changePercent = 0.0, priceUpdatedAtEpochMillis = null, notes = "",
+        acquisitionPriceEur = null, acquisitionDateEpochDay = null, accent = 0L,
+        externalProductId = selectedMarketProduct?.productId,
+        sourceSetId = sourceSelection?.sourceSetId, sourceCardId = sourceSelection?.sourceCardId,
+    )
+    val validAlternative = confirmedAlternative?.takeIf { it.matches(pricePreviewCard) && selectedMarketProduct?.realTrendFor(finish) == null }
     val valid = name.isNotBlank() && set.isNotBlank() && number.isNotBlank() && condition.isNotBlank() && (quantity.toIntOrNull() ?: 0) > 0 && parseDate(date) != Long.MIN_VALUE && parsePrice(price) != Double.NEGATIVE_INFINITY
     if (choosingCatalog) {
         CatalogProductPicker(repository, onDismiss = { choosingCatalog = false }, onSelected = { selection ->
@@ -3417,6 +3494,9 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
     AlertDialog(onDismissRequest = { if (!saving) onDismiss() }, title = { Text(stringResource(R.string.manual_add_title)) }, text = {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             saveError?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) } }
+            if (sourcePrintingChanged) item {
+                Text("Variante geändert: Bitte die passende Kartenausgabe erneut auswählen, um ihren Preis zu übernehmen. Bis dahin bleibt diese Karte ohne Preiszuordnung.", color = VaultTextMuted, fontSize = 12.sp)
+            }
             item { BinderDestinationSummary(set, number, finish, sourceConfirmed, onChange = { choosingCatalog = true }, enabled = !saving) }
             item {
                 BinderTargetPicker(
@@ -3446,7 +3526,7 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(product.trendPriceEur?.let { "Cardmarket-Trendpreis: ${euro(it)}" } ?: "Cardmarket-Trendpreis wird geladen", color = if (product.trendPriceEur != null) MewIce else VaultTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text(product.trendPriceEur?.let { "Cardmarket-Trendpreis: ${euro(it)}" } ?: "Kein Cardmarket-Trendpreis verfügbar", color = if (product.trendPriceEur != null) MewIce else VaultTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                     Text("$finish · $variant", color = VaultTextMuted, fontSize = 11.sp)
                                     Text("Passendes Preisprodukt für diese Karte", color = MewIce, fontSize = 10.sp)
                                 }
@@ -3455,13 +3535,17 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
                     }
                 }
             }
+            if (sourceConfirmed && selectedMarketProduct != null && !marketLoading) item {
+                CardPriceAlternativePicker(pricePreviewCard, selectedMarketProduct, validAlternative, !saving,
+                    onConfirm = { confirmedAlternative = it }, onClear = validAlternative?.let { { confirmedAlternative = null } })
+            }
             item { FormField(quantity, { quantity = it.filter(Char::isDigit) }, R.string.field_quantity, KeyboardType.Number) }; item { FormField(condition, { condition = it }, R.string.field_condition) }
             item { FormField(price, { price = it }, R.string.field_acquisition_price, KeyboardType.Decimal) }; item { FormField(date, { date = it }, R.string.field_acquisition_date) }; item { FormField(notes, { notes = it }, R.string.field_notes, singleLine = false) }
         }
     }, confirmButton = {
         TextButton(enabled = valid && !saving, onClick = {
-            val selectedLink = selectedMarketProduct ?: identitySelection?.takeIf { it.hasMarketProduct }
-            val input = ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, selectedLink?.productId, fallbackCardImageUrl(identitySelection?.imageUrl, selectedMarketProduct?.imageUrl), rarity = identitySelection?.rarity, effectOverride = effectOverride, cardmarketExpansionId = selectedLink?.expansionId, sourceSetId = sourceSelection?.sourceSetId, sourceCardId = sourceSelection?.sourceCardId)
+            val selectedLink = selectedMarketProduct ?: identitySelection?.takeIf { it.hasMarketProduct && !sourcePrintingChanged }
+            val input = ManualCardInput(name, set, number, language, finish.ifBlank { "Normal" }, variant.ifBlank { "Standard" }, quantity.toInt(), condition, notes, parsePrice(price).takeUnless { it == Double.NEGATIVE_INFINITY }, parseDate(date).takeUnless { it == Long.MIN_VALUE }, selectedLink?.productId, fallbackCardImageUrl(identitySelection?.imageUrl, selectedMarketProduct?.imageUrl), rarity = identitySelection?.rarity, effectOverride = effectOverride, cardmarketExpansionId = selectedLink?.expansionId, sourceSetId = sourceSelection?.sourceSetId, sourceCardId = sourceSelection?.sourceCardId, priceSelection = validAlternative)
             saveError = null
             saving = true
             scope.launch {
@@ -3953,10 +4037,15 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     return@worker
                 }
                 activeNormalizedCard = currentAnalysis.normalizedCard
-                val knowledgeFingerprint = scanKnowledgeFingerprint(currentAnalysis)
+                val reportKnowledgeContext = scannerReportKnowledgeContext(currentAnalysis)
+                val knowledgeFingerprint = reportKnowledgeContext?.fingerprint
                 val latestKnowledge = AtomicReference(knowledgeFingerprint?.let(scanKnowledge::cached))
                 val knowledgeListener = knowledgeFingerprint?.let { fingerprint ->
                     scanKnowledge.observeRelevant(fingerprint, latestKnowledge::set)
+                }
+                val latestReviewedKnowledge = AtomicReference<com.dominik.cardvault.data.knowledge.ReviewedScanKnowledgeHint?>(null)
+                val reviewedKnowledgeListener = reportKnowledgeContext?.let { knowledgeContext ->
+                    scanKnowledge.observeLabRelevant(knowledgeContext, latestReviewedKnowledge::set)
                 }
                 try {
                 ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
@@ -4006,6 +4095,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 updateQueuedScan(scan.id) {
                     it.copy(
                         analysis = currentAnalysis.copy(normalizedCard = null, visualDescriptors = emptyList()),
+                        knowledgeContext = reportKnowledgeContext,
                         message = ScanPipelineStage.OCR.label,
                     )
                 }
@@ -4045,9 +4135,13 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                             .associate { it.card.scanIdentityKey() to it.card.imageUrl })
                 }.orEmpty()
                 val fusionStarted = SystemClock.elapsedRealtime()
-                val fused = ScanKnowledgeCandidateRanker.apply(
-                    HybridCandidateFusion.rank(currentAnalysis, resolution.candidates, artwork),
-                    latestKnowledge.get(),
+                val fused = ReviewedScanKnowledgeRanker.apply(
+                    ScanKnowledgeCandidateRanker.apply(
+                        HybridCandidateFusion.rank(currentAnalysis, resolution.candidates, artwork),
+                        latestKnowledge.get(),
+                    ),
+                    latestReviewedKnowledge.get(),
+                    knowledgeFingerprint,
                 )
                 val finalDecision = constrainManualWholeImageDecision(
                     currentAnalysis,
@@ -4121,6 +4215,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                     scanId = scan.id,
                 )
                 } finally {
+                    reviewedKnowledgeListener?.close()
                     knowledgeListener?.close()
                     currentAnalysis.normalizedCard?.let { bitmap ->
                         if (!bitmap.isRecycled) bitmap.recycle()

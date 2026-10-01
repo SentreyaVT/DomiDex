@@ -1,5 +1,7 @@
 package com.dominik.cardvault.ui
 
+import com.dominik.cardvault.data.catalog.PokemonSet
+import com.dominik.cardvault.data.catalog.PokemonSetRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -11,6 +13,41 @@ class PromoBorderNumberParserTest {
         listOf("VON 3", "UND 3", "ALS 3", "Mega-Entwicklungs-ex-Regel\nVON 3").forEach { text ->
             assertNull(text, CardNumberParser.find(text))
         }
+    }
+
+    @Test fun loadingUndauntedCodeCannotTurnGermanRuleWordsIntoIdentity() {
+        val ruleText = listOf("UND 3", "und 3", "UND DE 003", "Mega-Entwicklungs-ex-Regel\nUND 3")
+        fun assertNoIdentity() = ruleText.forEach { text ->
+            assertNull(text, CardNumberParser.find(text))
+            val parsed = parseBorder(text)
+            assertNull("Rule text became a collector number: $text", parsed.collectorNumber)
+            assertNull("Rule text became a set: $text", parsed.setIdentifier)
+        }
+        // This must hold both before and after loading the real source-declared code,
+        // even when another test already populated the shared registry.
+        assertNoIdentity()
+        registerUndaunted()
+        assertTrue(PokemonSetRegistry.isVerifiedPrintedCode("UND"))
+        assertNoIdentity()
+    }
+
+    @Test fun sourceDeclaredUndauntedStillResolvesWithStrongCollectorPair() {
+        registerUndaunted()
+        listOf("UND 003/090", "UND DE 003/090", "UND O03/O90").forEach { border ->
+            val parsed = parseBorder(border)
+            assertEquals(border, "003/090", parsed.collectorNumber)
+            assertEquals(border, "UND", parsed.setIdentifier)
+            assertTrue(parsed.numberConfidence >= .84f)
+        }
+    }
+
+    @Test fun loadedRuleWordCodeCannotOverrideAnActualPromoOrAnotherSet() {
+        registerUndaunted()
+        assertPromo("UND 3\nMEP DE 071", "MEP071", "mep")
+        val parsed = parseBorder("UND 3\nPAF DE 232")
+        assertEquals("232", parsed.collectorNumber)
+        assertEquals("PAF", parsed.setIdentifier)
+        assertTrue(parsed.numberConfidence in .60f..(.70f))
     }
 
     @Test fun megaPromoWithGermanLanguageMarkerKeepsItsCollectorPrefix() {
@@ -120,4 +157,16 @@ class PromoBorderNumberParserTest {
         assertEquals(expectedSet, analysis.setIdentifier)
         assertTrue(analysis.numberConfidence >= .90f)
     }
+
+    private fun parseBorder(border: String) = CardTextParser.parse(
+        mapOf(CardScript.LATIN to "Testkarte"),
+        preferredNameText = "Testkarte",
+        preferredSetText = border,
+        preferredNumberText = border,
+    )
+
+    private fun registerUndaunted() = PokemonSetRegistry.registerSourceSets(listOf(
+        // TCGdex hgss3 source payload: abbreviation.official=UND, cardCount.official=90.
+        PokemonSet("hgss3", "Unerschrocken", "HeartGold SoulSilver", 90, 91, "2010-08-18", null, "UND"),
+    ))
 }

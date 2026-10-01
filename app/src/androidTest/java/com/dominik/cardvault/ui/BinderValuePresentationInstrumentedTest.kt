@@ -34,4 +34,11 @@ class BinderValuePresentationInstrumentedTest {
         compose.onNodeWithText("Noch keine Karten im Binder").assertIsDisplayed()
         compose.onNodeWithText("Preis nicht verfügbar").assertDoesNotExist()
     }
+
+    @Test fun comparisonOnlyBinderContributesAndIsNotPresentedAsATrend() {
+        val chosen = BinderSummary("comparison", "Test", null, 1, 1, 5.32, null, alternativePricedCards = 1)
+        compose.setContent { MaterialTheme { CurrentBinderValueCard(listOf(chosen)) {} } }
+        compose.onNodeWithText("Preis nicht verfügbar").assertDoesNotExist()
+        compose.onNodeWithText("Enthält 1 ausdrücklich gewählte Vergleichswerte, keine Trendpreise.", substring = true).assertIsDisplayed()
+    }
 }

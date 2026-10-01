@@ -41,6 +41,11 @@ internal class FirebaseScanKnowledge(
 
     fun cached(fingerprint: String): ScanKnowledgeRecord? = store.get(fingerprint)
 
+    fun observeLabRelevant(
+        context: com.dominik.cardvault.data.feedback.ScannerReportKnowledgeContext,
+        onUpdate: (ReviewedScanKnowledgeHint?) -> Unit,
+    ): AutoCloseable = FirebaseReviewedScanKnowledge(auth).observeRelevant(context, onUpdate)
+
     fun observeRelevant(fingerprint: String, onUpdate: (ScanKnowledgeRecord?) -> Unit): AutoCloseable {
         onUpdate(store.get(fingerprint))
         val uid = canonicalCollectionOwnerUid(auth.currentUser)

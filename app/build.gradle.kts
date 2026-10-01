@@ -51,8 +51,8 @@ android {
         applicationId = "com.dominik.cardvault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 21
-        versionName = "1.0-pre-beta.1"
+        versionCode = 27
+        versionName = "1.0-closed-alpha.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -84,9 +84,11 @@ android {
             ndk {
                 abiFilters += "arm64-v8a"
             }
-            optimization {
-                enable = false
-            }
+            // First R8 rollout: generate a real retrace mapping, without removing
+            // code/resources or rewriting executable logic (see release.keep).
+            isMinifyEnabled = true
+            isShrinkResources = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }
     compileOptions {
