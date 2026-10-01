@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, test } from 'node:test';
 import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, deleteDoc, doc, getDocFromServer, getDocs, runTransaction, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, documentId, getDocFromServer, getDocs, getDocsFromServer, query, runTransaction, serverTimestamp, setDoc, Timestamp, updateDoc, where, writeBatch } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, getMetadata, listAll, ref, updateMetadata, uploadBytes } from 'firebase/storage';
 import { clearLocalStorage } from './emulator-fixtures.mjs';
 
@@ -145,6 +146,45 @@ before(async () => {
 });
 beforeEach(async () => { await clearLocalStorage(environment); await environment.clearFirestore(); });
 after(async () => { await environment?.cleanup(); });
+
+for (const actor of [
+  { name: 'quota owner', uid: 'A', claims: { appAccess: true } },
+  { name: 'foreign app user', uid: 'B', claims: { appAccess: true } },
+  { name: 'client admin', uid: 'operator', claims: { admin: true } },
+  { name: 'anonymous', uid: null, claims: null },
+]) {
+  test(`deny: private read-quota create/get/list/update/delete stay server-only for ${actor.name}`, async () => {
+    // Independent encoding of the current server contract; no production SDK or
+    // backend import can turn this into an Admin-SDK authorization bypass test.
+    const key = `syncTimeAnchor_${createHash('sha256').update('syncTimeAnchor\0A').digest('hex')}`;
+    const path = `privateReadRateLimits/${key}`;
+    const value = { schemaVersion: 1, policy: 'syncTimeAnchor', count: 1,
+      windowStartedAt: timestamp, expiresAt: Timestamp.fromMillis(timestamp + 60_000 + 86_400_000) };
+    const context = actor.uid === null ? environment.unauthenticatedContext()
+      : environment.authenticatedContext(actor.uid, actor.claims);
+    const db = context.firestore();
+    const target = doc(db, path);
+
+    // First exercise a real create, not an overwrite of a seeded counter.
+    await assertFails(setDoc(target, value));
+    await environment.withSecurityRulesDisabled(async server => {
+      const reference = doc(server.firestore(), path);
+      assert.equal((await getDocFromServer(reference)).exists(), false, 'Denied create must not persist');
+      await assertSucceeds(setDoc(reference, value));
+    });
+    await assertFails(getDocFromServer(target));
+    await assertFails(getDocsFromServer(collection(db, 'privateReadRateLimits')));
+    await assertFails(getDocsFromServer(query(collection(db, 'privateReadRateLimits'), where(documentId(), '==', key))));
+    await assertFails(updateDoc(target, { count: 2 }));
+    await assertFails(setDoc(target, { ...value, count: 2 }));
+    await assertFails(deleteDoc(target));
+    await environment.withSecurityRulesDisabled(async server => {
+      const actual = await getDocFromServer(doc(server.firestore(), path));
+      assert.equal(actual.exists(), true, 'Denied delete must retain the counter');
+      assert.deepEqual(actual.data(), value, 'Denied mutations must leave every counter field unchanged');
+    });
+  });
+}
 
 for (const ownerUid of ['A', 'B']) {
   test(`allow: ${ownerUid} creates, reads, lists and updates its complete private graph`, async () => {
