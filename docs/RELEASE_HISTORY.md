@@ -2,7 +2,10 @@
 
 Stand **01.10.2026**. Rekonstruktion aus Git, tatsächlichen lokalen Artefakten,
 historischen Prüfberichten und einer aktuellen **nur lesenden** Play-Console-Prüfung.
-Keine neue Version, kein Tag, kein GitHub Release und kein Play-Upload durch diesen Auftrag.
+Der ursprüngliche Audit erzeugte keine Version, Tags, GitHub-Releases oder Play-Uploads.
+Im anschließend separat freigegebenen GitHub-Aufräumauftrag wurde ausschließlich
+das bestehende Release-26-AAB als Binärarchiv hinterlegt; siehe unten. Kein neuer
+App-Build, keine neue Signierung und keine Änderung in Google Play.
 
 ## Aktuell belegbarer Stand
 
@@ -34,11 +37,27 @@ Die aktuelle Console bestätigt **beide** mit 26. Keine schnell veraltenden Test
 | Lokaler `codex/ui-v3`, `096aa35` | Vier Produktcommits vor dem Remote-Branch; committed Konfiguration 21 |
 | Lokaler Working Tree | Zahlreiche zusätzliche Änderungen/untracked Dateien, darunter Konfiguration 27 |
 
-Der jüngste GitHub Release nach Veröffentlichungsdatum ist
-`v1.0.0-pre-beta` vom **01.09.2026**. Das GitHub-„Latest“-Label zeigt dagegen auf
-`v1.0.5-rc7`; Label, Tag, Android-Versionscode und Play-Status dürfen nicht
+Beim Auditbeginn war der jüngste GitHub-Release `v1.0.0-pre-beta` vom
+**01.09.2026**; das „Latest“-Label zeigte damals auf `v1.0.5-rc7`.
+Die anschließende Bereinigung kennzeichnet alle historischen internen Builds als
+Archiv/Vorabversion. Label, Tag, Android-Versionscode und Play-Status dürfen nicht
 gleichgesetzt werden. Die Dokumentationsaktualisierung übernimmt keine vier
 lokalen Produktcommits und stellt Release 26 nicht als aus Git exakt reproduzierbar dar.
+
+### GitHub-Binärarchiv 26 – Nachtrag vom 01.10.2026
+
+[DomiDex 26 · Closed Alpha · signiertes AAB (Archiv)](https://github.com/nandedomi/DomiDex/releases/tag/archive/v26-1.0-closed-alpha.5)
+enthält die unveränderten Originale: AAB, passendes Mapping und partielle
+Native-Symbol-ZIP sowie `SHA256SUMS.txt`. Alle vier GitHub-Asset-Digests stimmen
+mit den hochgeladenen Dateien überein. Das AAB bleibt ein Play-Bundle, keine APK.
+
+`archive/v26-1.0-closed-alpha.5` ist ein Archiv-Tag auf Dokumentationscommit
+`53e7d142a8349e36ed7ca85fc7ea40315fffee14`. Die automatischen GitHub-Source-code-
+Downloads sind **nicht** der exakt zugehörige v26-Quellstand. Der Eintrag ist eine
+Vorabversion, keine neue stabile Veröffentlichung. Bestehende 14 Releases,
+ihre Tags, Downloads und Veröffentlichungsdaten bleiben erhalten; Titel,
+historische Hinweise und fehlerhafte Zeilenumbrüche wurden aufgeräumt.
+Die AAB-Archive 18–25 wurden dabei nicht zusätzlich hochgeladen; 27 bleibt unfertig.
 
 ## Rekonstruierte Entwicklung
 
@@ -70,7 +89,8 @@ Die zwei unterschiedlichen lokalen Code-25-AABs niemals als austauschbar behande
 Die lokalen Archive liegen unter `releases/` und sind bewusst Git-ignoriert:
 `google-play-internal-2026-09-04` bis `google-play-internal-2026-09-21`, danach
 `google-play-v22-2026-09-22` bis `google-play-v26-closed-alpha-2026-09-23`.
-Sie sind keine auf GitHub mitgelieferten Download-Dateien.
+Sie sind keine Git-Quelldateien. Release 26 ist inzwischen zusätzlich im oben
+genannten GitHub-Binärarchiv verfügbar; die übrigen lokalen AABs nicht pauschal.
 
 Version-26-Hashes und native Zuordnung stehen in [Build und Release](BUILD_AND_RELEASE.md).
 Die aktuelle Build-Ausgabe `app/build/outputs/bundle/release/app-release.aab` ist

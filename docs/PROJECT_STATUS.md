@@ -29,10 +29,15 @@ insbesondere lässt sich das v26-AAB keinem vollständigen sauberen Commit zuord
   sowie im „Interner Test“ (verfügbar, vollständiger Roll-out, 24.09.2026).
 - Die angezeigten Bundles 22–25 sind inaktiv. Kein Bundle 27 in der aktuellen
   Releaseübersicht. Keine Testerzahlen als Produkt- oder Freigabegarantie.
-- Jüngster GitHub-Release nach Datum: **`v1.0.0-pre-beta`**, 01.09.2026,
-  Prerelease, enthält APK Build 17. Remote-Tag zeigt auf `1be7adc`.
-- GitHub-„Latest“-Badge steht noch bei `v1.0.5-rc7`; Versionssortierung oder
-  Badge ist kein Beleg für den aktuellen Play-Stand.
+- Beim Auditbeginn jüngster GitHub-Release: `v1.0.0-pre-beta`, 01.09.2026,
+  APK Build 17; Tag auf `1be7adc`. Der „Latest“-Badge zeigte damals auf rc7.
+- Nachfolgend separat freigegeben und am 01.10.2026 ergänzt:
+  [Release-26-Binärarchiv](https://github.com/nandedomi/DomiDex/releases/tag/archive/v26-1.0-closed-alpha.5),
+  unverändertes AAB, Mapping, partielle Symbole und Prüfsummen. Der Archiv-Tag
+  zeigt auf den Dokumentationscommit `53e7d14`, **nicht** auf rekonstruierte
+  Buildquellen. Die vier Asset-Digests wurden nach dem Upload abgeglichen.
+- Historische interne Builds sind als Archiv/Vorabversion gekennzeichnet;
+  kein Alpha-/RC-Build wird für einen „Latest“-Badge zum stabilen Release erklärt.
 - Der abgebrochene lokale v27-Signierlauf vom 25.09.2026 hat kein fertiges
   Archiv `releases/v27` erzeugt. Das vorhandene `app-release.aab` ist weiterhin v26.
 

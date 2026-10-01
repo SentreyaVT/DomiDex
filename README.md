@@ -25,6 +25,16 @@ Code-Commits. Ein Clone des Standardbranches ist **nicht** der Quellnachweis fü
 die signierte Play-Version 26 oder die lokale Entwicklung 27. Einzelheiten und
 offene Reproduzierbarkeit: [Projektstatus](docs/PROJECT_STATUS.md).
 
+## Releases und Downloads
+
+Das vorhandene signierte **Release 26** ist zusätzlich als
+[GitHub-Binärarchiv](https://github.com/nandedomi/DomiDex/releases/tag/archive/v26-1.0-closed-alpha.5)
+hinterlegt: Original-AAB, passendes R8-Mapping, partielle Native-Symbole und
+SHA-256-Prüfsummen. Kein neuer Build und kein Play-Upload. Ein AAB ist nicht
+direkt installierbar. Der Archiv-Tag ist **kein rekonstruierter v26-Quellstand**;
+die automatisch erzeugten Source-code-Downloads sind nicht dessen Buildquellen.
+Historische Testreleases bleiben als Archiv/Vorabversion erhalten.
+
 ## Was im geprüften Entwicklungsstand vorhanden ist
 
 - **Karten erfassen:** Kamera, Galerie, Set-/Nummernsuche, OCR- und Bildvergleich,

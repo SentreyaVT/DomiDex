@@ -5,6 +5,20 @@ belegte Releases. Sie ersetzt weder Git-Historie noch Google Play Console.
 
 ## 2026-10-01 – Repository-/Dokumentationsaudit
 
+Der folgende Audit war vom anschließend erteilten GitHub-Aufräumauftrag getrennt.
+
+### Anschließend: GitHub-Darstellung und vorhandenes Releasearchiv
+
+- About-Beschreibung, Website und passende Repository-Themen ergänzt.
+- 14 historische interne Releases als Archiv/Vorabversion gekennzeichnet;
+  ursprüngliche Inhalte, Tags und Downloads erhalten, kaputte Zeilenumbrüche korrigiert.
+- Original-Release 26 mit AAB, Mapping, partieller Symbol-ZIP und Prüfsummen als
+  GitHub-Binärarchiv hinterlegt. Hochgeladene Dateihashes verifiziert.
+- Der neue Archiv-Tag bildet keinen nachträglich erfundenen v26-Quellstand ab.
+- Keine App-/Buildänderung, kein Neubau, keine Signierung, kein Play-Upload.
+
+### Ursprüngliche Auditänderungen
+
 - README, zentraler Projektstatus, Architektur, Scanner-/Cloud-/Preisgrenzen,
   Versionshistorie, Tests, Security und Roadmap am tatsächlichen Stand ausgerichtet.
 - GitHub-, lokalen Commit-, Working-Tree- und signierten Play-Stand getrennt.
