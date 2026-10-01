@@ -2,7 +2,38 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: equivalent chronological portfolio history
+### Latest local checkpoint: isolated R8 execution without release packaging
+
+On source commit `345bf63`, the existing release R8 configuration was executed
+offline in a new isolated app build directory. The reviewed init guard permits
+only the exact 32-task dependency graph ending at `minifyReleaseWithR8`, rejects
+signing inputs/configuration and verifies the output directory. No credentials,
+upload helper, assembly/bundle/installation task, release APK or AAB were used.
+Build and configuration caches were disabled; **30 actionable tasks executed,
+BUILD SUCCESSFUL in 3m 45s**. The two existing Compose lifecycle deprecation
+warnings remain; no new R8 missing-class error or warning was reported.
+
+R8 **9.3.16**, minimum API 26, generated a fresh **104,526,819-byte mapping** and
+five DEX files. All five DEX header lengths, SHA-1 signatures and Adler32 checksums
+verify. The merged configuration preserves `-dontshrink`, `-dontoptimize`, the
+OpenCV `CvException` keep rule and the three existing optional OkHttp2 warnings.
+The usage report remains empty; MainActivity and CvException names are retained.
+This validates actual conservative R8 execution, not installable packaging,
+device behavior, end-to-end retracing, native symbols or Google Play acceptance.
+
+Before/after integrity matches for **433 input files**, all **13 schema files**,
+and **20 prior build/release-26 files** (574,373,840 bytes). Even the older mapping
+and AAB under normal `app/build/outputs` were left intact. Verification is saved
+under `artifacts/release27-engineering-20261001/r8-only-20261001T1933/`:
+`r8-only.init.gradle`, dry-run/build logs, `before.json`, `after.json` and
+`verification.json`. Mapping SHA256:
+`ad1affe17b4c1dba7569ed72bf16965238300369df5f6f7ab72835890008203b`.
+**Do not upload this diagnostic mapping against Release 26 or another artifact.**
+A future authorized release build must supply its own exactly matching mapping.
+No product/build settings, release signing, deployment, Play or Xiaomi changes.
+Overall release status remains **NOT READY** for the other documented gates.
+
+### Previous local checkpoint: equivalent chronological portfolio history
 
 The historical valuation now groups original, individually quarantine-checked
 holdings by product and normal/reverse finish, then processes chronological price
