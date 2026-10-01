@@ -292,9 +292,10 @@ interface CardVaultDao {
     """)
     suspend fun rebasePendingCollectionLayout(ownerUid: String, entrySyncId: String, revision: Long)
 
-    /** Only price rows reachable from the active owner's collection enter portfolio memory. */
+    /** Only required trend fields from this owner's exact linked products enter portfolio memory. */
     @Query("""
-        SELECT p.* FROM raw_price_snapshots p
+        SELECT p.cardId, p.effectiveAtEpochMillis, p.trendValueMinor, p.holoTrendValueMinor
+        FROM raw_price_snapshots p
         WHERE p.source = :source AND p.cardId IN (
             SELECT COALESCE(linked.id, c.id)
             FROM collection_entries e
@@ -306,7 +307,7 @@ interface CardVaultDao {
         )
         ORDER BY p.effectiveAtEpochMillis
     """)
-    fun observeOwnedRawPriceHistory(ownerUid: String, source: String): Flow<List<RawPriceSnapshotEntity>>
+    fun observeOwnedRawPriceHistory(ownerUid: String, source: String): Flow<List<OwnedPriceHistoryProjection>>
 
     /**
      * History stays tied to the exact Cardmarket product linked to this entry.

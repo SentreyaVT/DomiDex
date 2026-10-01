@@ -129,10 +129,9 @@ class RoomCollectionRepository(
         // One indexed view replaces repeated full price-table scans for every card and every
         // history timestamp. Room already emits immutable snapshots, so this cache is local to
         // the current calculation and can never become stale.
-        val cardmarketPrices = prices.asSequence()
-            .filter { it.source == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE }
-            .groupBy(RawPriceSnapshotEntity::cardId)
-            .mapValues { (_, values) -> values.sortedBy(RawPriceSnapshotEntity::effectiveAtEpochMillis) }
+        // Source filtering and ownership/identity checks are enforced by the DAO query.
+        val cardmarketPrices = prices.groupBy(OwnedPriceHistoryProjection::cardId)
+            .mapValues { (_, values) -> values.sortedBy(OwnedPriceHistoryProjection::effectiveAtEpochMillis) }
         PortfolioSummary(collectionCards(rows, selections, cardmarketPrices),
             if (includePortfolioHistory) buildHistory(rows, prices, cardmarketPrices) else emptyList())
     }.flowOn(Dispatchers.Default)
@@ -140,7 +139,7 @@ class RoomCollectionRepository(
     private fun collectionCards(
         rows: List<CollectionProjection>,
         selections: List<CollectionPriceSelectionEntity>,
-        cardmarketPrices: Map<String, List<RawPriceSnapshotEntity>> = emptyMap(),
+        cardmarketPrices: Map<String, List<OwnedPriceHistoryProjection>> = emptyMap(),
     ): List<CollectionCard> {
         val selectionsByEntry = selections.associateBy(CollectionPriceSelectionEntity::collectionEntryId)
         return rows.map { row ->
@@ -1074,8 +1073,8 @@ class RoomCollectionRepository(
 
     private fun buildHistory(
         rows: List<CollectionProjection>,
-        prices: List<RawPriceSnapshotEntity>,
-        cardmarketPrices: Map<String, List<RawPriceSnapshotEntity>>,
+        prices: List<OwnedPriceHistoryProjection>,
+        cardmarketPrices: Map<String, List<OwnedPriceHistoryProjection>>,
     ): List<PortfolioPoint> =
         prices.map { it.effectiveAtEpochMillis }.distinct().sorted().map { timestamp ->
             val total = rows.sumOf { row ->
@@ -1089,10 +1088,10 @@ class RoomCollectionRepository(
         }
 
     /** Binary search over the already sorted per-product history. */
-    private fun latestPriceAtOrBefore(prices: List<RawPriceSnapshotEntity>, timestamp: Long): RawPriceSnapshotEntity? {
+    private fun latestPriceAtOrBefore(prices: List<OwnedPriceHistoryProjection>, timestamp: Long): OwnedPriceHistoryProjection? {
         var low = 0
         var high = prices.lastIndex
-        var match: RawPriceSnapshotEntity? = null
+        var match: OwnedPriceHistoryProjection? = null
         while (low <= high) {
             val middle = (low + high).ushr(1)
             val candidate = prices[middle]
@@ -1107,7 +1106,7 @@ class RoomCollectionRepository(
     }
 
     /** Normal/Holo use the product trend; Reverse Holo requires its own source observation. */
-    private fun RawPriceSnapshotEntity.trendValueFor(finish: String): Long? =
+    private fun OwnedPriceHistoryProjection.trendValueFor(finish: String): Long? =
         (if (finish.contains("reverse", ignoreCase = true)) holoTrendValueMinor else trendValueMinor)?.takeIf { it > 0L }
 
     private fun accentFor(name: String): Long = when {

@@ -349,6 +349,14 @@ data class RawPriceSnapshotEntity(
     val effectiveAtEpochMillis: Long,
 )
 
+/** Read-only history view: retain every source date, without unused quote/source metadata. */
+data class OwnedPriceHistoryProjection(
+    val cardId: String,
+    val effectiveAtEpochMillis: Long,
+    val trendValueMinor: Long?,
+    val holoTrendValueMinor: Long?,
+)
+
 @Entity(
     tableName = "graded_market_records",
     foreignKeys = [ForeignKey(entity = CatalogCardEntity::class, parentColumns = ["id"], childColumns = ["cardId"], onDelete = ForeignKey.CASCADE)],

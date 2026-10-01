@@ -396,11 +396,24 @@ duplicate product history. These counts do not establish MB, elapsed time or act
 production use. Existing 1k/5k/20k scale fixtures have only two source dates; they
 are not a year-long history benchmark.
 
-Smallest follow-up candidate: a four-field owner-safe trend projection, preserving
-all dates, values, MAX and identity semantics. This could reduce fields/materialized
-object size, not row growth or downloads. It first needs exact result-equivalence,
-365-date, normal/reverse/null/zero, same-date correction and owner-isolation tests.
-Retention/compaction remains a separate decision with explicit history semantics.
+The smallest follow-up is now implemented: a four-field owner-safe trend projection,
+preserving all dates, values, MAX and identity semantics. It selects card ID, source
+time, normal trend and reverse trend instead of all 16 raw fields. Source/owner/
+tombstone/quarantine filters remain in the same SQL; no schema, retention, import,
+network or price policy changes. Row growth and download size are not reduced.
+
+The real Room baseline first passed the full 365-date value test and failed the
+new projection contract (3 PASS / 1 FAIL). After the change, 24/24 targeted emulator
+tests pass, including 17,520 owned history rows, null/zero/negative prices, reverse
+prices, same-date corrections, an unowned extra date, private binder detail equality
+and owner A -> B -> A. Debug/test APKs, release Kotlin and all JVM tests pass (794
+PASS / 1 existing opt-in SKIP). Independent review found no new blocker.
+
+One illustrative emulator sample changed from 705.55 ms to 189.94 ms for the annual
+portfolio flow; this is **not** a repeat-sampled benchmark or a device performance
+guarantee. The verified deterministic improvement is 16 -> 4 selected columns per
+history row. Evidence: `gate5-history-projection-{red,green}-*` in the ignored
+engineering folder. Retention/compaction remains separate with explicit semantics.
 
 ## Gate 9 client knowledge safety (local validation)
 
