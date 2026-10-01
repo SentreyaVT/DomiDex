@@ -5,6 +5,73 @@ The current application remains Room-first. Auth, entitlements, owner isolation,
 optimistic revisions, tombstones and the existing private-sharing readiness gate
 must remain authoritative. No production data migration is authorized here.
 
+## Collection-worker session and final-commit protection (2026-10-01)
+
+The inspected worker compared only the current UID after suspensions. A real local
+Android Firebase SDK proof held its actual transaction Commit, observed A→B→A
+through IdToken callbacks, then released that Commit. An independent named control
+SDK confirmed the complete server document before the assertion: the old worker
+had incorrectly marked Room CLEAN/revision 1 and removed the original outbox.
+The unmodified healthy control passed. This is a reproduced failure of the inspected
+v27 source path, not an attributed failure of the immutable signed Release-26 AAB.
+
+`runCollectionSync` is the actual worker pass with explicit dependencies, not a
+test implementation. Production still supplies the same default Auth/Firestore,
+lazy Room database and scheduler. Each active pass now uses the existing observed
+token/account-generation lease. Initially signed-out/different-owner jobs remain
+no-ops; a session invalidated during the run retries without accepting its old
+completion. Entitlement and SDK success **and failure** paths are checked before
+terminal error classification. Already-sent remote commits can still succeed;
+their retained mutation ID makes the next valid pass idempotent.
+
+`CollectionSyncSessionCommits` wraps the existing ACK, failure and normalization
+helpers in a final session-checked Room transaction. The missing-projection discard
+and both reread paths use the same boundary. Remote application and conditional
+outbox deletion commit together. M1/M2 rebasing, terminal decisions, strict newer-
+revision application, listener policy, the 200-mutation budget, sharing priority,
+outbox schema, Rules and scheduler policy are preserved. The same existing Room
+application is shared by the SDK decoder and worker; no copied apply algorithm.
+
+A second genuine Room RED exposed cancellation during the **last** lease predicate:
+10 cases passed but a cancelled caller still committed reread payload and deletion.
+The helper now checks the captured caller Job before/after that final predicate,
+inside Room's transaction boundary. All **11/11 real Room cases now pass**, 0.700 s,
+including post-write A→B→A rollback, actual Job cancellation, fresh retry, M2
+successors, terminal states and foreign-owner snapshots. These tests observe the
+actual uncommitted SQL writes, not a guessed number of guard calls.
+
+Evidence (local ignored artifacts):
+
+- SDK RED: sibling Web `outputs/collection-sync-session-local/2026-10-01T15-38-16-631Z-a13618ea118c412681b31406f33eb4c1/`.
+  Healthy PASS; stale case fails specifically `STALE_SESSION_ACKED_COMMITTED_MUTATION`.
+  Independent Admin readbacks are valid even though the overall run correctly fails.
+- Room cancellation RED: `artifacts/release27-engineering-20261001/collection-session-room-154823-e427e074/`.
+- Room GREEN: `artifacts/release27-engineering-20261001/collection-session-room-155215-8b753c30/`.
+  The manifest verifies the exact installed APK hashes and unchanged source inputs.
+- SDK GREEN: sibling Web `outputs/collection-sync-session-local/2026-10-01T15-52-48-330Z-442c460bda5b42d5b54b8c346ddf5ba8/`.
+  **2/2 actual SDK cases pass**, including fresh retry with unchanged full server
+  payload/revision/timestamp. Two independent final Admin readbacks verify exact
+  accounts/claims/paths/payloads and unchanged foreign owner. Ports, reverse maps
+  and instrumentation are clean afterward; inputs unchanged.
+- Final debug/test APKs, release Kotlin and both lints pass in 3m;
+  JVM **865 PASS / 1 pre-existing optional live-source SKIP / 0 FAIL**, 127 suites.
+  `collection-session-finalguard-debug-regression.log` in the Android artifact folder.
+- Sibling Web `tests/collection-sync-session-local/`: 6/6 pure fail-closed validator
+  tests and focused lint pass. They are distinct from the actual SDK evidence.
+
+APK SHA-256: app `854a069cb065e43bc44172e968c2d5e3fa2c4f80e143c0f3063dab987b56ed9a`;
+test `e72d5c8e1604dae37a762bdc6ddb4d6353a07db3821c2955edf4e3f78b37c123`.
+The fixed **371/371** final regression also passes with no skips/failures in
+289.801 s on those exact APKs: `artifacts/android-regression/20261001T155328Z-1cf61eb3/manifest.json`.
+Source/APK inputs remain unchanged and the emulator stays offline without reverse mappings.
+
+Scope: named Google-linked demo clients, unchanged local Rules, isolated in-memory
+Room, fixed offline API-36 emulator. No production accounts, Xiaomi, release
+signing, AAB or deployment. This does not prove WorkManager scheduling, all network
+races, multi-device scale or lower production latency. A **separate open finding**
+is that a missing/null-decoded reread still follows the old no-apply/conditional-
+delete policy; this session fix deliberately does not disguise that policy change.
+
 ## Actual Android/Web stale-price conflict proof (2026-10-01)
 
 Two separate fresh, fixed-demo SDK runs now verify the existing conflict policy

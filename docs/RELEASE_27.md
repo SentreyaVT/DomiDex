@@ -2,7 +2,31 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: FULL-pull fairness and viewer cancellation
+### Latest local checkpoint: collection-worker session and cancellation guards
+
+A real local SDK RED proved that observed A→B→A let the old collection worker
+accept its delayed transaction ACK and delete its outbox. Its healthy control
+passed. The actual worker now uses one generation-bound session lease, guards
+both successful and failed network completions, and commits every local ACK,
+failure, normalization, discard and reread under a final Room session fence.
+An additional actual Room RED (10 PASS / 1 FAIL) exposed cancellation at the
+final predicate; checking the captured caller Job there closes that boundary too.
+
+Final results on the fixed offline API-36 AVD: **371/371 existing regressions**,
+**11/11 new real Room cases**, **2/2 actual Firebase SDK cases** with independent
+full server readbacks. JVM: **865 PASS / 1 existing optional live-source SKIP**.
+Debug/test builds, release Kotlin and debug/release lint pass. The sibling Web
+test launcher has six passing validator cases and lint; commit `525a865`.
+Exact RED/GREEN evidence, hashes and semantics are in `docs/SYNC.md`.
+
+The existing M1/M2, conflict, revision, listener, entitlement, outbox, schema,
+Rules, sharing-priority and scheduling policies remain. No production service,
+Xiaomi, release signing/AAB or deployment changed; signed Release 26 remains
+byte-identical. These are local worker/Room proofs, not WorkManager/physical-device
+scale or a production speed claim. Missing/null-decoded reread acknowledgment
+remains a separately documented follow-up. Overall release remains **NOT READY**.
+
+### Previous local checkpoint: FULL-pull fairness and viewer cancellation
 
 The existing four-group FULL scan now rotates after each bounded page instead
 of draining the first group indefinitely. Rotation and EOF evidence persist in

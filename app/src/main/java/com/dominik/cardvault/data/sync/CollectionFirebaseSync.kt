@@ -7,6 +7,8 @@ import androidx.room.withTransaction
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
+import androidx.work.ListenableWorker
+import androidx.work.ListenableWorker.Result
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
@@ -571,6 +573,16 @@ internal suspend fun applyRemoteDocumentToRoom(
 ) {
     if (!ownerIsCurrent()) return
     val remote = RemoteCollectionEntry.from(document, uid) ?: return
+    applyRemoteCollectionEntryToRoom(database, uid, remote, ownerIsCurrent)
+}
+
+/** SDK decoding stays at the boundary; listeners and worker rereads share the same Room apply. */
+internal suspend fun applyRemoteCollectionEntryToRoom(
+    database: CardVaultDatabase,
+    uid: String,
+    remote: RemoteCollectionEntry,
+    ownerIsCurrent: () -> Boolean,
+) {
     val dao = database.cardVaultDao()
     database.withTransaction {
         if (!ownerIsCurrent()) return@withTransaction
@@ -692,8 +704,71 @@ class CollectionSyncWorker(
             ?: return@withContext Result.success()
         val sharingBinderId = inputData.getString(SHARING_BINDER_ID)
         if (sharingBinderId != null && !validSharingBinderId(sharingBinderId)) return@withContext Result.failure()
+        // The original first entitlement call resolved its default Firestore at this point.
+        val firestore = try {
+            FirebaseFirestore.getInstance()
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (error: Exception) {
+            Log.w("DomiDexCollectionSync", "Entitlement konnte nicht geprüft werden (${error.javaClass.simpleName}).")
+            return@withContext Result.retry()
+        }
+        runCollectionSync(
+            ownerUid = uid,
+            sharingBinderId = sharingBinderId,
+            auth = auth,
+            firestore = firestore,
+            database = { CardVaultDatabase.get(applicationContext) },
+            appendCollection = { owner -> CollectionSyncScheduler.schedule(applicationContext, owner) },
+        )
+    }
+}
+
+/**
+ * The worker's actual authenticated collection pass, shared with isolated SDK/Room proofs.
+ * Only dependencies are explicit: entitlement checks, session guards, writes, ACKs, rereads and
+ * continuation decisions remain in this path. Room is still opened after initial access succeeds.
+ * Calling this function does not test WorkManager constraints, input delivery or scheduling.
+ */
+internal suspend fun runCollectionSync(
+    ownerUid: String,
+    sharingBinderId: String?,
+    auth: FirebaseAuth,
+    firestore: FirebaseFirestore,
+    database: () -> CardVaultDatabase,
+    appendCollection: (String) -> Unit,
+): ListenableWorker.Result = CollectionSyncRun(auth, firestore, database, appendCollection)
+    .run(ownerUid, sharingBinderId)
+
+/** Per-invocation dependencies; no global override and no separate test implementation. */
+private class CollectionSyncRun(
+    private val auth: FirebaseAuth,
+    private val firestore: FirebaseFirestore,
+    private val databaseProvider: () -> CardVaultDatabase,
+    private val appendCollection: (String) -> Unit,
+) {
+    suspend fun run(uid: String, sharingBinderId: String?): Result = withContext(Dispatchers.IO) {
+        if (uid.isBlank()) return@withContext Result.success()
+        if (sharingBinderId != null && !validSharingBinderId(sharingBinderId)) return@withContext Result.failure()
+        // Jobs for a currently signed-out/different owner remain no-ops. Once a run has
+        // acquired its lease, any observed account/token change invalidates that entire run.
+        if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) return@withContext Result.success()
+        try {
+            PrivatePullAuthSession.use(auth, uid) { session -> runSession(uid, sharingBinderId, session) }
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (_: PrivatePullAccountChangedException) {
+            Result.retry()
+        }
+    }
+
+    private suspend fun runSession(
+        uid: String,
+        sharingBinderId: String?,
+        session: PrivatePullAuthSession,
+    ): Result = withContext(Dispatchers.IO) {
         suspend fun accessStillCurrent(): Boolean {
-            val account = auth.currentVerifiedFirebaseEntitlementAccount(forceRefresh = false) ?: return false
+            val account = guardedConflictActionRead(session::isCurrent) {
+                auth.currentVerifiedFirebaseEntitlementAccount(firestore, forceRefresh = false)
+            } ?: return false
             return shouldRunEntitledCollectionSync(
                 expectedUid = uid,
                 currentUid = canonicalCollectionOwnerUid(auth.currentUser),
@@ -708,9 +783,18 @@ class CollectionSyncWorker(
             return@withContext Result.retry()
         }
         if (!initiallyAllowed) return@withContext Result.success()
-        val database = CardVaultDatabase.get(applicationContext)
+        val database = databaseProvider()
         val dao = database.cardVaultDao()
-        val firestore = FirebaseFirestore.getInstance()
+        val commits = CollectionSyncSessionCommits(database, uid, session::isCurrent)
+
+        suspend fun reread(mutation: CollectionSyncOutboxEntity) {
+            val fresh = guardedConflictActionRead(session::isCurrent) {
+                firestore.document(collectionEntryPath(uid, mutation.syncId)).get(Source.SERVER).awaitSyncTask()
+            }
+            // Keep the existing decoder/revision policy; the apply and conditional checkpoint
+            // deletion now commit together, with a final lease check inside the Room boundary.
+            commits.finishReread(mutation, RemoteCollectionEntry.from(fresh, uid))
+        }
         var processed = 0
         while (processed < MAX_MUTATIONS_PER_RUN) {
             val stillAllowed = try {
@@ -723,21 +807,19 @@ class CollectionSyncWorker(
             if (!stillAllowed) return@withContext Result.success()
             // An auth switch ends this owner's run immediately. Its durable outbox remains for
             // the next time that same UID signs in; it is never sent under the new identity.
-            if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) return@withContext Result.success()
+            session.requireCurrent()
             val mutation = (if (sharingBinderId == null) dao.pendingSyncOutbox(uid, 1)
                 else dao.pendingSharingCollectionOutbox(uid, sharingBinderId, 1))
                 .firstOrNull() ?: return@withContext Result.success()
             val entry = dao.collectionSyncProjection(uid, mutation.syncId)
             if (entry == null) {
-                dao.deleteSyncOutboxIfCurrent(mutation.entryKey, mutation.mutationId)
+                commits.discard(mutation)
                 continue
             }
             if (entry.syncState == SYNC_CONFLICT || entry.syncState == SYNC_ERROR) {
                 // Older clients could leave a terminal entry with a pending outbox after a late
                 // failure callback. Expose its existing terminal decision; never push it in a loop.
-                val normalized = normalizePendingOutboxForTerminalEntry(database, mutation) { owner ->
-                    owner == uid && shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
-                }
+                val normalized = commits.normalize(mutation)
                 if (normalized) {
                     Log.w("DomiDexCollectionSync", "Lokaler Syncstatus benötigt eine ausdrückliche Entscheidung.")
                     // The terminal row is excluded from the next pending query. Do not fail
@@ -752,67 +834,28 @@ class CollectionSyncWorker(
             // checkpoint. Resume the pull directly after process death instead of replaying the
             // old payload against a potentially newer remote revision.
             if (shouldResumeServerReread(entry.syncState, mutation.state)) {
-                val fresh = runCatching {
-                    firestore.document(collectionEntryPath(uid, mutation.syncId))
-                        .get(Source.SERVER)
-                        .awaitSyncTask()
-                }.getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
-                if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
-                    return@withContext Result.success()
-                }
-                runCatching {
-                    applyRemoteDocumentToRoom(database, uid, fresh) {
-                        shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
-                    }
-                }.getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
-                if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
-                    return@withContext Result.success()
-                }
-                dao.deleteSyncOutboxIfCurrent(mutation.entryKey, mutation.mutationId)
+                runCatching { reread(mutation) }
+                    .getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
                 processed++
                 continue
             }
-            if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) return@withContext Result.success()
-            val outcome = pushMutation(firestore, mutation, entry)
+            session.requireCurrent()
+            val outcome = pushMutation(firestore, mutation, entry, session)
             // A permission failure caused by a session switch must remain pending. Only failures
             // observed while the captured UID is still current may become terminal.
-            if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) return@withContext Result.success()
+            session.requireCurrent()
             when (outcome) {
                 is PushOutcome.Ack -> {
                     // Keep this idempotent outbox row until a fresh server read succeeds.
                     // CLEAN first allows an N+2 listener/read to apply after N+1 was ACKed.
-                    val shouldReread = commitCollectionAck(database, mutation, outcome.revision) { owner ->
-                        owner == uid && shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
-                    }
+                    val shouldReread = commits.acknowledge(mutation, outcome.revision)
                     if (shouldReread) {
-                        if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
-                            return@withContext Result.success()
-                        }
-                        val fresh = runCatching {
-                            firestore.document(collectionEntryPath(uid, mutation.syncId))
-                                .get(Source.SERVER)
-                                .awaitSyncTask()
-                        }.getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
-                        if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
-                            return@withContext Result.success()
-                        }
-                        runCatching {
-                            applyRemoteDocumentToRoom(database, uid, fresh) {
-                                shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
-                            }
-                        }.getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
-                        if (!shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))) {
-                            return@withContext Result.success()
-                        }
-                        dao.deleteSyncOutboxIfCurrent(mutation.entryKey, mutation.mutationId)
+                        runCatching { reread(mutation) }
+                            .getOrElse { if (it is CancellationException) throw it; return@withContext Result.retry() }
                     }
                 }
-                is PushOutcome.Conflict -> commitCollectionFailure(database, mutation, SYNC_CONFLICT, outcome.reason) { owner ->
-                    owner == uid && shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
-                }
-                is PushOutcome.Terminal -> commitCollectionFailure(database, mutation, SYNC_ERROR, outcome.reason) { owner ->
-                    owner == uid && shouldRunCollectionSync(uid, canonicalCollectionOwnerUid(auth.currentUser))
-                }
+                is PushOutcome.Conflict -> commits.fail(mutation, SYNC_CONFLICT, outcome.reason)
+                is PushOutcome.Terminal -> commits.fail(mutation, SYNC_ERROR, outcome.reason)
                 PushOutcome.Retry -> return@withContext Result.retry()
             }
             processed++
@@ -830,7 +873,8 @@ class CollectionSyncWorker(
         if (shouldScheduleCollectionSyncContinuation(processed, MAX_MUTATIONS_PER_RUN, hasPending) && mayContinue) {
             // Finishing a successful batch is not an error. Append the next bounded batch
             // immediately instead of applying WorkManager's exponential failure backoff.
-            CollectionSyncScheduler.schedule(applicationContext, uid)
+            session.requireCurrent()
+            appendCollection(uid)
         }
         Result.success()
     }
@@ -839,24 +883,33 @@ class CollectionSyncWorker(
         firestore: FirebaseFirestore,
         mutation: CollectionSyncOutboxEntity,
         entry: CollectionSyncProjection,
+        session: PrivatePullAuthSession,
     ): PushOutcome {
         val reference = firestore.document(collectionEntryPath(mutation.ownerUid, mutation.syncId))
         return try {
             CollectionSyncLimits.requireValid(entry, mutation)
-            val revision = firestore.runTransaction { transaction ->
-                val current = transaction.get(reference)
-                val currentRevision = current.getLong("revision") ?: 0L
-                if (current.getString("lastMutationId") == mutation.mutationId) return@runTransaction currentRevision
-                if (currentRevision != mutation.expectedRemoteRevision) {
-                    throw CollectionSyncConflictException(currentRevision, current.getBoolean("deleted") == true)
-                }
-                val nextRevision = currentRevision + 1L
-                transaction.set(reference, entry.toRemoteMap(mutation, nextRevision))
-                nextRevision
-            }.awaitSyncTask()
+            val revision = guardedConflictActionRead(session::isCurrent) {
+                firestore.runTransaction { transaction ->
+                    session.requireCurrent()
+                    val current = transaction.get(reference)
+                    session.requireCurrent()
+                    val currentRevision = current.getLong("revision") ?: 0L
+                    if (current.getString("lastMutationId") == mutation.mutationId) return@runTransaction currentRevision
+                    if (currentRevision != mutation.expectedRemoteRevision) {
+                        throw CollectionSyncConflictException(currentRevision, current.getBoolean("deleted") == true)
+                    }
+                    val nextRevision = currentRevision + 1L
+                    transaction.set(reference, entry.toRemoteMap(mutation, nextRevision))
+                    nextRevision
+                }.awaitSyncTask()
+            }
             PushOutcome.Ack(revision)
         } catch (cancelled: CancellationException) { throw cancelled
+        } catch (changed: PrivatePullAccountChangedException) { throw changed
         } catch (error: Exception) {
+            // A failed SDK task/transaction can also arrive after A -> B -> A. It must
+            // never turn the original owner's still-retryable mutation into a terminal error.
+            session.requireCurrent()
             val conflict = generateSequence<Throwable>(error) { it.cause }.filterIsInstance<CollectionSyncConflictException>().firstOrNull()
             if (conflict != null) PushOutcome.Conflict(
                 if (conflict.remoteDeleted) remoteDeletedConflictReason(conflict.remoteRevision)
@@ -1014,7 +1067,7 @@ private fun CoroutineScope.launchSafely(block: suspend () -> Unit) {
 private suspend fun <T> Task<T>.awaitSyncTask(): T = suspendCancellableCoroutine { continuation ->
     addOnCompleteListener { task ->
         if (!continuation.isActive) return@addOnCompleteListener
-        if (task.isSuccessful) continuation.resumeWith(Result.success(task.result))
+        if (task.isSuccessful) continuation.resumeWith(kotlin.Result.success(task.result))
         else continuation.resumeWithException(task.exception ?: IllegalStateException("Firebase sync task failed"))
     }
 }
