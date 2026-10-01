@@ -175,13 +175,15 @@ class FirebaseCollectionSession internal constructor(
     private val auth: FirebaseAuth,
     private val firestore: FirebaseFirestore,
     private val scheduling: CollectionSessionScheduling,
+    private val connectivity: CollectionConnectivitySource = NoCollectionConnectivitySource,
 ) : AutoCloseable {
     constructor(
         context: Context,
         database: CardVaultDatabase,
         auth: FirebaseAuth = FirebaseAuth.getInstance(),
         firestore: FirebaseFirestore = FirebaseFirestore.getInstance(),
-    ) : this(database, auth, firestore, DefaultCollectionSessionScheduling(context))
+    ) : this(database, auth, firestore, DefaultCollectionSessionScheduling(context),
+        AndroidCollectionConnectivitySource(context))
 
     private val mutableOwnerUid = MutableStateFlow(collectionOwnerForUid(canonicalCollectionOwnerUid(auth.currentUser)))
     val ownerUid: StateFlow<String> = mutableOwnerUid
@@ -201,10 +203,13 @@ class FirebaseCollectionSession internal constructor(
     @Volatile private var closed = false
     @Volatile private var entitlementGeneration = 0L
     @Volatile private var entitledOwnerUid: String? = null
+    private val reconnectGate = CollectionReconnectGate()
+    private var connectivityRegistration: AutoCloseable? = null
 
     private val idTokenListener = FirebaseAuth.IdTokenListener(::handleIdTokenState)
 
-    private fun handleIdTokenState(changedAuth: FirebaseAuth) {
+    private fun handleIdTokenState(changedAuth: FirebaseAuth): Unit = synchronized(entitlementLock) stateChange@ {
+        if (!started || closed) return@stateChange
         val user = changedAuth.currentUser
         val uid = canonicalCollectionOwnerUid(user)
         localDataOwnerSession.observeOwner(collectionOwnerForUid(uid))
@@ -212,6 +217,7 @@ class FirebaseCollectionSession internal constructor(
         val (previousUid, generation) = synchronized(entitlementLock) {
             val previousUid = entitledOwnerUid
             entitlementGeneration += 1L
+            reconnectGate.started(entitlementGeneration)
             entitledOwnerUid = null
             detachRemoteListenerLocked()
             accessListener?.remove()
@@ -227,32 +233,42 @@ class FirebaseCollectionSession internal constructor(
         else if (previousUid != null && previousUid != uid) {
             scheduling.cancelPrivateBinderPeriodic(previousUid)
         }
-        if (uid == null || user == null) return
+        if (uid == null || user == null) {
+            reconnectGate.clear()
+            return@stateChange
+        }
         scope.launch {
             val account = try { auth.currentVerifiedFirebaseEntitlementAccount(firestore) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) {
                     synchronized(entitlementLock) {
-                        if (entitlementGeneration == generation && mutableOwnerUid.value == uid) {
+                        if (started && !closed && entitlementGeneration == generation &&
+                            mutableOwnerUid.value == uid && canonicalCollectionOwnerUid(auth.currentUser) == uid) {
+                            val denied = failure is FirebaseFirestoreException &&
+                                failure.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
                             mutableCloudState.value = CollectionCloudState(
-                                if (failure is FirebaseFirestoreException && failure.code == FirebaseFirestoreException.Code.PERMISSION_DENIED)
-                                    CollectionCloudStatus.NO_ACCESS else CollectionCloudStatus.LOCAL_ONLY, uid,
+                                if (denied) CollectionCloudStatus.NO_ACCESS else CollectionCloudStatus.LOCAL_ONLY, uid,
                             )
+                            if (denied) reconnectGate.clear()
+                            else if (reconnectGate.consumeAfterTransientFailure(generation)) handleIdTokenState(auth)
                         }
                     }
                     return@launch
                 } ?: return@launch
             if (!account.entitlements.canUseAppBackend) {
-                scheduling.cancelPrivateBinderPeriodic(uid)
                 synchronized(entitlementLock) {
-                    if (entitlementGeneration == generation && mutableOwnerUid.value == uid)
+                    if (started && !closed && entitlementGeneration == generation && mutableOwnerUid.value == uid) {
+                        scheduling.cancelPrivateBinderPeriodic(uid)
+                        reconnectGate.clear()
                         mutableCloudState.value = CollectionCloudState(CollectionCloudStatus.NO_ACCESS, uid)
+                    }
                 }
                 return@launch
             }
-            val activated = synchronized(entitlementLock) {
-                if (!started || entitlementGeneration != generation) return@synchronized false
-                if (canonicalCollectionOwnerUid(auth.currentUser) != uid || account.uid != uid) return@synchronized false
+            synchronized(entitlementLock) {
+                if (!started || closed || entitlementGeneration != generation) return@synchronized
+                if (canonicalCollectionOwnerUid(auth.currentUser) != uid || account.uid != uid) return@synchronized
+                reconnectGate.clear()
                 entitledOwnerUid = uid
                 mutableCloudState.value = CollectionCloudState(CollectionCloudStatus.LOCAL_ONLY, uid, accessConfirmed = true)
                 attachRemoteListenerLocked(uid)
@@ -271,12 +287,11 @@ class FirebaseCollectionSession internal constructor(
                             }
                         }
                     }
-                true
+                // Keep effect admission ordered with account transitions and close.
+                requestSync()
+                // Wake durable evidence queued while this same entitled account was offline.
+                scheduling.scheduleScanKnowledge()
             }
-            if (!activated) return@launch
-            requestSync()
-            // Wake any durable evidence queued while this same entitled account was offline.
-            scheduling.scheduleScanKnowledge()
         }
     }
 
@@ -289,15 +304,42 @@ class FirebaseCollectionSession internal constructor(
             handleIdTokenState(auth)
             auth.addIdTokenListener(idTokenListener)
         }
-    }
-
-    fun requestSync() {
-        val uid = synchronized(entitlementLock) { entitledOwnerUid }
-        if (uid == null) {
-            if (started && canonicalCollectionOwnerUid(auth.currentUser) != null) handleIdTokenState(auth)
+        // Never call the external observer/close while holding entitlementLock:
+        // callbacks may already be waiting for that lock on a network thread.
+        val registration = try {
+            connectivity.observe(::handleConnectivity)
+        } catch (failure: RuntimeException) {
+            android.util.Log.w(LOG_TAG, "Network recheck observer unavailable: ${failure.javaClass.simpleName}")
             return
         }
-        if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return
+        val retained = synchronized(entitlementLock) {
+            if (closed || !started) false else {
+                connectivityRegistration = registration
+                true
+            }
+        }
+        if (!retained) registration.close()
+    }
+
+    private fun handleConnectivity(usable: Boolean) = synchronized(entitlementLock) {
+        if (!started || closed) return@synchronized
+        if (!reconnectGate.observe(usable)) return@synchronized
+        val uid = canonicalCollectionOwnerUid(auth.currentUser) ?: return@synchronized
+        val state = mutableCloudState.value
+        if (mutableOwnerUid.value != uid || state.ownerUid != uid || state.accessConfirmed ||
+            entitledOwnerUid != null || state.status != CollectionCloudStatus.LOCAL_ONLY) return@synchronized
+        // CHECKING hints stay in the gate; a transient completion consumes one newer edge.
+        handleIdTokenState(auth)
+    }
+
+    fun requestSync() = synchronized(entitlementLock) {
+        if (!started || closed) return@synchronized
+        val uid = entitledOwnerUid
+        if (uid == null) {
+            if (started && canonicalCollectionOwnerUid(auth.currentUser) != null) handleIdTokenState(auth)
+            return@synchronized
+        }
+        if (canonicalCollectionOwnerUid(auth.currentUser) != uid || mutableOwnerUid.value != uid) return@synchronized
         scheduling.scheduleCollection(uid, userInitiated = true)
         // Separate bounded worker/outbox: no second full-collection listener is introduced.
         scheduling.schedulePrivateBinder(uid, userInitiated = true)
@@ -553,18 +595,24 @@ class FirebaseCollectionSession internal constructor(
     }
 
     override fun close() {
-        localDataOwnerSession.close()
-        synchronized(entitlementLock) {
+        val networkRegistration = synchronized(entitlementLock) {
             closed = true
             started = false
+            localDataOwnerSession.close()
             entitlementGeneration += 1L
             entitledOwnerUid = null
+            reconnectGate.clear()
             detachRemoteListenerLocked()
             accessListener?.remove()
             accessListener = null
+            connectivityRegistration.also { connectivityRegistration = null }
         }
-        auth.removeIdTokenListener(idTokenListener)
-        scope.cancel()
+        try {
+            networkRegistration?.close()
+        } finally {
+            auth.removeIdTokenListener(idTokenListener)
+            scope.cancel()
+        }
     }
 
     private companion object { const val LOG_TAG = "DomiDexCollectionSync" }

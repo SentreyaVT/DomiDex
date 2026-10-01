@@ -5,6 +5,30 @@ The current application remains Room-first. Auth, entitlements, owner isolation,
 optimistic revisions, tombstones and the existing private-sharing readiness gate
 must remain authoritative. No production data migration is authorized here.
 
+## Event-driven recheck after offline session start (2026-10-01)
+
+The bounded SDK characterization reproduced unconfirmed LOCAL_ONLY state after
+transport became reachable, until an explicit sync request. The production
+session now listens to validated default-network transitions and invokes the
+existing SERVER entitlement verifier for that unconfirmed current owner. It does
+not infer permission from connectivity, refresh denied access, start parallel
+CHECKING attempts on each hint or poll. An edge received while checking is
+coalesced into at most one follow-up after that attempt's transient failure.
+Token/owner generation, terminal close and final listener/scheduling effects are
+guarded together. Default-network policy rejects late events for old networks;
+per-session callback registration/disposal occurs outside the entitlement lock.
+
+Ten actual local SDK cases PASS; the new case uses controlled connectivity
+signals with real named Auth/Firestore, SERVER verification and Room. It proves
+one activation, duplicate suppression and no revival after close, not real OS
+delivery, automatic WorkManager execution or process restart. Thirteen new pure
+gate/policy cases, all 912 JVM cases (one existing optional skip), 11 Room controls
+and fixed 371 emulator regressions PASS. Complete server preflight/readback stays
+equal for all three diagnostic owners. Evidence and exact frozen APK identities
+are in the latest `RELEASE_27.md` checkpoint. No new sync protocol, source of
+truth, Rules/schema/outbox/scheduler-policy change or production deployment.
+Gate 4 remains open; the separate delta foundation is not activated.
+
 ## Additional actual SDK boundary evidence (2026-10-01)
 
 The existing five-case collection harness now also passes an actual optimistic

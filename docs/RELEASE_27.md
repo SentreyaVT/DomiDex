@@ -2,7 +2,46 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: actual offline-start session characterization
+### Latest local checkpoint: bounded event-driven session recheck
+
+An unconfirmed LOCAL_ONLY session now requests the existing real SERVER
+entitlement verification when its current Android default network becomes both
+INTERNET-capable and VALIDATED. The callback never grants access itself. Repeated
+capabilities and already-active/denied/signed-out sessions do not trigger new
+checks; a usable edge during an in-flight check permits at most one follow-up
+after a transient failure. Generation, owner, close and listener/scheduling
+boundaries remain guarded. Registrations are owned per session and closed outside
+the entitlement lock. No polling, new permission, schema, Rules, outbox, worker
+policy, dependency or release setting changed. The earlier negative SDK control
+retains a no-op connectivity source; it still characterizes the original case.
+
+Root verification: **912 JVM PASS / 1 existing optional SKIP**, 133 classes;
+debug/test builds, release Kotlin and both lints PASS (**3m 48s**). Thirteen new
+pure cases cover the bounded retry gate and default-network event policy.
+**11/11 Room controls**, **10/10 actual SDK cases**, and the unchanged fixed
+**371/371 emulator regression** (297.779 s, no skips/failures) all PASS with the
+same installed APKs. The new actual SDK case recovers using a synthetic usable
+connectivity signal, without requestSync; actual identity, SERVER entitlement,
+Room and listeners remain real. Healthy duplicate bursts, retained callbacks
+after close and another start cannot reactivate it. This is not proof of Android
+OS network delivery, automatic WorkManager execution, physical-device latency or
+process restart. Twelve host validators and focused host lint pass separately.
+
+Evidence: `artifacts/release27-engineering-20261001/session-reconnect-fix-build.log`;
+`artifacts/release27-engineering-20261001/collection-session-room-200651-0aa74074/manifest.json`;
+`artifacts/android-regression/20261001T200922Z-fd7834dc/manifest.json`;
+Web `outputs/collection-sync-session-local/2026-10-01T20-07-42-715Z-a417bd8b48954918bb8cf634c6c906ea/`.
+All ten complete independent Admin preflights/readbacks, eleven nominal accounts,
+unchanged prior/diagnostic owners, cleanup and frozen inputs verify. Final emulator
+state is offline with no reverse mappings. APK SHA256:
+app `58613d94075ea30791e4996c791ed5aedd9f960f97326aea66d0d3f5ddbdf958`,
+test `ea5bc02b4a59ba64045d41376b3362014360c634729d3df4d56315ed45c1cac7`;
+source snapshot `19a2bec0ba86e910ac86bd1e3574a31ae0fc9b732313e39470e62e2b699ec124`.
+Release-26 AAB/mapping/partial-symbol hashes remain unchanged. No release signing,
+APK/AAB packaging, deployment, Play or Xiaomi action. The earlier isolated R8
+proof predates this code; it is not a current artifact proof. Overall **NOT READY**.
+
+### Previous local checkpoint: actual offline-start session characterization
 
 A mechanical per-session scheduling adapter preserves all six existing production
 effects and makes the actual session safe to exercise with named demo SDK clients.

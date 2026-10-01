@@ -107,6 +107,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "lateParentPlacementIsRecoveredWithoutRemoteRewrite" -> "late-parent"
             "sessionHealthyStartConfirmsAccessWithoutRunningWorkers" -> "session-healthy"
             "offlineSessionNeedsExplicitRecheckWithinObservedReconnectWindow" -> "session-offline"
+            "usableConnectivitySignalRechecksActualEntitlementWithoutManualSync" -> "session-reconnect"
             else -> error("Unreviewed collection-session proof method")
         }
         owner = "sdk-proof-collection-$scenario"
@@ -790,6 +791,215 @@ class CollectionSyncSessionSdkInstrumentedTest {
                 // No global network toggle to restore: only this named SDK was disabled. Existing
                 // @After terminates/deletes that SDK even if a preceding assertion/enable failed.
             }
+        }
+    }
+
+    @Test fun usableConnectivitySignalRechecksActualEntitlementWithoutManualSync() = runBlocking(Dispatchers.IO) {
+        withTimeout(120_000) {
+            check(scenario == "session-reconnect")
+            requireActualEntitlement()
+            assertDiagnosticServerEmpty()
+            val before = localSnapshot()
+            val effects = SessionEffectRecorder()
+            val connectivity = RecordedConnectivitySource()
+            subject.firestore.disableNetwork().bounded()
+            val session = newConnectivityDiagnosticSession(effects, connectivity)
+            val authEvents = Channel<String?>(Channel.UNLIMITED)
+            val monitor = FirebaseAuth.IdTokenListener { changed ->
+                authEvents.trySend(canonicalCollectionOwnerUid(changed.currentUser))
+            }
+            try {
+                startWithInitialAuthCallbackFence(session, monitor, authEvents)
+                withTimeout(25_000) {
+                    session.cloudState.first { state ->
+                        diagnosticGeneration(session) >= 2L && state.ownerUid == owner &&
+                            state.status == CollectionCloudStatus.LOCAL_ONLY && !state.accessConfirmed
+                    }
+                }
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                assertTrue("Initial real Auth events must be consumed before the connectivity experiment",
+                    authEvents.tryReceive().isFailure)
+                val settledGeneration = diagnosticGeneration(session)
+                assertTrue(settledGeneration >= 2L)
+                assertEquals(CollectionCloudState(CollectionCloudStatus.LOCAL_ONLY, owner), session.cloudState.value)
+                assertEquals(ConnectivityObservation(1, 0, true), connectivity.observation())
+                assertTrue(effects.snapshot().isEmpty())
+                assertDiagnosticCheckpoint(before)
+
+                subject.firestore.enableNetwork().bounded()
+                // Independent actual SDK transport confirmation, not the synthetic connectivity source.
+                val access = subject.firestore.document("accountAccess/$owner").get(Source.SERVER).bounded()
+                assertFalse(access.metadata.isFromCache)
+                assertFalse(access.metadata.hasPendingWrites())
+                assertFalse(access.exists())
+                requireActualEntitlement()
+                assertDiagnosticServerEmpty()
+                assertEquals("An unrelated auth/session generation would invalidate this trigger proof",
+                    settledGeneration, diagnosticGeneration(session))
+                assertTrue("An unrelated real token event would invalidate this trigger proof",
+                    authEvents.tryReceive().isFailure)
+                assertEquals(CollectionCloudState(CollectionCloudStatus.LOCAL_ONLY, owner), session.cloudState.value)
+                assertTrue(effects.snapshot().isEmpty())
+
+                withContext(Dispatchers.Main.immediate) {
+                    connectivity.emit(false)
+                    connectivity.emit(false)
+                }
+                assertEquals("Unusable connectivity must not initiate another entitlement attempt",
+                    settledGeneration, diagnosticGeneration(session))
+                assertTrue(effects.snapshot().isEmpty())
+                assertEquals(CollectionCloudState(CollectionCloudStatus.LOCAL_ONLY, owner), session.cloudState.value)
+
+                // Only this signal is synthetic. The production Session owns the attempt, real token,
+                // actual Source.SERVER access read, listeners and all four recorded scheduling effects.
+                // There is intentionally NO requestSync() call anywhere in this method or its helpers.
+                withContext(Dispatchers.Main.immediate) {
+                    connectivity.emit(true)
+                    connectivity.emit(true)
+                    connectivity.emit(false)
+                    connectivity.emit(true)
+                    connectivity.emit(true)
+                }
+                awaitDiagnosticActivation(session, effects)
+                assertEquals("One recoverable failure plus a signal burst must produce one successful recheck",
+                    settledGeneration + 1L, diagnosticGeneration(session))
+                assertTrue("The recovery must not be explained by an actual new token event",
+                    authEvents.tryReceive().isFailure)
+                assertEquals(owner, session.ownerUid.value)
+                assertEquals(owner, session.cloudState.value.ownerUid)
+                assertTrue(session.cloudState.value.accessConfirmed)
+                val activatedEffects = effects.snapshot()
+                assertEquals(mapOf(
+                    SessionEffect("collection", owner, true) to 1,
+                    SessionEffect("private", owner, true) to 1,
+                    SessionEffect("ensure-periodic", owner) to 1,
+                    SessionEffect("scan-knowledge") to 1,
+                ), activatedEffects.groupingBy { it }.eachCount())
+                assertDiagnosticCheckpoint(before)
+                assertDiagnosticServerEmpty()
+
+                val activatedGeneration = diagnosticGeneration(session)
+                withContext(Dispatchers.Main.immediate) {
+                    repeat(3) {
+                        connectivity.emit(false)
+                        connectivity.emit(true)
+                        connectivity.emit(true)
+                    }
+                }
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                // A bounded negative observation, not a production response-time guarantee.
+                val unexpectedRecheck = withTimeoutOrNull(2_000) {
+                    session.cloudState.first { state ->
+                        diagnosticGeneration(session) != activatedGeneration || state.ownerUid != owner ||
+                            !state.accessConfirmed
+                    }
+                }
+                assertNull("An already entitled session must not restart for the connectivity burst", unexpectedRecheck)
+                assertEquals(activatedGeneration, diagnosticGeneration(session))
+                assertEquals(activatedEffects, effects.snapshot())
+                assertTrue(authEvents.tryReceive().isFailure)
+                assertEquals(ConnectivityObservation(1, 0, true), connectivity.observation())
+                assertDiagnosticCheckpoint(before)
+                assertDiagnosticServerEmpty()
+
+                subject.auth.removeIdTokenListener(monitor)
+                session.close()
+                // Retain diagnosticSession until finally/@After as a cleanup fallback even after close.
+                assertEquals(ConnectivityObservation(1, 1, false), connectivity.observation())
+                val closedGeneration = diagnosticGeneration(session)
+                val closedState = session.cloudState.value
+                val closedEffects = effects.snapshot()
+                withContext(Dispatchers.Main.immediate) {
+                    // Deliberately call the captured observer after disposal. This is not filtered
+                    // by the fake: the real Session itself must reject late platform-style callbacks.
+                    connectivity.emitRetainedAfterClose(false)
+                    connectivity.emitRetainedAfterClose(true)
+                    connectivity.emitRetainedAfterClose(true)
+                    session.start() // Existing closed Session must not register a second observer.
+                }
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                val revived = withTimeoutOrNull(2_000) {
+                    session.cloudState.first { state ->
+                        diagnosticGeneration(session) != closedGeneration || state != closedState
+                    }
+                }
+                assertNull("A released connectivity observer must not revive the closed Session", revived)
+                assertEquals(closedGeneration, diagnosticGeneration(session))
+                assertEquals(closedEffects, effects.snapshot())
+                assertEquals(ConnectivityObservation(1, 1, false), connectivity.observation())
+                assertDiagnosticCheckpoint(before)
+                assertDiagnosticServerEmpty()
+            } finally {
+                subject.auth.removeIdTokenListener(monitor)
+                session.close()
+                diagnosticSession = null
+                // Independent cleanup postcondition also detects duplicate releases from repeated close.
+                assertEquals(ConnectivityObservation(1, 1, false), connectivity.observation())
+                // Actual named SDK termination/Room cleanup remains the unchanged @After path.
+                // Do not close the monitor channel: a genuine Auth callback may already be posted.
+            }
+        }
+    }
+
+    private fun newConnectivityDiagnosticSession(
+        effects: SessionEffectRecorder,
+        connectivity: CollectionConnectivitySource,
+    ): FirebaseCollectionSession {
+        check(diagnosticSession == null)
+        return FirebaseCollectionSession(database = database, auth = subject.auth,
+            firestore = subject.firestore, scheduling = effects, connectivity = connectivity).also {
+            diagnosticSession = it
+            assertEquals(0L, diagnosticGeneration(it))
+        }
+    }
+
+    private data class ConnectivityObservation(val registrations: Int, val closeCalls: Int, val active: Boolean)
+
+    /** Only OS connectivity delivery is substituted; auth, entitlement, Tasks and snapshots are real. */
+    private class RecordedConnectivitySource : CollectionConnectivitySource {
+        private val lock = Any()
+        private var registrations = 0
+        private var closeCalls = 0
+        private var active = false
+        private var retained: ((Boolean) -> Unit)? = null
+
+        override fun observe(onUsableChanged: (Boolean) -> Unit): AutoCloseable {
+            synchronized(lock) {
+                registrations++
+                check(registrations == 1 && !active) { "Unexpected duplicate connectivity subscription" }
+                active = true
+                retained = onUsableChanged
+            }
+            // A source may immediately report its initial state; this also exercises registration
+            // while Session.start() is executing. Never invoke a consumer under the fake's lock.
+            onUsableChanged(false)
+            return AutoCloseable {
+                synchronized(lock) {
+                    closeCalls++
+                    active = false
+                    // Keep the actual callback, enabling the explicit late-delivery proof above.
+                }
+            }
+        }
+
+        fun observation(): ConnectivityObservation = synchronized(lock) {
+            ConnectivityObservation(registrations, closeCalls, active)
+        }
+
+        fun emit(usable: Boolean) {
+            val callback = synchronized(lock) {
+                check(active) { "Use the explicit late-delivery helper after release" }
+                checkNotNull(retained)
+            }
+            callback(usable)
+        }
+
+        fun emitRetainedAfterClose(usable: Boolean) {
+            val callback = synchronized(lock) {
+                check(!active && closeCalls == 1) { "Late delivery requires one actual observer release" }
+                checkNotNull(retained)
+            }
+            callback(usable)
         }
     }
 
