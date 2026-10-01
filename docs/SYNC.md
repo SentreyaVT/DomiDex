@@ -5,6 +5,53 @@ The current application remains Room-first. Auth, entitlements, owner isolation,
 optimistic revisions, tombstones and the existing private-sharing readiness gate
 must remain authoritative. No production data migration is authorized here.
 
+## Actual Android/Web stale-price conflict proof (2026-10-01)
+
+Two separate fresh, fixed-demo SDK runs now verify the existing conflict policy
+through actual repository/worker passes and the Web subscription/save functions.
+The new `AndroidWebPriceConflictInstrumentedTest` and sibling Web
+`tests/android-web-price-conflict-local/` do not change product behavior or the
+older ACK/pull/clear proof. Each run retains its own marked Room database across
+three Android invocations, using only the exact isolated API-36 emulator.
+
+Android first acknowledges 532 minor units at revision 1. Web saves 450 at revision
+2. Android, still based on revision 1, selects 500: two worker passes preserve the
+entire local selection and original outbox mutation/base as CONFLICT, while all
+server fields stay identical to Web revision 2. The real queue aggregation reports
+ERROR, not ACTIVE. Ordinary full pull cannot discard that held local choice.
+
+Explicit **cloud** resolution adopts confirmed revision 2/450 locally without a
+server write. Explicit **local** resolution rebases onto revision 2, uses a fresh
+mutation, then the actual worker acknowledges revision 3/500. Original sourceAt
+1000 and selectedAt 3000 survive that rebase. In both runs Web subsequently reads
+the exact result through its real subscription without another write. No trend
+is manufactured from this explicit alternative, and the collection parent stays
+unchanged locally and remotely.
+
+Both runs pass all three Android and two Web phases, with five independent full
+Admin readbacks each (sidecar, unchanged parent, exact sole Google-linked owner,
+claims, no access override, no extra sidecar). Real verified entitlement and
+`PrivatePullAuthSession` guards protect the Android resolver; no always-true
+guard or bypass is injected. Cleanup removes only the verified own fixture and
+is not counted as price-test success. Source/APK hashes stay unchanged, ports
+are free, reverse mappings empty, and no instrumentation remains afterward.
+
+Web evidence directories under `outputs/android-web-price-conflict-local/`:
+
+- `2026-10-01T14-28-51-954Z-cloud-46dbb61bb54245eaac5f5a7744799fb2/`
+- `2026-10-01T14-30-05-496Z-local-d938e2045fde4aae8fdc7542e01d12a2/`
+
+Seven pure validator cases, full Web typecheck and focused lint also pass.
+Android debug/test build and lint pass in 1m32s; JVM 856 PASS / one existing
+live-source opt-in SKIP. Exact installation and **371/371** regression, 270.701s:
+`artifacts/android-regression/20261001T142307Z-3a9a405f/manifest.json`.
+Debug SHA-256 `CBD7CDB28A26939ED70A7F115A15949344C21D52508D01013ABEF7ECD7221E39`;
+test SHA-256 `BF5E7C20C373E36CAC7039AB34703EC794CFEB3D86855831BC90FB60BAA36C98`.
+
+This is not the Settings UI/WorkManager lifecycle, all concurrent-resolution
+races, multi-device scale, a production-latency comparison or Gate-4 completion.
+No Xiaomi, production service, rule/dependency change, release signing or AAB.
+
 ## Proven baseline and first isolated fixes
 
 Two collection workers (ordinary and sharing-priority) can capture the same outbox
