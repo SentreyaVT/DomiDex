@@ -25,8 +25,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.lang.ref.WeakReference
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlin.math.roundToLong
 
@@ -153,7 +151,7 @@ class RoomCollectionRepository(
         // groupBy preserves that order within each product's history.
         val cardmarketPrices = prices.groupBy(OwnedPriceHistoryProjection::cardId)
         PortfolioSummary(collectionCards(rows, selections, cardmarketPrices),
-            if (includePortfolioHistory) buildHistory(rows, prices, cardmarketPrices) else emptyList())
+            if (includePortfolioHistory) buildChronologicalPortfolioHistory(rows, prices) else emptyList())
     }.flowOn(Dispatchers.Default)
 
     private fun collectionCards(
@@ -1091,41 +1089,6 @@ class RoomCollectionRepository(
                 }
             }
         }
-    }
-
-    private fun buildHistory(
-        rows: List<CollectionProjection>,
-        prices: List<OwnedPriceHistoryProjection>,
-        cardmarketPrices: Map<String, List<OwnedPriceHistoryProjection>>,
-    ): List<PortfolioPoint> =
-        // Only portfolioFor calls this, with the DAO's chronological history.
-        prices.map { it.effectiveAtEpochMillis }.distinct().map { timestamp ->
-            val total = rows.sumOf { row ->
-                if (com.dominik.cardvault.data.catalog.isQuarantinedCardmarketIdentity(row.sourceCardId ?: row.cardId, row.externalProductId)) return@sumOf 0L
-                latestPriceAtOrBefore(cardmarketPrices[row.priceCardId].orEmpty(), timestamp)
-                    ?.trendValueFor(row.finish)
-                    ?.times(row.quantity)
-                    ?: 0L
-            }
-            PortfolioPoint(java.time.Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("MMM")), total / 100.0)
-        }
-
-    /** Binary search over the already sorted per-product history. */
-    private fun latestPriceAtOrBefore(prices: List<OwnedPriceHistoryProjection>, timestamp: Long): OwnedPriceHistoryProjection? {
-        var low = 0
-        var high = prices.lastIndex
-        var match: OwnedPriceHistoryProjection? = null
-        while (low <= high) {
-            val middle = (low + high).ushr(1)
-            val candidate = prices[middle]
-            if (candidate.effectiveAtEpochMillis <= timestamp) {
-                match = candidate
-                low = middle + 1
-            } else {
-                high = middle - 1
-            }
-        }
-        return match
     }
 
     /** Normal/Holo use the product trend; Reverse Holo requires its own source observation. */

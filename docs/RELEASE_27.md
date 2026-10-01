@@ -2,7 +2,48 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-01.
 
-### Latest local checkpoint: genuine pending overlay and late-parent recovery
+### Latest local checkpoint: equivalent chronological portfolio history
+
+The historical valuation now groups original, individually quarantine-checked
+holdings by product and normal/reverse finish, then processes chronological price
+events once. Invalid/null/zero prices still replace earlier values with zero;
+same-time last-event semantics, all original timestamps, UTC labels, quantities
+and wrapping Long arithmetic are unchanged. Current chosen alternatives are not
+rewritten into historical trends. DAO queries, schema, sync and price policy stay
+unchanged. Expected history arithmetic is linear in rows plus price events; the
+surrounding card projection still retains its existing per-product history groups.
+
+Eight new JVM cases pass, including 400 deterministic small histories against an
+independent per-original-row BigInteger oracle. The complete debug/test build,
+release Kotlin compile and both lints PASS in 3m 29s: **899 JVM PASS, one existing
+optional audit SKIP, zero failures**, 131 classes. This is not an R8/signed build.
+The unchanged fixed emulator selection passes **371/371**, no skips/failures,
+283.714 s. It includes real Room annual 365-date corrections and owner boundaries.
+Two additional full-field Room projection controls also pass. Sources/APKs remain
+unchanged throughout the verified offline runs.
+
+The same 1k/5k/20k two-date scale fixture passes all 87 measured samples, all
+15-table/per-column hashes match the prior run and query counts are unchanged.
+Three warm repeats per size do **not** establish a wall-time speedup: portfolio
+medians are 53.84 -> 49.62 ms (1k), 161.75 -> 165.60 ms (5k), and
+1172.48 -> 1222.46 ms (20k). Unchanged private-contents work also varies
+1164.75 -> 1230.79 ms at 20k. These are descriptive emulator observations, not
+proof that the whole app became faster, a causal regression verdict, a year-long
+benchmark, network latency, UI responsiveness, or physical-device performance.
+
+Evidence: `artifacts/release27-engineering-20261001/history-sweep-{build.log,final-unit/,final-regression.log,scale-comparison.json}`;
+`artifacts/android-regression/20261001T190735Z-f7c6f309/manifest.json`;
+`artifacts/release27-engineering-20261001/card-projection-review/projection-control-20261001T191334Z-f6e9afb4ffc048bc88f120fddaac76f9/manifest.json`;
+`artifacts/release27-engineering-20261001/room-scale-current-20261001T191348Z-6caf9828293c4545bb599db7e120f89b/manifest.json`.
+App SHA256 `b590e53c722e16c4dae56d5ef8c8565291497991038d2e3c367e457efedd0c6c`;
+test APK `a7bb873e80a044fe5b608ede46a1091fcee48987b637575ee603caf207866df9`;
+source snapshot `6863da22889cddb91bac12b871cfb5ed70d8e55e82c465a2edef646ea74d8e42`.
+The cached, completed own test process was verified and stopped before the extra
+controls; no foreign process or app data was removed. Release 26 AAB/mapping/partial
+symbols retain their Gate-0 hashes. No release signing, deployment or Xiaomi action.
+Overall **NOT READY**; remaining external and full-mission gates are not closed.
+
+### Previous local checkpoint: genuine pending overlay and late-parent recovery
 
 Two test-only additions extend the existing collection-session SDK harness to
 **7/7 PASS**, seven full independent Admin preflights and seven readbacks, eight
@@ -694,12 +735,12 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
 | 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
 | 12 Load/scale | PARTIAL (local simulation) | 10/40/80 sharing concurrency and 1k/5k/20k Room baselines; O(N) reads and provider fan-out remain, no production load |
-| 13 Full regression | IN PROGRESS | latest root 856 JVM PASS/1 opt-in SKIP; Web 1199/1199 twice after explicit dialog fix and owner-test readiness correction (earlier failures retained), reproducible 371 emulator cases +18 new Room cases, 24 runner contract tests, 84 current Rules and 30 local backend SDK cases; release/debug lint and isolated Web build pass; prior SwiftShader host crashes retained; complete physical/live contracts untested |
+| 13 Full regression | IN PROGRESS | latest Android 899 JVM PASS/1 opt-in SKIP, 371 fixed emulator PASS and two extra full-field Room controls; latest completed Web product suite 1285 PASS plus 103 public-cache cases and 31 local backend SDK cases; seven real Android collection-session SDK cases with independent Admin readbacks; debug/test builds, release Kotlin, both lints and isolated Web build pass in their dated checkpoints; prior failures retained; complete physical/live contracts untested |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
 
-## Findings to reproduce, not assumed fixed
+## Initial findings (historical; later checkpoints document resolved items)
 
 - Baseline had no common multi-instance request limiter. Gate 2 now uses shared
   Firestore transactions for report uploads/share creation/role grants, with
@@ -1242,6 +1283,31 @@ Final combined check: 189/189 selected JVM tests, 78/78 offline-emulator regress
 not multi-device Firebase convergence, billed-read counts or end-to-end sync latency.
 
 ## Gate 5 Android import safety (partial, local validation)
+
+### Frozen coverage triage after the October identity fixes
+
+Read-only follow-up of the existing 25 September snapshot and the 18:19 October-1
+replay found no further reproducible general parser/resolver correction justified
+by the available exact-printing evidence. This is not a fresh provider download or
+a universal no-defects claim. The strict report has 20,252 available and 11,363
+unavailable printings: 11,251 missing/conflicting/quarantined exact identities,
+111 missing/zero requested trends, and one product absent from the provider catalog.
+Seven strict-audit-unavailable printings already have positive runtime values;
+those provenance gaps are not seven newly reproduced app failures.
+
+All 158 numbered `30th` cards, including 129–158 above main total 128, are priced
+in this replay. Examples `30th-151` -> product 908353 -> EUR 83.02 and `30th-152`
+-> 908354 -> EUR 132.26 are dated evidence, not live-price claims. RGB supplements
+lack upstream detailed-printing evidence in this snapshot; B has no trend but has
+supported average/low alternatives. Of the 111 missing/zero-trend printings, 83
+already have a supported same-finish alternative; 28 do not. The report measures
+trend coverage, not all user-confirmed alternative/UI paths.
+
+Root-ID inheritance, name matching, normal-for-reverse substitution and guessing
+replacement products are not justified fixes. The next coverage step requires
+explicit collector/printing-level provider evidence; no additional fallback or
+product change was made for this triage. Full bounded breakdown and examples:
+`artifacts/release27-engineering-20261001/price-triage-followup.md`.
 
 The existing atomic Cardmarket import now serializes overlapping UI/worker imports,
 owns both temporary files before parallel downloads, and cleans both after failure
