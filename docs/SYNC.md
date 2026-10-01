@@ -293,3 +293,46 @@ Der Node-Loopback-Guard ist keine OS-Firewall und instrumentiert nicht den Java-
 Emulator; verwendet wurden ausschließlich Demo-Projekt, synthetische Owner,
 leere Credential-Konfiguration und der bereits gecachte Emulator. Alle eigenen
 Firebase-/Proxy-Ports waren nach dem Lauf wieder frei.
+
+### Collection-Cloud-Entscheidung: Generationsschutz beider Phasen (2026-10-01)
+
+Die vorhandene zweiphasige Cloud-Auflösung bleibt erhalten: Zuerst wird die lokale
+Darstellung für neuere Listener-Fassungen geöffnet, während die Konflikt-Outbox
+bestehen bleibt. Erst nach dem zweiten Server-Read wird die genau passende Mutation
+quittiert. Eine bereits neuere lokale Listener-Revision wird weiterhin nicht
+durch einen älteren zweiten Read zurückgesetzt. Auch eine ausdrücklich gewählte
+Cloud-Löschung bleibt eine Löschung.
+
+Die zwei unverändert fachlichen Room-Phasen sind in `CollectionCloudConflict.kt`
+als tatsächlich vom Coordinator verwendete, getrennt testbare Funktionen extrahiert.
+Beide prüfen jetzt dieselbe ursprüngliche Aktionsgeneration vor und nach ihren
+Schreibzugriffen innerhalb der Transaktion. Die Server-Reads prüfen sie vor und
+nach dem Warten; Coroutine-Abbruch und Sitzungswechsel werden nicht als bloßer
+Offline-Fehler verschluckt. Gewöhnliche Netzwerkfehler lassen den Konflikt offen.
+
+Der ursprüngliche Owner-/Generations-Guard wird ausdrücklich **vor `withContext`**
+erfasst: Bereits das Warten auf den IO-Dispatcher kann suspendieren. Das gilt auch
+für Preisentscheidungen vor ihrer DAO-Abfrage und vor Einrichtung der zusätzlichen
+Auth-Lease. Ein Konto-Rundwechsel während Dispatch- oder DAO-Wartezeit kann einer
+alten Entscheidung damit keine neue Sitzung geben. Lokale DAO-Ausnahmen werden
+weiterhin weitergegeben und nicht als leere Konfliktliste ausgegeben.
+
+Ein berechtigter erster Commit wird bei Offline-/Abbruch zwischen den Reads nicht
+nachträglich zurückgerollt: Seine `CLEAN`-Darstellung mit weiterhin vorhandener
+`CONFLICT`-Outbox ist ein bereits bestehender, bewusst fortsetzbarer Zwischenzustand.
+Pauschales Rücksetzen könnte inzwischen eingetroffene neuere Listener-Daten zerstören.
+Die zweite Phase darf bei ungültiger Generation nicht bestätigen.
+
+Ausgeführter RED-Nachweis nach unveränderter Extraktion: **4/6 JVM-Lesetests** und
+**5/14 echte Room-Tests** fehlgeschlagen. Final nach den Guards und den zusätzlichen
+DAO-/Dispatcher-Randfällen: **156 ausgewählte JVM-Tests** sowie **112 Emulator-
+Regressionen** grün, darunter **10 neue Lese-/Guardtests** und **14 neue Room-Fälle**.
+Der Dispatcher-Test hält die Queue deterministisch an, ohne Schlafzeiten. Die
+Tests prüfen reale Room-Seams und den tatsächlichen suspend-Leseguard mit lokalen
+Testlieferanten; sie ersetzen keinen Firebase-/Geräte-E2E-Test.
+
+Finale Protokolle im obigen Artefaktordner:
+`collection-cloud-dispatch-final-build.log` und
+`collection-cloud-dispatch-final-instrumentation.log` (6,263 Sekunden, 112/112).
+Debug-/Test-APKs und Release-Kotlin wurden offline gebaut; kein Release-APK/AAB,
+keine Release-Signierung, Migration, Regeländerung oder Veröffentlichung.

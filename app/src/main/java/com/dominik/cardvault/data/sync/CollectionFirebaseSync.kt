@@ -430,91 +430,43 @@ class FirebaseCollectionSession(
      * Explicit Cloud-wins resolution. Every conflicted row is fetched from the server first.
      * Offline/auth failures or a concurrently changed outbox leave that conflict untouched.
      */
-    suspend fun keepCloudVersionsForConflicts(): Int = withContext(Dispatchers.IO) {
-        val uid = entitledOwnerUid ?: return@withContext 0
-        if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return@withContext 0
+    suspend fun keepCloudVersionsForConflicts(): Int {
+        val uid = entitledOwnerUid ?: return 0
+        if (canonicalCollectionOwnerUid(auth.currentUser) != uid) return 0
+        // Capture before dispatch: waiting for an IO thread is already a suspension.
         val actionCurrent = captureConflictSession(uid)
-        val priceResolved = resolvePriceSelectionConflicts(uid, keepLocal = false)
-        if (!actionCurrent()) return@withContext priceResolved
-        val dao = database.cardVaultDao()
-        var resolved = 0
-        dao.conflictedSyncOutbox(uid).forEach { conflict ->
-            if (!actionCurrent()) return@withContext resolved + priceResolved
-            val document = runCatching {
-                firestore.document(collectionEntryPath(uid, conflict.syncId))
-                    .get(Source.SERVER)
-                    .awaitSyncTask()
-            }.getOrNull() ?: return@forEach
-            if (!document.exists() || canonicalCollectionOwnerUid(auth.currentUser) != uid) return@forEach
-            val firstRemote = RemoteCollectionEntry.from(document, uid) ?: return@forEach
-            val openedForCloud = database.withTransaction {
-                val current = dao.syncOutbox(conflict.entryKey)
-                if (current?.ownerUid != uid || current.mutationId != conflict.mutationId || current.state != SYNC_CONFLICT) {
-                    return@withTransaction false
-                }
-                val local = dao.getCollectionEntryBySyncId(uid, firstRemote.syncId)
-                if (local == null || (local.syncState != SYNC_CONFLICT && local.syncState != SYNC_CLEAN)) {
-                    return@withTransaction false
-                }
-                // Keep the conflicting local payload intact for now. CLEAN lets a newer listener
-                // snapshot apply while we perform the mandatory second server read below.
-                dao.markEntrySynced(
-                    ownerUid = uid,
-                    syncId = firstRemote.syncId,
-                    revision = maxOf(local.remoteRevision, firstRemote.revision),
-                    state = SYNC_CLEAN,
-                )
-                true
-            }
-            if (!openedForCloud || canonicalCollectionOwnerUid(auth.currentUser) != uid) return@forEach
+        return withContext(Dispatchers.IO) {
+            if (!actionCurrent()) throw PrivatePullAccountChangedException()
+            val priceResolved = resolvePriceSelectionConflicts(uid, keepLocal = false)
+            if (!actionCurrent()) return@withContext priceResolved
+            val dao = database.cardVaultDao()
+            var resolved = 0
+            dao.conflictedSyncOutbox(uid).forEach { conflict ->
+                if (!actionCurrent()) return@withContext resolved + priceResolved
+                val document = readCollectionCloudConflict(actionCurrent) {
+                    firestore.document(collectionEntryPath(uid, conflict.syncId))
+                        .get(Source.SERVER)
+                        .awaitSyncTask()
+                } ?: return@forEach
+                if (!document.exists() || !actionCurrent()) return@forEach
+                val firstRemote = RemoteCollectionEntry.from(document, uid) ?: return@forEach
+                val openedForCloud = openCollectionCloudConflict(database, uid, conflict, firstRemote, actionCurrent)
+                if (!openedForCloud || !actionCurrent()) return@forEach
 
-            // A listener event can be delivered only once. Re-read after CLEAN so a revision that
-            // arrived between the first read and the Room state transition cannot be lost.
-            val latestDocument = runCatching {
-                firestore.document(collectionEntryPath(uid, conflict.syncId))
-                    .get(Source.SERVER)
-                    .awaitSyncTask()
-            }.getOrNull() ?: return@forEach
-            if (!latestDocument.exists() || canonicalCollectionOwnerUid(auth.currentUser) != uid) return@forEach
-            val latestRemote = RemoteCollectionEntry.from(latestDocument, uid) ?: return@forEach
-            val applied = database.withTransaction {
-                val current = dao.syncOutbox(conflict.entryKey)
-                if (current?.ownerUid != uid || current.mutationId != conflict.mutationId || current.state != SYNC_CONFLICT) {
-                    return@withTransaction 0
-                }
-                val local = dao.getCollectionEntryBySyncId(uid, latestRemote.syncId)
-                if (local?.syncState != SYNC_CLEAN) return@withTransaction 0
-                // A listener may already have applied an even newer revision. Never roll it back;
-                // otherwise apply the fresh server snapshot, including a cloud tombstone.
-                if (shouldApplyCloudResolutionSnapshot(local.remoteRevision, latestRemote.revision)) {
-                    dao.applyCleanRemoteEntry(
-                        ownerUid = uid,
-                        syncId = latestRemote.syncId,
-                        quantity = latestRemote.quantity,
-                        condition = latestRemote.condition,
-                        acquisitionPriceMinor = latestRemote.acquisitionPriceMinor,
-                        acquisitionCurrency = latestRemote.acquisitionCurrency,
-                        acquisitionDateEpochDay = latestRemote.acquisitionDateEpochDay,
-                        notes = latestRemote.notes,
-                        externalProductSource = latestRemote.externalProductSource,
-                        externalProductId = latestRemote.externalProductId,
-                        sourceSetId = latestRemote.sourceSetId,
-                        sourceCardId = latestRemote.sourceCardId,
-                        binderId = latestRemote.binderId,
-                        updatedAtEpochMillis = latestRemote.updatedAtEpochMillis,
-                        remoteRevision = latestRemote.revision,
-                        deletedAtEpochMillis = latestRemote.deletedAtEpochMillis,
-                        finish = latestRemote.finish,
-                        variant = latestRemote.variant,
-                        effectOverride = latestRemote.effectOverride,
-                    )
-                }
-                dao.deleteSyncOutboxIfCurrent(conflict.entryKey, conflict.mutationId)
-                1
+                // A listener event can be delivered only once. Re-read after CLEAN so a revision that
+                // arrived between the first read and the Room state transition cannot be lost.
+                val latestDocument = readCollectionCloudConflict(actionCurrent) {
+                    firestore.document(collectionEntryPath(uid, conflict.syncId))
+                        .get(Source.SERVER)
+                        .awaitSyncTask()
+                } ?: return@forEach
+                if (!latestDocument.exists() || !actionCurrent()) return@forEach
+                val latestRemote = RemoteCollectionEntry.from(latestDocument, uid) ?: return@forEach
+                val applied = finishCollectionCloudConflict(database, uid, conflict, latestRemote, actionCurrent)
+                resolved += applied
             }
-            resolved += applied
+            resolved + priceResolved
         }
-        resolved + priceResolved
     }
 
     suspend fun keepLocalPriceSelectionConflicts(ownerUid: String): Int = resolvePriceSelectionConflicts(ownerUid, keepLocal = true)
@@ -529,36 +481,45 @@ class FirebaseCollectionSession(
     }
 
     /** Existing explicit Settings decisions also cover price sidecars, with a per-action auth lease. */
-    private suspend fun resolvePriceSelectionConflicts(uid: String, keepLocal: Boolean): Int = withContext(Dispatchers.IO) {
-        if (entitledOwnerUid != uid || canonicalCollectionOwnerUid(auth.currentUser) != uid) return@withContext 0
-        val conflicts = database.cardVaultDao().conflictedPriceSelectionOutbox(uid)
-        if (conflicts.isEmpty()) return@withContext 0
-        PrivatePullAuthSession.use(auth, uid) { session ->
-            var resolved = 0
-            fun current() = session.isCurrent() && entitledOwnerUid == uid
-            for (conflict in conflicts) {
-                session.requireCurrent()
-                if (!current()) throw PrivatePullAccountChangedException()
-                val applied = if (keepLocal) {
-                    keepLocalPriceSelectionConflict(database, conflict, UUID.randomUUID().toString(),
-                        System.currentTimeMillis(), ::current)
-                } else {
-                    val document = try {
-                        firestore.document(collectionPriceSelectionPath(uid, conflict.recordId))
-                            .get(Source.SERVER).awaitPrivateBinderTask(session)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: PrivatePullAccountChangedException) {
-                        throw error
-                    } catch (_: Exception) {
-                        continue // Offline/permission failures retain the exact conflict.
-                    }
-                    keepCloudPriceSelectionConflict(database, conflict, document.data.orEmpty(),
-                        document.exists() && !document.metadata.isFromCache && !document.metadata.hasPendingWrites(), ::current)
-                }
-                if (applied) resolved++
+    private suspend fun resolvePriceSelectionConflicts(uid: String, keepLocal: Boolean): Int {
+        if (entitledOwnerUid != uid || canonicalCollectionOwnerUid(auth.currentUser) != uid) return 0
+        // Capture before dispatch AND DAO completion: A -> B -> A must not give an old decision
+        // a new lease simply because the UID matches again.
+        val actionCurrent = captureConflictSession(uid)
+        return withContext(Dispatchers.IO) {
+            if (!actionCurrent()) throw PrivatePullAccountChangedException()
+            val conflicts = guardedConflictActionRead(actionCurrent) {
+                database.cardVaultDao().conflictedPriceSelectionOutbox(uid)
             }
-            resolved
+            if (conflicts.isEmpty()) return@withContext 0
+            if (!actionCurrent()) throw PrivatePullAccountChangedException()
+            PrivatePullAuthSession.use(auth, uid) { session ->
+                var resolved = 0
+                fun current() = actionCurrent() && session.isCurrent() && entitledOwnerUid == uid
+                for (conflict in conflicts) {
+                    session.requireCurrent()
+                    if (!current()) throw PrivatePullAccountChangedException()
+                    val applied = if (keepLocal) {
+                        keepLocalPriceSelectionConflict(database, conflict, UUID.randomUUID().toString(),
+                            System.currentTimeMillis(), ::current)
+                    } else {
+                        val document = try {
+                            firestore.document(collectionPriceSelectionPath(uid, conflict.recordId))
+                                .get(Source.SERVER).awaitPrivateBinderTask(session)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: PrivatePullAccountChangedException) {
+                            throw error
+                        } catch (_: Exception) {
+                            continue // Offline/permission failures retain the exact conflict.
+                        }
+                        keepCloudPriceSelectionConflict(database, conflict, document.data.orEmpty(),
+                            document.exists() && !document.metadata.isFromCache && !document.metadata.hasPendingWrites(), ::current)
+                    }
+                    if (applied) resolved++
+                }
+                resolved
+            }
         }
     }
 
@@ -942,7 +903,7 @@ private fun CollectionSyncProjection.toRemoteMap(mutation: CollectionSyncOutboxE
     "binderHeroAsset" to binderHeroAsset,
 )
 
-private data class RemoteCollectionEntry(
+internal data class RemoteCollectionEntry(
     val syncId: String,
     val revision: Long,
     val updatedAtEpochMillis: Long,
