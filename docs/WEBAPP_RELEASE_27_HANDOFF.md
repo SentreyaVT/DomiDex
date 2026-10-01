@@ -103,3 +103,46 @@ agree on the above wire contracts. Record test counts without duplication.
 Physical-device and Google Sign-In/Play Integrity validation remain explicit manual
 items unless actually performed. Deployments, Play upload, budget activation and
 credential rotation are separate manual actions, never inferred from this handoff.
+
+## Gate 9: eindeutiger Functions-Deploy-Eigentümer (2026-10-01)
+
+Canonical Functions source: `DomiDex-Web/backend/scan-knowledge`
+
+Der Web-Quellpfad ist für die gemeinsame Codebase `default` und den bestehenden
+regionalen Export `aggregateScanKnowledge` maßgeblich. Die Android-Kopie unter
+`functions/` bleibt unveränderte historische Referenz: Sie besitzt nicht den
+transaktionalen `isCurrentEvidence`-/Kontolöschsperren-Guard des Web-Backends und
+könnte bei einem versehentlichen Deployment dessen Schutz überschreiben.
+
+Deshalb verweist ausschließlich `functions.predeploy` in dieser `firebase.json`
+auf `scripts/deny-android-functions-deploy.cjs`. Dieser lokale Node-Guard beendet
+sich immer mit Status 1, ohne SDK, Zugangsdaten, Netzwerk, Flags oder Env-Ausnahme.
+Exports, Codebase, Signing sowie Firestore-/Storage-Konfiguration bleiben gleich.
+Ein Android-Deploy mit Functions bricht ab; gezielte Firestore-/Storage-Vorgänge
+bekommen keinen neuen Hook. Das ist ein Schutz der eingecheckten Konfiguration,
+keine IAM-Sperre gegen bewusst andere Konfigurationen oder Cloud-Werkzeuge.
+
+`node --test functions/deploy-ownership.test.js` prüft den Konfigurationsvertrag,
+den Abbruch auch außerhalb des Projektverzeichnisses sowie wirkungslose
+Overrideversuche. Der Test benötigt weder globale Firebase-CLI noch Web-Checkout.
+Der separate Web-Test `tests/scan-knowledge-trigger.test.mjs` importiert den echten
+Export mit SDK-Doubles; beide fachlichen Helper bleiben unverändert eingebunden.
+Ein isolierter lokaler Nachweis des installierten CLI-15.28.2-Lifecycle-Runners
+prüft zusätzlich Windows-`$PROJECT_DIR`-Expansion und Zielauswahl. Dabei werden
+Cloud-/Auth-Imports ersetzt, nur der blockierende Guard über `cross-env` gestartet,
+kein Firebase-CLI-Einstiegspunkt und kein Deploy ausgeführt. Dieser rechnerabhängige
+Harness liegt ausschließlich unter den ignorierten Gate-9-Artefakten.
+
+Dies legt den zuvor offenen lokalen Deploy-Eigentümer fest. Eine Aussage zum
+aktuell produktiv laufenden Trigger, eine Übernahme der alten Android-Implementierung
+oder eine Deploymentfreigabe ist damit ausdrücklich nicht verbunden.
+
+Lokale Nachweise: 4/4 Guard-/Vertragstests zunächst rot, anschließend 4/4 grün;
+mit den drei unveränderten Aggregationstests 7/7. Die zwei zusätzlichen lokalen
+CLI-Harnesstests sind ebenfalls grün (nicht Bestandteil der sieben Repositorytests).
+Belege: `artifacts/release27-engineering-20261001/gate9-ownership-red.log`,
+`gate9-ownership-green.log` und `gate9-android-functions-green.log`.
+
+Der vorhandene Functions-Testentry `npm --prefix functions test` (`node --test`)
+entdeckt den neuen Guardtest automatisch; keine zusätzliche Dependency nötig.
+Eine CI-Pipeline existiert derzeit nicht und wurde hier nicht neu angelegt.
