@@ -52,9 +52,10 @@ was used. The wider Gate 4 delta/scale work below is still in progress.
 page transitions and strict local metadata encoding. `PrivatePullRoomStore.kt`
 implements exact-raw CAS plus atomic payload/marker/checkpoint commit. A fresh
 local epoch prevents a repaired/reset checkpoint from recreating an older CAS
-token. `PrivatePullAuthSession.kt` prepares a per-run token/account-event lease.
-These components are **not yet connected to the running Firebase worker**. Their
-tests must pass before integration; no delta/network speedup is claimed yet.
+token. `PrivatePullAuthSession.kt` provides the per-run token/account-event lease
+already used by the active worker. The delta protocol/store and the local adapter
+described below are **not yet connected to the running Firebase worker**; no
+delta/network speedup is claimed yet.
 
 The existing placement apply path separately uses an indexed existence query for
 a requested free slot, fetching all active placements only for a real collision.
@@ -336,3 +337,64 @@ Finale Protokolle im obigen Artefaktordner:
 `collection-cloud-dispatch-final-instrumentation.log` (6,263 Sekunden, 112/112).
 Debug-/Test-APKs und Release-Kotlin wurden offline gebaut; kein Release-APK/AAB,
 keine Release-Signierung, Migration, Regeländerung oder Veröffentlichung.
+
+### Lokaler Delta-Remote-Apply-Adapter — noch nicht im Worker aktiviert (2026-10-01)
+
+`PrivatePullRemoteRoomAdapter.kt` verbindet das vorhandene reine Pull-Protokoll und
+den `PrivatePullRoomStore` mit der tatsächlich genutzten Vier-Typen-Anwendung
+`applyPrivateRemoteRecord`. Store und DAO werden zwingend aus derselben Room-Datenbank
+erzeugt. Die Dokumentliste und die flachen Payload-Maps werden vor der ersten
+Suspension kopiert; dies ist keine allgemeine Tiefenkopie beliebiger Objekte.
+
+Page-/Recheck-Commits wenden Geschäftsdaten, gegebenenfalls erzeugte Placement-
+Outbox-Mutationen und Tombstone-Receipts innerhalb derselben Transaktion wie Marker
+und Checkpoint an. `Completed` kann neue lokale Outbox-Arbeit enthalten und ist kein
+ACK. Bestehende Outbox-/ERROR-/CONFLICT-Blockaden werden als `LOCAL_MUTATION` markiert;
+fehlende Binder-/Collection-Eltern erhalten typisierte Marker mit exakter Parent-ID.
+Eine spätere ACK allein entfernt keinen Marker. Ein bestätigter Recheck verschiebt
+den Remote-Cursor nicht. Bestehende Kollisions-, Tombstone- und Preiswahlregeln bleiben
+unverändert; der Adapter führt keine neue Konfliktentscheidung aus.
+
+Unbestätigte oder Pending-Envelopes werden ohne Daten-/Cursoränderung zurückgewiesen. Nur ein
+ausdrücklich ungültiger Payload bzw. unveränderlicher Identitätswiderspruch wird als
+abgeschlossen behandelt, nicht ein fehlender Parent oder Netzwerkfehler. Fehlende
+Point-Read-Dokumente dürfen nicht als leere Payload-Map übergeben werden. Der Adapter
+hat keine Firebase-, Netzwerk-, Scheduler- oder ACK-Aufgabe und erteilt keine
+Berechtigung. Die Timestamp-Vertrauensprüfung, begrenzte faire Recheck-Steuerung,
+Full-Repair-Strategie und tatsächliche Worker-Verdrahtung bleiben eigene offene Schritte.
+
+Der aktive Worker bleibt beim begrenzten Full-Pull; Sharing-Priorität, Rules, DAO,
+Room-Schema und Cloud-Payloads werden durch diesen Schritt nicht geändert.
+
+Neu angelegt sind **32 echte Room-Integrationstests** in
+`PrivatePullRemoteRoomAdapterInstrumentedTest`: vier Datentypen, ausstehende Mutationen,
+Ownerisolation, Parent-Nachlieferung, Clear/Preisidentität, Receipts, Markergrenze,
+Session-/Checkpoint-/Marker-CAS, mutable Eingabemaps sowie Datei-Datenbank-Wiederöffnung.
+Die Rollback-Fälle lesen innerhalb der tatsächlichen Transaktion die bereits
+geschriebenen Geschäftsdaten, generierte Outbox, Receipt und Marker; danach werden
+Ausnahme, Cancellation oder A→B→A geprüft, einschließlich des letzten Guards nach
+Checkpoint-Schreiben. Dieselbe zurückgerollte Seite kann anschließend erneut angewandt
+werden. Tests wurden vor dem neuen Adapter geschrieben; es gibt keinen behaupteten
+historischen RED-Nachweis gegen einen zuvor vorhandenen Adapter.
+
+Ausgeführt auf dem isolierten Offline-API-36-Emulator: **32/32 Tests bestanden in
+1,836 Sekunden**. Debug-App und Instrumentierungs-APK wurden erfolgreich gebaut
+(38 Sekunden; 73 Tasks, davon 8 ausgeführt und 65 aktuell). Die Zeitangaben sind
+Laufprotokolle, keine Performance-SLA. Nachweise im lokalen Ordner
+`artifacts/release27-engineering-20261001/`:
+`private-pull-remote-room-build.log` und
+`private-pull-remote-room-instrumentation.log`.
+
+Zusätzlich bestand auf denselben APKs das vollständige Instrumentierungspaket
+`com.dominik.cardvault.data.sync`: **141/141 Tests in 5,348 Sekunden**. Diese 141
+enthalten die neuen 32 Fälle; die Zählungen werden nicht addiert. Nachweis:
+`private-pull-remote-room-sync-regression.log` im selben lokalen Artefaktordner.
+SHA-256 der APKs: App
+`B73F8783302651C7EA435B303F434E63C7418902DB27D550D97B1B2F5BBD3C69`,
+Instrumentierung
+`3B3DE487F96710451B7E3FC19016D392084BC45F34260144C3DD1DB0B3571796`.
+
+Dies ist das lokale Sync-Instrumentierungspaket, nicht die gesamte Android-Testsuite.
+Der Testumfang ist Room-/Protokollintegration, kein Firebase-Worker-/Geräte-E2E- oder
+Leistungsnachweis. Kein aktiver Worker wurde umgestellt; keine Release-Signierung,
+Veröffentlichung oder Nutzung des Xiaomi erfolgte dafür.
