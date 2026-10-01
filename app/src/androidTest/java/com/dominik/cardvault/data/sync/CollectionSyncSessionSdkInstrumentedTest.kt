@@ -100,6 +100,274 @@ class CollectionSyncSessionSdkInstrumentedTest {
     private var deferredRoomOwnerMarker: String? = null
     private var deferredInitialSeed: Map<String, Map<String, Any>>? = null
 
+// REVIEW DRAFT ONLY. Insert these members into CollectionSyncSessionSdkInstrumentedTest.
+// Setup and @After integration are specified in android-integration-and-fixture-contract.txt.
+// No new imports beyond those already present in the 12-case class are required.
+
+    private data class PrivatePairRoom(
+        val name: String, val file: File, val marker: String, val db: CardVaultDatabase,
+    )
+    private val privatePairRooms = mutableListOf<PrivatePairRoom>()
+
+    /** Sequential stale-base conflict, not concurrent devices, UI edits or WorkManager delivery. */
+    @Test fun twoClientPrivateBinderStaleEditConvergesWithoutRemoteRewrite() = runBlocking(Dispatchers.IO) {
+        withTimeout(120_000) {
+            check(scenario == "private-two-client" && owner == "sdk-proof-collection-private-two-client")
+            val a = privatePairRooms.single()
+            assertSame(database, a.db)
+            val b = createPrivatePairRoom("b")
+            val peer = client("pair-peer")
+            signIn(peer.auth, owner)
+            assertNotSame(subject.auth, peer.auth)
+            assertNotSame(subject.firestore, peer.firestore)
+            assertNotSame(control.firestore, peer.firestore)
+            assertNotEquals(a.name, b.name)
+            assertNotEquals(a.file, b.file)
+            assertNotSame(a.db, b.db)
+            requirePairEntitlement(subject)
+            requirePairEntitlement(peer)
+            assertDiagnosticServerEmpty()
+            assertPairFresh(a)
+            assertPairFresh(b)
+
+            val initial = PrivateBinderEntity(
+                id = "private-two-client-binder", ownerUid = owner, name = "Synthetic pair initial",
+                description = null, coverStyle = "DOMIDEX", minimumPageCount = 1,
+                createdAtEpochMillis = FIXTURE_TIME, updatedAtEpochMillis = FIXTURE_TIME,
+                lastOpenedAtEpochMillis = null, syncState = SYNC_PENDING, remoteRevision = 0,
+                deletedAtEpochMillis = null,
+            )
+            val initialMutation = pairMutation(initial, "initial")
+            seedPairPending(a.db, initial, initialMutation, insert = true)
+            pairWorkerPass(subject, a.db)
+            val cleanOne = initial.copy(syncState = SYNC_CLEAN, remoteRevision = 1)
+            assertPairStableRoom(a, cleanOne)
+            val firstServer = pairServerBinder(cleanOne, initialMutation.mutationId)
+
+            // B's first delivery is the real FULL worker, not an Admin/local copy from A.
+            assertPairFresh(b)
+            pairWorkerPass(peer, b.db)
+            assertPairStableRoom(b, cleanOne)
+            assertPairConverged(a, b)
+            assertEquals(firstServer, pairServerBinder(cleanOne, initialMutation.mutationId))
+
+            val aEdit = cleanOne.copy(
+                name = "Synthetic pair winner", description = "A revision two", minimumPageCount = 3,
+                updatedAtEpochMillis = FIXTURE_TIME + 10, lastOpenedAtEpochMillis = FIXTURE_TIME + 10,
+                syncState = SYNC_PENDING,
+            )
+            val bEdit = cleanOne.copy(
+                name = "Synthetic pair stale", description = "B stale revision one", minimumPageCount = 7,
+                updatedAtEpochMillis = FIXTURE_TIME + 20, lastOpenedAtEpochMillis = FIXTURE_TIME + 20,
+                syncState = SYNC_PENDING,
+            )
+            val aMutation = pairMutation(aEdit, "a-edit")
+            val bMutation = pairMutation(bEdit, "b-stale")
+            assertNotEquals(aMutation.mutationId, bMutation.mutationId)
+            assertEquals(1L, aMutation.expectedRemoteRevision)
+            assertEquals(1L, bMutation.expectedRemoteRevision)
+            seedPairPending(a.db, aEdit, aMutation, insert = false)
+            seedPairPending(b.db, bEdit, bMutation, insert = false)
+            val bPending = pairFullSnapshot(b.db)
+
+            pairWorkerPass(subject, a.db)
+            val winner = aEdit.copy(syncState = SYNC_CLEAN, remoteRevision = 2)
+            assertPairStableRoom(a, winner)
+            val committedWinner = pairServerBinder(winner, aMutation.mutationId)
+            assertTrue((committedWinner.getValue("updatedAt") as com.google.firebase.Timestamp) >=
+                (firstServer.getValue("updatedAt") as com.google.firebase.Timestamp))
+            assertEquals("A must not acknowledge or alter B's independent Room", bPending, pairFullSnapshot(b.db))
+            assertEquals(bMutation, b.db.cardVaultDao().privateBinderSyncOutbox(bMutation.entryKey))
+            assertEquals(bEdit, b.db.cardVaultDao().privateBinder(bEdit.id, owner))
+
+            // B has a newer client timestamp but an older base revision. REMOTE_WINS must
+            // consume only its original pending mutation and import A, never upload revision 3.
+            pairWorkerPass(peer, b.db)
+            assertPairStableRoom(b, winner)
+            assertNull(b.db.cardVaultDao().privateBinderSyncOutbox(bMutation.entryKey))
+            assertPairConverged(a, b)
+            assertEquals("Stale B must not rewrite any server field or timestamp", committedWinner,
+                pairServerBinder(winner, aMutation.mutationId))
+
+            val stableA = pairFullSnapshot(a.db)
+            val stableB = pairFullSnapshot(b.db)
+            pairWorkerPass(subject, a.db)
+            assertEquals(stableA, pairFullSnapshot(a.db))
+            assertEquals(stableB, pairFullSnapshot(b.db))
+            assertEquals(committedWinner, pairServerBinder(winner, aMutation.mutationId))
+            pairWorkerPass(peer, b.db)
+            assertEquals(stableA, pairFullSnapshot(a.db))
+            assertEquals(stableB, pairFullSnapshot(b.db))
+            assertPairConverged(a, b)
+            assertEquals(committedWinner, pairServerBinder(winner, aMutation.mutationId))
+            assertEquals(0, continuationCount)
+        }
+    }
+
+    private fun pairMutation(binder: PrivateBinderEntity, suffix: String) = PrivateBinderSyncOutboxEntity(
+        entryKey = "$owner:$PRIVATE_SYNC_BINDER:${binder.id}", mutationId = "private-pair-$runId-$suffix",
+        ownerUid = owner, recordType = PRIVATE_SYNC_BINDER, recordId = binder.id,
+        operation = PRIVATE_SYNC_UPSERT, expectedRemoteRevision = binder.remoteRevision,
+        updatedAtEpochMillis = binder.updatedAtEpochMillis, createdAtEpochMillis = binder.updatedAtEpochMillis,
+        lastError = null,
+    )
+
+    private suspend fun seedPairPending(db: CardVaultDatabase, binder: PrivateBinderEntity,
+        mutation: PrivateBinderSyncOutboxEntity, insert: Boolean) {
+        // Valid synthetic DAO inputs, not a claim that UI/repository edit code was executed.
+        val local = db.cardVaultDao()
+        db.withTransaction {
+            assertNull(local.privateBinderSyncOutbox(mutation.entryKey))
+            if (insert) {
+                assertNull(local.privateBinder(binder.id, owner))
+                local.insertPrivateBinder(binder)
+            } else {
+                assertEquals(SYNC_CLEAN, checkNotNull(local.privateBinder(binder.id, owner)).syncState)
+                local.updatePrivateBinder(binder)
+            }
+            local.upsertPrivateBinderSyncOutbox(mutation)
+        }
+        assertEquals(binder, local.privateBinder(binder.id, owner))
+        assertEquals(mutation, local.privateBinderSyncOutbox(mutation.entryKey))
+        assertEquals(listOf(mutation), local.pendingPrivateBinderSyncOutbox(owner, 2))
+    }
+
+    private suspend fun requirePairEntitlement(client: Client) {
+        val account = checkNotNull(client.auth.currentVerifiedFirebaseEntitlementAccount(client.firestore, forceRefresh = false))
+        assertEquals(owner, account.uid)
+        assertTrue(canUseFirebaseAppBackend(owner, canonicalCollectionOwnerUid(client.auth.currentUser), account.entitlements))
+    }
+
+    private suspend fun pairWorkerPass(client: Client, db: CardVaultDatabase) {
+        var opens = 0
+        val appends = mutableListOf<String>()
+        val shares = mutableListOf<Pair<String, String>>()
+        val result = withTimeout(30_000) {
+            runPrivateBinderSync(owner, null, client.auth, client.firestore,
+                database = { opens++; db }, appendPrivate = { appends.add(it); Unit },
+                continueSharing = { uid, binder -> shares.add(uid to binder); Unit })
+        }
+        assertEquals(ListenableWorker.Result.success(), result)
+        assertEquals(1, opens)
+        assertTrue(appends.isEmpty())
+        assertTrue(shares.isEmpty())
+        assertEquals(owner, canonicalCollectionOwnerUid(client.auth.currentUser))
+        assertEquals(owner, canonicalCollectionOwnerUid(control.auth.currentUser))
+    }
+
+    private suspend fun pairServerBinder(binder: PrivateBinderEntity, mutation: String): Map<String, Any?> {
+        val records = lateServerRows("privateBinders") // Independent named witness, real Source.SERVER.
+        assertEquals(setOf("private-two-client-binder"), records.keys)
+        val actual = records.getValue("private-two-client-binder")
+        val timestamp = checkNotNull(actual["updatedAt"]) // Helper already requires actual confirmed Timestamp.
+        val expected = mapOf(
+            "binderId" to binder.id, "ownerUid" to owner, "name" to binder.name,
+            "description" to binder.description, "coverStyle" to binder.coverStyle,
+            "minimumPageCount" to binder.minimumPageCount.toLong(),
+            "createdAtClient" to binder.createdAtEpochMillis, "updatedAtClient" to binder.updatedAtEpochMillis,
+            "lastOpenedAtClient" to binder.lastOpenedAtEpochMillis, "deleted" to false,
+            "revision" to binder.remoteRevision, "lastMutationId" to mutation, "updatedAt" to timestamp,
+        )
+        assertEquals(expected, actual)
+        for (collection in listOf("collectionEntries", "privateBinderPlacements", "collectionLayouts", "collectionPriceSelections")) {
+            assertTrue("No unrelated remote rows: $collection", lateServerRows(collection).isEmpty())
+        }
+        val access = control.firestore.document("accountAccess/$owner").get(Source.SERVER).bounded()
+        assertFalse(access.metadata.isFromCache)
+        assertFalse(access.metadata.hasPendingWrites())
+        assertFalse(access.exists())
+        return expected
+    }
+
+    private fun pairMetadata(db: CardVaultDatabase): Map<String, String> =
+        db.openHelper.readableDatabase.query("SELECT `key`, value FROM app_metadata ORDER BY `key`").use { cursor ->
+            buildMap { while (cursor.moveToNext()) put(cursor.getString(0), cursor.getString(1)) }
+        }
+
+    private fun pairFullSnapshot(db: CardVaultDatabase): Map<String, List<List<String?>>> = listOf(
+        "catalog_cards", "binders", "collection_entries", "collection_sync_outbox", "private_binders",
+        "private_binder_placements", "collection_layout", "collection_price_selections",
+        "private_binder_sync_outbox", "raw_price_snapshots", "graded_market_records", "grading_analyses",
+        "app_metadata", "catalog_sync_state",
+    ).associateWith { table ->
+        db.openHelper.readableDatabase.query("SELECT * FROM `$table` ORDER BY rowid").use { cursor ->
+            buildList { while (cursor.moveToNext()) add((0 until cursor.columnCount).map {
+                if (cursor.isNull(it)) null else cursor.getString(it)
+            }) }
+        }
+    }
+
+    private fun assertPairFresh(fixture: PrivatePairRoom) {
+        assertEquals(mapOf("private-pair-fixture-owner" to fixture.marker), pairMetadata(fixture.db))
+        for ((table, rows) in pairFullSnapshot(fixture.db)) assertEquals(table, if (table == "app_metadata") 1 else 0, rows.size)
+    }
+
+    private suspend fun assertPairStableRoom(fixture: PrivatePairRoom, expected: PrivateBinderEntity) {
+        assertEquals(expected, fixture.db.cardVaultDao().privateBinder(expected.id, owner))
+        assertTrue(fixture.db.cardVaultDao().pendingPrivateBinderSyncOutbox(owner, 2).isEmpty())
+        val metadata = buildMap {
+            put("private-pair-fixture-owner", fixture.marker)
+            put(PrivateFullPullMetadataStore.phaseKey(owner), "rr1|0|0")
+            for (group in 0..3) put(PrivateFullPullMetadataStore.cursorKey(owner, group), "")
+        }
+        assertEquals(metadata, pairMetadata(fixture.db))
+        for ((table, rows) in pairFullSnapshot(fixture.db)) assertEquals(table,
+            when (table) { "private_binders" -> 1; "app_metadata" -> 6; else -> 0 }, rows.size)
+    }
+
+    private fun assertPairConverged(a: PrivatePairRoom, b: PrivatePairRoom) {
+        assertEquals(pairFullSnapshot(a.db) - "app_metadata", pairFullSnapshot(b.db) - "app_metadata")
+        // Only the different fixture-ownership marker is excluded, not the FULL checkpoint.
+        assertEquals(a.marker, pairMetadata(a.db)["private-pair-fixture-owner"])
+        assertEquals(b.marker, pairMetadata(b.db)["private-pair-fixture-owner"])
+        assertEquals(pairMetadata(a.db) - "private-pair-fixture-owner", pairMetadata(b.db) - "private-pair-fixture-owner")
+    }
+
+    private suspend fun createPrivatePairRoom(label: String): PrivatePairRoom {
+        check(scenario == "private-two-client" && label in setOf("a", "b"))
+        check(privatePairRooms.none { it.name.startsWith("domidex-private-pair-$runId-$label-") })
+        val nonce = UUID.randomUUID().toString()
+        val name = "domidex-private-pair-$runId-$label-$nonce.db"
+        val file = context.getDatabasePath(name).canonicalFile
+        check(file.name == name && file.parentFile == context.getDatabasePath("fixed-private-pair-parent").canonicalFile.parentFile)
+        check(pairRoomFiles(file).none(File::exists))
+        val db = Room.databaseBuilder(context, CardVaultDatabase::class.java, name).build()
+        val fixture = PrivatePairRoom(name, file, "v1|$owner|$runId|$label|$nonce", db)
+        privatePairRooms.add(fixture) // Record exact fresh file before marker write; fail closed if incomplete.
+        db.cardVaultDao().putMetadata(AppMetadataEntity("private-pair-fixture-owner", fixture.marker))
+        assertEquals(fixture.marker, db.cardVaultDao().metadata("private-pair-fixture-owner"))
+        return fixture
+    }
+
+    private fun pairRoomFiles(file: File) = listOf(file, File(file.path + "-wal"), File(file.path + "-shm"), File(file.path + "-journal"))
+
+    private fun cleanupPrivatePairRooms() {
+        var failure: Throwable? = null
+        for (fixture in privatePairRooms.asReversed()) {
+            try {
+                fixture.db.close()
+                check(!fixture.db.isOpen)
+                check(fixture.name.matches(Regex("domidex-private-pair-[0-9a-f]{32}-[ab]-[0-9a-f-]{36}\\.db")))
+                check(fixture.file == context.getDatabasePath(fixture.name).canonicalFile && fixture.file.name == fixture.name)
+                check(fixture.file.parentFile == context.getDatabasePath("fixed-private-pair-parent").canonicalFile.parentFile)
+                if (pairRoomFiles(fixture.file).any(File::exists)) {
+                    check(fixture.file.isFile)
+                    SQLiteDatabase.openDatabase(fixture.file.path, null, SQLiteDatabase.OPEN_READONLY).use { sqlite ->
+                        sqlite.rawQuery("SELECT value FROM app_metadata WHERE `key` = ?", arrayOf("private-pair-fixture-owner")).use { cursor ->
+                            check(cursor.moveToFirst() && cursor.getString(0) == fixture.marker && !cursor.moveToNext())
+                        }
+                    }
+                    check(context.deleteDatabase(fixture.name))
+                }
+                check(pairRoomFiles(fixture.file).none(File::exists))
+            } catch (caught: Throwable) {
+                if (failure == null) failure = caught else failure.addSuppressed(caught)
+            }
+        }
+        privatePairRooms.clear()
+        failure?.let { throw AssertionError("Exact owned private-pair Room cleanup failed", it) }
+    }
+
     @Before fun setup() = runBlocking(Dispatchers.IO) {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("Local collection-session SDK proof not requested",
@@ -119,6 +387,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "usableConnectivitySignalRechecksActualEntitlementWithoutManualSync" -> "session-reconnect"
             "deferredPlacementPointReadSurvivesRoomReopenUntilParentDelivery" -> "deferred-point-read"
             "offlinePrivateMutationSurvivesRoomReopenAndCompletesFullPull" -> "private-offline-retry"
+            "twoClientPrivateBinderStaleEditConvergesWithoutRemoteRewrite" -> "private-two-client"
             else -> error("Unreviewed collection-session proof method")
         }
         owner = "sdk-proof-collection-$scenario"
@@ -134,13 +403,19 @@ class CollectionSyncSessionSdkInstrumentedTest {
             for (port in listOf(PrivatePullDemoGrpcGate.AUTH_PORT, PrivatePullDemoGrpcGate.FIRESTORE_PORT)) {
                 Socket().use { it.connect(InetSocketAddress(PrivatePullDemoGrpcGate.HOST, port), 3_000) }
             }
-            if (scenario in setOf("deferred-point-read", "private-offline-retry")) createDeferredRoomFixture()
+            if (scenario == "private-two-client") room = createPrivatePairRoom("a").db
+            else if (scenario in setOf("deferred-point-read", "private-offline-retry")) createDeferredRoomFixture()
             else room = Room.inMemoryDatabaseBuilder(context, CardVaultDatabase::class.java).build()
             gate = PrivatePullDemoGrpcGate().also { it.verifyForeignDatabaseFailsBeforeStart() }
             subject = client("subject")
             control = client("control")
             signIn(subject.auth, owner)
             signIn(control.auth, owner)
+            if (scenario == "private-two-client") {
+                assertDiagnosticServerEmpty()
+                assertPairFresh(privatePairRooms.single())
+                return@withTimeout
+            }
             if (scenario == "private-offline-retry") {
                 seedOfflinePrivatePendingFixture()
                 return@withTimeout
@@ -1659,6 +1934,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             auths.asReversed().forEach { auth -> attempt { auth.signOut() } }
             apps.asReversed().forEach { app -> attempt { app.delete() } }
             attempt { room?.close(); check(room?.isOpen != true) }
+            attempt { cleanupPrivatePairRooms() }
             attempt { cleanupDeferredRoomFixture() }
         } finally {
             attempt { gate?.close() }

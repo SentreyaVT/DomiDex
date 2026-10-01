@@ -26,6 +26,25 @@ R27 full-sync lifecycle, offline/conflict, multi-client and scale checks still
 apply; this decision does not claim instantaneous sync, zero remaining bugs,
 completed hardware validation or authorization to deploy/sign.
 
+## Active FULL worker: separate-client stale-base convergence (2026-10-02)
+
+Thirteen actual SDK cases now pass. The new case uses two independently marked
+file-backed Room databases and three named SDK clients (A, B, SERVER witness).
+A creates revision1 through the real worker; B imports through FULL. Different
+pending base1 edits then exist in both databases. A commits revision2, B's later
+client timestamp cannot override the stale base, and the real REMOTE_WINS path
+consumes B's mutation and imports A's exact binder. Fresh passes preserve every
+field, all fourteen tables/FULL metadata and the original winning server timestamp.
+Both owned files are verified and removed during test cleanup; production is untouched.
+
+Evidence: Web `outputs/collection-sync-session-local/`
+`2026-10-01T23-24-15-174Z-448b17e0ba034f5796a0336a0290f8f0/`, 13/13,
+fourteen nominal accounts, complete Admin preflight/readback after every case,
+18 pure validators. This is deterministic sequential client conflict handling,
+not simultaneous device/OS/process/WorkManager evidence. The full-sync behavior
+is unchanged; no delta path was activated. See the engineering ledger for exact
+APKs, runtime and remaining lifecycle boundaries.
+
 ## Active FULL worker: durable offline retry (2026-10-02)
 
 The twelfth actual local SDK case starts with a deterministic pending private

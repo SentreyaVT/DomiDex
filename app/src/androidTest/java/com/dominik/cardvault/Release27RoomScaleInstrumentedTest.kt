@@ -163,6 +163,420 @@ class Release27RoomScaleInstrumentedTest {
         } finally { save(report, config) }
     }
 
+    @Test fun localRoomAnnualHistoryQueryBreakdown() = runBlocking<Unit> {
+        val config = config()
+        assumeTrue("Annual history query probe not requested", InstrumentationRegistry.getArguments()
+            .getString("release27RoomHistoryProbe") == "annual365")
+        require(config.sizes == listOf(1_000) && config.repeats == 3)
+        val days = 365
+        val report = report(config, "localRoomAnnualHistoryQueryBreakdown")
+            .put("fixtureVersion", 2)
+            .put("fixture", "Unchanged annual seed: 1003 products, 365 daily dates, 950 live owner-A products")
+            .put("historyDays", JSONArray(listOf(days)))
+            .put("diagnosticIterations", 2)
+            .put("readSampling", "Two diagnostic iterations per operation, not a three-warm-sample median; first DAO after seed/hash is not cold disk")
+            .put("queryCounterScope", "Room QueryCallback counts only, not disk IO; raw cursor may use the same callback adapter")
+            .put("probeScope", "Captured production SQL and bindings unchanged; DAO emission, raw cursor materialization, groupBy and actual history sweep separated; assertions outside timings")
+            .put("deadlineScope", "180s cooperative enclosing guard; synchronous SQLite/hash/seed cannot be forcibly interrupted by coroutine cancellation")
+            .put("memoryScope", "Whole-process snapshots while baseline projection is retained; no GC, no peak/retention claim")
+            .put("cleanup", JSONArray())
+            .put("rawCursorPhases", JSONArray())
+        val name = freshName("history-probe-365")
+        val file = context.getDatabasePath(name).canonicalFile
+        check(file.name == name && file.parentFile == context.getDatabasePath("history-probe-parent").canonicalFile.parentFile)
+        val files = listOf(file, File(file.path + "-wal"), File(file.path + "-shm"), File(file.path + "-journal"))
+        check(files.none(File::exists)) { "Probe requires an entirely fresh named test database" }
+        val counter = SqlCounter()
+        val captured = java.util.concurrent.atomic.AtomicReference<HistoryProbeSql?>()
+        val captureFailure = java.util.concurrent.atomic.AtomicReference<String?>()
+        val capturedCalls = AtomicLong()
+        val whitespace = Regex("\\s+")
+        val prefix = "SELECT p.cardId, p.effectiveAtEpochMillis, p.trendValueMinor, p.holoTrendValueMinor FROM raw_price_snapshots p WHERE p.source = ?"
+        val db = Room.databaseBuilder(context, CardVaultDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+            .setQueryCallback(RoomDatabase.QueryCallback { statement, bindings ->
+                counter.record(statement)
+                val normalized = statement.replace(whitespace, " ").trim()
+                if (normalized.startsWith(prefix)) {
+                    capturedCalls.incrementAndGet()
+                    if (bindings != listOf(SOURCE, OWNER)) {
+                        captureFailure.compareAndSet(null, "History binding order/source/owner differed")
+                    } else {
+                        val candidate = HistoryProbeSql(statement, listOf(SOURCE, OWNER))
+                        synchronized(captured) {
+                            val previous = captured.get()
+                            if (previous == null) captured.set(candidate)
+                            else if (previous != candidate) captureFailure.compareAndSet(null, "History SQL or bindings changed")
+                        }
+                    }
+                }
+            }, Executor { it.run() })
+            .build()
+        try {
+            try {
+                withTimeout(180_000L) {
+                    val sql = db.openHelper.writableDatabase
+                    annualMeasured(report, "seed", days, -1, name, counter) { seedAnnualHistory(sql, days) }
+                    assertSeed(sql, 1_000)
+                    assertEquals(366_095L, scalar(sql, "SELECT COUNT(*) FROM raw_price_snapshots"))
+                    assertEquals(365L, scalar(sql, "SELECT COUNT(DISTINCT effectiveAtEpochMillis) FROM raw_price_snapshots"))
+                    val before = hashes(sql)
+                    check(before.size == 15)
+                    report.getJSONArray("integrity").put(JSONObject()
+                        .put("size", 1_000).put("historyDays", days).put("ownedHistoryRows", 346_750)
+                        .put("before", hashJson(before)))
+                    val dao = db.cardVaultDao()
+                    val rows = dao.observeCollection(OWNER).first() // Setup, not a history sample.
+                    val live = (0 until 1_000).filterNot(::deleted)
+                    assertEquals(live.map { it + 1L }.toSet(), rows.map { it.entryId }.toSet())
+                    assertEquals(live.size, rows.size)
+                    rows.forEach { row ->
+                        val index = (row.entryId - 1L).toInt()
+                        assertEquals("fixture-card-$index", row.priceCardId)
+                        assertEquals(quantity(index), row.quantity)
+                        assertEquals(annualValueMinor(index, days - 1), row.marketValueMinor)
+                        assertEquals(AT + days * ANNUAL_DAY_MILLIS, row.priceUpdatedAtEpochMillis)
+                        assertEquals(index % 7 == 0, row.finish.contains("reverse", true))
+                    }
+                    var baseline: List<com.dominik.cardvault.data.local.OwnedPriceHistoryProjection>? = null
+                    repeat(2) { sample ->
+                        val loaded = annualMeasured(report, "ownedHistory.dao.first", days, sample, name, counter) {
+                            dao.observeOwnedRawPriceHistory(OWNER, SOURCE).first()
+                        }
+                        check(captureFailure.get() == null) { captureFailure.get().orEmpty() }
+                        check(captured.get() != null && capturedCalls.get() >= sample + 1L)
+                        assertHistoryProbeRows(loaded)
+                        if (baseline == null) baseline = loaded else assertEquals(baseline, loaded)
+                    }
+                    val expected = checkNotNull(baseline)
+                    val query = checkNotNull(captured.get())
+                    report.put("capturedHistorySql", query.sql)
+                        .put("capturedHistoryBindings", JSONArray(query.bindings))
+                        .put("sqliteVersion", sql.query("SELECT sqlite_version()").use { cursor ->
+                            check(cursor.moveToFirst()); cursor.getString(0)
+                        })
+                    val explain = JSONArray()
+                    sql.query(androidx.sqlite.db.SimpleSQLiteQuery(
+                        "EXPLAIN QUERY PLAN " + query.sql, query.bindings.toTypedArray(),
+                    )).use { cursor ->
+                        check(cursor.columnCount == 4)
+                        while (cursor.moveToNext()) {
+                            check(explain.length() < 64)
+                            explain.put(JSONObject().put("id", cursor.getLong(0)).put("parent", cursor.getLong(1))
+                                .put("aux", cursor.getLong(2)).put("detail", cursor.getString(3)))
+                        }
+                    }
+                    check(explain.length() > 0)
+                    report.put("explainQueryPlan", explain)
+                    repeat(2) { sample ->
+                        val raw = annualMeasured(report, "ownedHistory.rawCursor", days, sample, name, counter) {
+                            readHistoryProbeCursor(sql, query)
+                        }
+                        assertEquals(listOf("cardId", "effectiveAtEpochMillis", "trendValueMinor", "holoTrendValueMinor"), raw.columns)
+                        assertHistoryProbeRows(raw.rows)
+                        assertEquals("Unchanged captured SQL must materialize the exact DAO projection/order", expected, raw.rows)
+                        report.getJSONArray("rawCursorPhases").put(JSONObject().put("sample", sample)
+                            .put("createCursorMs", raw.createCursorMs).put("firstMoveMs", raw.firstMoveMs)
+                            .put("materializeAfterFirstMoveMs", raw.materializeAfterFirstMoveMs)
+                            .put("rows", raw.rows.size))
+                    }
+                    repeat(2) { sample ->
+                        val grouped = annualMeasured(report, "ownedHistory.groupBy", days, sample, name, counter) {
+                            expected.groupBy(com.dominik.cardvault.data.local.OwnedPriceHistoryProjection::cardId)
+                        }
+                        assertEquals(live.map { "fixture-card-$it" }.toSet(), grouped.keys)
+                        assertEquals(expected.size, grouped.values.sumOf { it.size })
+                        grouped.forEach { (cardId, prices) ->
+                            assertEquals(days, prices.size)
+                            val index = cardId.removePrefix("fixture-card-").toInt()
+                            prices.forEachIndexed { point, price ->
+                                assertEquals(cardId, price.cardId)
+                                assertEquals(AT + (point + 1) * ANNUAL_DAY_MILLIS, price.effectiveAtEpochMillis)
+                                assertEquals(100L + index % 9_000 + point, price.trendValueMinor)
+                                assertEquals(150L + index % 9_000 + point, price.holoTrendValueMinor)
+                            }
+                        }
+                    }
+                    repeat(2) { sample ->
+                        val history = annualMeasured(report, "ownedHistory.actualSweep", days, sample, name, counter) {
+                            com.dominik.cardvault.data.buildChronologicalPortfolioHistory(rows, expected)
+                        }
+                        assertEquals(days, history.size)
+                        history.forEachIndexed { point, value ->
+                            val minor = live.sumOf { annualValueMinor(it, point) * quantity(it) }
+                            assertEquals(minor / 100.0, value.value, .00001)
+                            val label = java.time.Instant.ofEpochMilli(AT + (point + 1) * ANNUAL_DAY_MILLIS)
+                                .atZone(java.time.ZoneOffset.UTC).toLocalDate()
+                                .format(java.time.format.DateTimeFormatter.ofPattern("MMM"))
+                            assertEquals(label, value.label)
+                        }
+                    }
+                    check(captureFailure.get() == null) { captureFailure.get().orEmpty() }
+                    assertEquals(query, captured.get())
+                    report.put("capturedHistoryCallbackCount", capturedCalls.get())
+                    assertEquals("Probe reads must preserve every existing field", before, hashes(sql))
+                    assertNoForeignKeyErrors(sql)
+                    report.getJSONArray("integrity").put(JSONObject()
+                        .put("size", 1_000).put("historyDays", days).put("afterReadHashMatch", true))
+                    assertEquals(9, report.getJSONArray("samples").length())
+                }
+            } finally {
+                db.close()
+                check(!db.isOpen)
+                if (files.any(File::exists)) check(context.deleteDatabase(name))
+                check(files.none(File::exists)) { "Probe's exact SQLite fixture remains" }
+                report.getJSONArray("cleanup").put(JSONObject()
+                    .put("historyDays", days).put("databaseName", name).put("closed", true).put("filesAbsent", true))
+            }
+            report.put("status", "PASS")
+        } catch (failure: Throwable) {
+            report.put("status", "FAIL").put("failureType", failure.javaClass.simpleName)
+            throw failure
+        } finally { save(report, config) }
+    }
+
+    private data class HistoryProbeSql(val sql: String, val bindings: List<String>)
+    private data class HistoryProbeCursorResult(
+        val rows: List<com.dominik.cardvault.data.local.OwnedPriceHistoryProjection>,
+        val columns: List<String>, val createCursorMs: Double, val firstMoveMs: Double,
+        val materializeAfterFirstMoveMs: Double,
+    )
+
+    private fun readHistoryProbeCursor(sql: SupportSQLiteDatabase, query: HistoryProbeSql): HistoryProbeCursorResult {
+        val start = System.nanoTime()
+        val cursor = sql.query(androidx.sqlite.db.SimpleSQLiteQuery(query.sql, query.bindings.toTypedArray()))
+        val created = System.nanoTime()
+        cursor.use {
+            var present = it.moveToFirst()
+            val firstMoved = System.nanoTime()
+            val columns = it.columnNames.toList()
+            check(columns == listOf("cardId", "effectiveAtEpochMillis", "trendValueMinor", "holoTrendValueMinor"))
+            val rows = ArrayList<com.dominik.cardvault.data.local.OwnedPriceHistoryProjection>(346_750)
+            while (present) {
+                check(!it.isNull(0) && !it.isNull(1))
+                rows += com.dominik.cardvault.data.local.OwnedPriceHistoryProjection(
+                    it.getString(0), it.getLong(1), if (it.isNull(2)) null else it.getLong(2),
+                    if (it.isNull(3)) null else it.getLong(3),
+                )
+                present = it.moveToNext()
+            }
+            val completed = System.nanoTime()
+            return HistoryProbeCursorResult(rows, columns, (created - start) / 1_000_000.0,
+                (firstMoved - created) / 1_000_000.0, (completed - firstMoved) / 1_000_000.0)
+        }
+    }
+
+    private fun assertHistoryProbeRows(prices: List<com.dominik.cardvault.data.local.OwnedPriceHistoryProjection>) {
+        check(prices.size == 346_750)
+        val seen = IntArray(1_000)
+        var lastTimestamp = Long.MIN_VALUE
+        for (price in prices) {
+            check(price.cardId.startsWith("fixture-card-"))
+            val index = price.cardId.removePrefix("fixture-card-").toInt()
+            check(index in 0 until 1_000 && !deleted(index))
+            val point = seen[index]++
+            check(point in 0 until 365)
+            check(price.effectiveAtEpochMillis >= lastTimestamp)
+            lastTimestamp = price.effectiveAtEpochMillis
+            check(price.effectiveAtEpochMillis == AT + (point + 1) * ANNUAL_DAY_MILLIS)
+            check(price.trendValueMinor == 100L + index % 9_000 + point)
+            check(price.holoTrendValueMinor == 150L + index % 9_000 + point)
+        }
+        seen.forEachIndexed { index, count -> check(count == if (deleted(index)) 0 else 365) }
+    }
+
+    // DRAFT: optional additive members in the same class. Requires existing HistoryProbe* helpers.
+    // Test hypothesis only: no DAO/product/schema modification and no alternate driver/index.
+    @Test fun localRoomAnnualHistoryOrderingCounterfactual() = runBlocking<Unit> {
+        val config = config()
+        assumeTrue("Ordering counterfactual not requested", InstrumentationRegistry.getArguments()
+            .getString("release27RoomHistoryCounterfactual") == "product-order")
+        require(config.sizes == listOf(1_000) && config.repeats == 3)
+        val days = 365
+        val report = report(config, "localRoomAnnualHistoryOrderingCounterfactual")
+            .put("fixtureVersion", 2).put("historyDays", JSONArray(listOf(days)))
+            .put("fixture", "Unchanged annual365 seed; 1003 products, 950 live owner-A products")
+            .put("diagnosticIterations", 2)
+            .put("readSampling", "Two original/candidate paired diagnostic iterations; NOT three warm medians; DAO capture and parity validation outside measured pairs")
+            .put("counterfactualScope", "Only captured terminal ORDER BY replaced; existing indexes/driver unchanged; candidate materialization plus stable timestamp sort measured together")
+            .put("tieScope", "Source fixed; UNIQUE(cardId,source,time) prohibits same-product/time ties; cross-product/time ties need not have identical original SQL order")
+            .put("memoryScope", "Whole-process snapshots with DAO baseline/canonical oracle retained; no peak/retention claim")
+            .put("deadlineScope", "180s cooperative enclosing guard, not synchronous SQL interrupt or product SLA")
+            .put("cleanup", JSONArray()).put("pairProofs", JSONArray()).put("queryPlans", JSONArray())
+        val name = freshName("history-order-365")
+        val file = context.getDatabasePath(name).canonicalFile
+        check(file.name == name && file.parentFile == context.getDatabasePath("history-order-parent").canonicalFile.parentFile)
+        val files = listOf(file, File(file.path + "-wal"), File(file.path + "-shm"), File(file.path + "-journal"))
+        check(files.none(File::exists))
+        val counter = SqlCounter()
+        val captureEnabled = java.util.concurrent.atomic.AtomicBoolean(true)
+        val captured = java.util.concurrent.atomic.AtomicReference<HistoryProbeSql?>()
+        val captureFailure = java.util.concurrent.atomic.AtomicReference<String?>()
+        val whitespace = Regex("\\s+")
+        val prefix = "SELECT p.cardId, p.effectiveAtEpochMillis, p.trendValueMinor, p.holoTrendValueMinor FROM raw_price_snapshots p WHERE p.source = ?"
+        val db = Room.databaseBuilder(context, CardVaultDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+            .setQueryCallback(RoomDatabase.QueryCallback { statement, bindings ->
+                counter.record(statement)
+                if (captureEnabled.get() && statement.replace(whitespace, " ").trim().startsWith(prefix)) {
+                    if (bindings != listOf(SOURCE, OWNER)) {
+                        captureFailure.compareAndSet(null, "Unexpected original history bindings")
+                    } else {
+                        val candidate = HistoryProbeSql(statement, listOf(SOURCE, OWNER))
+                        synchronized(captured) {
+                            val previous = captured.get()
+                            if (previous == null) captured.set(candidate)
+                            else if (previous != candidate) captureFailure.compareAndSet(null, "Original capture changed")
+                        }
+                    }
+                }
+            }, Executor { it.run() }).build()
+        try {
+            try {
+                withTimeout(180_000L) {
+                    val sql = db.openHelper.writableDatabase
+                    annualMeasured(report, "seed", days, -1, name, counter) { seedAnnualHistory(sql, days) }
+                    assertSeed(sql, 1_000)
+                    assertEquals(366_095L, scalar(sql, "SELECT COUNT(*) FROM raw_price_snapshots"))
+                    val before = hashes(sql)
+                    check(before.size == 15)
+                    report.getJSONArray("integrity").put(JSONObject().put("size", 1_000)
+                        .put("historyDays", days).put("ownedHistoryRows", 346_750).put("before", hashJson(before)))
+
+                    // Prove actual schema uniqueness, not merely fixture coincidence.
+                    val indexName = "index_raw_price_snapshots_cardId_source_effectiveAtEpochMillis"
+                    var foundIndex = false
+                    sql.query("PRAGMA index_list(`raw_price_snapshots`)").use { c -> while (c.moveToNext()) {
+                        if (c.getString(c.getColumnIndexOrThrow("name")) == indexName) {
+                            check(!foundIndex)
+                            check(c.getInt(c.getColumnIndexOrThrow("unique")) == 1)
+                            check(c.getInt(c.getColumnIndexOrThrow("partial")) == 0)
+                            foundIndex = true
+                        }
+                    } }
+                    check(foundIndex)
+                    val indexedColumns = sql.query("PRAGMA index_info(`$indexName`)").use { c ->
+                        buildList { while (c.moveToNext()) add(c.getString(c.getColumnIndexOrThrow("name"))) }
+                    }
+                    assertEquals(listOf("cardId", "source", "effectiveAtEpochMillis"), indexedColumns)
+                    report.put("verifiedUniqueIndex", indexName).put("verifiedUniqueColumns", JSONArray(indexedColumns))
+
+                    val dao = db.cardVaultDao()
+                    val rows = dao.observeCollection(OWNER).first()
+                    val live = (0 until 1_000).filterNot(::deleted)
+                    assertEquals(live.map { it + 1L }.toSet(), rows.map { it.entryId }.toSet())
+                    assertEquals(live.size, rows.size)
+                    rows.forEach { row ->
+                        val index = (row.entryId - 1L).toInt()
+                        assertEquals("fixture-card-$index", row.priceCardId)
+                        assertEquals(quantity(index), row.quantity)
+                        assertEquals(index % 7 == 0, row.finish.contains("reverse", true))
+                    }
+                    val baseline = dao.observeOwnedRawPriceHistory(OWNER, SOURCE).first()
+                    check(captureFailure.get() == null) { captureFailure.get().orEmpty() }
+                    val original = checkNotNull(captured.get())
+                    captureEnabled.set(false) // No further DAO calls; only explicit original/candidate raw queries.
+                    assertHistoryProbeRows(baseline)
+                    val suffix = "ORDER BY p.effectiveAtEpochMillis"
+                    val offset = original.sql.indexOf(suffix)
+                    check(offset >= 0 && offset == original.sql.lastIndexOf(suffix))
+                    check(original.sql.substring(offset + suffix.length).all(Char::isWhitespace))
+                    val replacement = "ORDER BY p.cardId, p.effectiveAtEpochMillis"
+                    val candidate = HistoryProbeSql(original.sql.replaceRange(offset, offset + suffix.length, replacement), original.bindings)
+                    check(candidate.sql.substring(0, offset) == original.sql.substring(0, offset))
+                    check(candidate.sql.substring(offset + replacement.length) == original.sql.substring(offset + suffix.length))
+                    check(candidate.bindings == original.bindings && candidate.sql != original.sql)
+                    report.put("capturedHistorySql", original.sql).put("candidateHistorySql", candidate.sql)
+                        .put("capturedHistoryBindings", JSONArray(original.bindings))
+                        .put("sqliteVersion", sql.query("SELECT sqlite_version()").use { c -> check(c.moveToFirst()); c.getString(0) })
+                    for ((label, query) in listOf("original" to original, "candidate" to candidate)) {
+                        val plan = JSONArray()
+                        sql.query(androidx.sqlite.db.SimpleSQLiteQuery("EXPLAIN QUERY PLAN " + query.sql,
+                            query.bindings.toTypedArray())).use { c ->
+                            check(c.columnCount == 4)
+                            while (c.moveToNext()) {
+                                check(plan.length() < 64)
+                                plan.put(JSONObject().put("id", c.getLong(0)).put("parent", c.getLong(1))
+                                    .put("aux", c.getLong(2)).put("detail", c.getString(3)))
+                            }
+                        }
+                        check(plan.length() > 0)
+                        report.getJSONArray("queryPlans").put(JSONObject().put("variant", label).put("rows", plan))
+                    }
+                    val canonicalComparator = compareBy<com.dominik.cardvault.data.local.OwnedPriceHistoryProjection>(
+                        { it.effectiveAtEpochMillis }, { it.cardId },
+                    )
+                    val canonicalBaseline = baseline.sortedWith(canonicalComparator)
+                    val originalHistory = com.dominik.cardvault.data.buildChronologicalPortfolioHistory(rows, baseline)
+                    assertEquals(days, originalHistory.size)
+                    originalHistory.forEachIndexed { point, value ->
+                        assertEquals(live.sumOf { annualValueMinor(it, point) * quantity(it) } / 100.0, value.value, .00001)
+                        val label = java.time.Instant.ofEpochMilli(AT + (point + 1) * ANNUAL_DAY_MILLIS)
+                            .atZone(java.time.ZoneOffset.UTC).toLocalDate()
+                            .format(java.time.format.DateTimeFormatter.ofPattern("MMM"))
+                        assertEquals(label, value.label)
+                    }
+                    repeat(2) { sample ->
+                        // Same materializer for both SQL forms; only candidate needs in-memory sorting.
+                        val originalRead = annualMeasured(report, "historyOrder.original.rawCursor", days, sample, name, counter) {
+                            readHistoryProbeCursor(sql, original)
+                        }
+                        assertHistoryProbeRows(originalRead.rows)
+                        assertEquals(baseline, originalRead.rows)
+                        val candidateRead = annualMeasured(report, "historyOrder.candidate.rawCursorAndStableSort", days, sample, name, counter) {
+                            val raw = readHistoryProbeCursor(sql, candidate)
+                            val sortStarted = System.nanoTime()
+                            val chronological = raw.rows.sortedBy { it.effectiveAtEpochMillis }
+                            HistoryOrderCandidate(raw, chronological, (System.nanoTime() - sortStarted) / 1_000_000.0)
+                        }
+                        assertEquals(originalRead.columns, candidateRead.raw.columns)
+                        // Require the exact requested product/time order before the stable Kotlin sort.
+                        for (index in 1 until candidateRead.raw.rows.size) {
+                            val left = candidateRead.raw.rows[index - 1]
+                            val right = candidateRead.raw.rows[index]
+                            check(left.cardId < right.cardId || (left.cardId == right.cardId &&
+                                left.effectiveAtEpochMillis < right.effectiveAtEpochMillis))
+                        }
+                        assertHistoryProbeRows(candidateRead.chronological)
+                        assertEquals("All four fields and every unique product/date must agree",
+                            canonicalBaseline, candidateRead.chronological.sortedWith(canonicalComparator))
+                        assertEquals(originalHistory, com.dominik.cardvault.data.buildChronologicalPortfolioHistory(rows, candidateRead.chronological))
+                        report.getJSONArray("pairProofs").put(JSONObject().put("sample", sample)
+                            .put("rows", candidateRead.chronological.size).put("fullNormalizedProjectionEqual", true)
+                            .put("fullOriginalSequenceEqual", baseline == candidateRead.chronological)
+                            .put("actualSweepEqual", true).put("candidateStableSortMs", candidateRead.stableSortMs)
+                            .put("originalFirstMoveMs", originalRead.firstMoveMs)
+                            .put("originalMaterializeAfterFirstMoveMs", originalRead.materializeAfterFirstMoveMs)
+                            .put("candidateFirstMoveMs", candidateRead.raw.firstMoveMs)
+                            .put("candidateMaterializeAfterFirstMoveMs", candidateRead.raw.materializeAfterFirstMoveMs))
+                    }
+                    assertEquals(before, hashes(sql))
+                    assertNoForeignKeyErrors(sql)
+                    report.getJSONArray("integrity").put(JSONObject().put("size", 1_000)
+                        .put("historyDays", days).put("afterReadHashMatch", true))
+                    assertEquals(5, report.getJSONArray("samples").length())
+                }
+            } finally {
+                db.close()
+                check(!db.isOpen)
+                if (files.any(File::exists)) check(context.deleteDatabase(name))
+                check(files.none(File::exists))
+                report.getJSONArray("cleanup").put(JSONObject().put("historyDays", days)
+                    .put("databaseName", name).put("closed", true).put("filesAbsent", true))
+            }
+            report.put("status", "PASS")
+        } catch (failure: Throwable) {
+            report.put("status", "FAIL").put("failureType", failure.javaClass.simpleName)
+            throw failure
+        } finally { save(report, config) }
+    }
+
+    private data class HistoryOrderCandidate(
+        val raw: HistoryProbeCursorResult,
+        val chronological: List<com.dominik.cardvault.data.local.OwnedPriceHistoryProjection>,
+        val stableSortMs: Double,
+    )
+
     @Test fun localRoomAnnualHistoryAtBoundedSyntheticScale() = runBlocking<Unit> {
         val config = config() // Existing emulator-only guard, safe label and opt-in.
         assumeTrue("Annual history proof not requested", InstrumentationRegistry.getArguments()

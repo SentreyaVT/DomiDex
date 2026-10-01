@@ -17,7 +17,87 @@ remain applicable. Historical delta experiments below are retained as evidence,
 not current rollout instructions. Overall NOT READY is not lifted solely by
 this scope adjustment. Release-signing/production/Xiaomi restrictions remain.
 
-### Latest local checkpoint: bounded annual-history scale (2026-10-02)
+### In-progress follow-up: isolate annual-history cost (2026-10-02)
+
+Full sync remains unchanged and Gate15 remains locked. A separate opt-in real-Room
+diagnostic on the same product APK (`64d40b75…822d3`) captures the actual generated
+SQL and its exact source/owner bindings, then compares DAO emission, an equivalent
+raw cursor, grouping and the actual chronological valuation sweep. **1/1 PASS**,
+nine exact timing samples, 346,750 eligible rows, full four-field projections,
+all 365 independent values/month labels, 15-table hashes and owned-file cleanup.
+
+Two diagnostic observations each (ms, NOT three-warm medians or a device SLA):
+DAO **15,840.59 / 15,514.48**; identical raw cursor **15,582.37 / 16,558.33**;
+groupBy **184.22 / 132.48**; actual sweep **162.61 / 107.52**. Raw first movement
+is 831.95/783.54 ms and remaining materialization 14,747.48/15,773.24 ms. These
+phases include SQLite/cursor work; they are not isolated disk/SQL/ORM attribution.
+Actual EXPLAIN uses the existing product/source/date index and a temporary B-tree
+for the global date ordering. CursorWindow refill/repeated-sort causation is a
+hypothesis, not a counted or directly proved event. No driver/schema/retention
+change is justified by this measurement alone.
+
+Evidence: `artifacts/release27-engineering-20261002/history-performance-fix/`
+`probe-20261001T230841Z-ba2962cf84294c47be485c682084157d/manifest.json`, exit0,
+exact installed identities, frozen inputs and offline/no-reverse/idle verified.
+The separate test-only ordering counterfactual subsequently **passes 1/1** with
+five exact samples: original raw materialization **15,214.81/15,395.98 ms** versus
+product-ordered materialization INCLUDING stable Kotlin time-sort
+**3,462.76/3,621.53 ms**. Both complete 346,750-row projections match, including
+the observed original sequence in this fixture; both actual history sweeps match.
+The existing unique product/source/date index is verified and only the original
+EXPLAIN has a temporary sort B-tree. All 15 table hashes and owned-file cleanup
+pass. Evidence: same directory,
+`order-20261001T232039Z-5122789d0e0a4c02ad24d03464ebd85b/manifest.json`.
+Two synthetic positive/55 negative/three invalid-JSON Host controls pass. This
+supports a narrow query-order change, not a universal speedup or a finished gate.
+Both SQL-specific diagnostic methods intentionally describe the PRE-FIX product;
+after a product change, retain these historical preconditions and rerun the
+unchanged annual business benchmark plus continuous-Flow regression instead.
+
+New ongoing-owner-history Flow control first passes against UNCHANGED product
+sources, together with the existing eleven Room ACK/rollback controls: **12/12**,
+`history-flow-room-231656-cf342add/manifest.json`. It exercises early/late updates,
+same-date corrections, null/zero/negative values, wrong source, tombstone-only and
+entry-owner-only invalidation under two continuous subscriptions. It does not
+substitute re-subscription or sorting inside the test for actual ordered emissions.
+Rebuilt test-only additions pass debug/test APKs, release Kotlin and both lints in
+37/38 s; the unchanged 914-PASS/one-optional-SKIP JVM task is reused, not rerun.
+
+Fresh independent local backend/Rules checks on unchanged Web product sources:
+**33/33 actual backend/Web-client SDK cases**, Web
+`outputs/private-operations-local/2026-10-01T22-59-18-269Z-9aecaaf3/manifest.json`,
+and **84/84 Rules cases**, Web
+`outputs/rules-local/2026-10-01T23-02-19-857Z-f05e79a9/manifest.json`. Both exit0,
+frozen inputs and all ports free afterward. These local synthetic-account proofs
+do not establish production retention, hardware, real OS scheduling or live load.
+
+### Actual FULL two-client conflict proof (2026-10-02)
+
+**13/13 actual local SDK cases PASS**, complete harness **100.475 s**; new
+two-client case **6.726 s**. A and B use separate marked file-backed Room databases
+and named SDK clients. A really creates revision1, B receives it via FULL; both
+hold different pending base1 edits. A commits revision2 and B's stale edit, even
+with a newer client timestamp, must yield REMOTE_WINS. The actual worker consumes
+B's original outbox mutation and converges every binder field. An independent
+SERVER witness checks the exact winning payload/timestamp before and after B
+and fresh A/B passes; no revision3 rewrite occurs. All fourteen business tables,
+FULL metadata, prior owners, and final owned-file/SDK cleanup pass. No production
+code, sync policy, Rules or lifecycle implementation changes were necessary.
+
+Web evidence: `outputs/collection-sync-session-local/`
+`2026-10-01T23-24-15-174Z-448b17e0ba034f5796a0336a0290f8f0/manifest.json`.
+Thirteen full Admin preflights/readbacks and fourteen nominal accounts pass;
+inventory remains within unchanged 16-collection/32-reference bounds. Exit0,
+all ports free, empty reverse mappings, idle instrumentation and frozen inputs.
+18/18 pure validators and focused oxlint pass. An initial attempt to invoke
+ESLint found no such installed module; the actual project linter is oxlint.
+Fresh installation + 12 Room/Flow cases: `history-flow-room-231944-f97408e3/`.
+App remains `64d40b75…822d3`; test APK is
+`7d45119d587f8d97f86c896e03662e608aecba3a83a8c32b8fd2d91cf915ed25`.
+This is sequential SDK-client convergence in one process, not simultaneous
+physical devices, automatic WorkManager delivery, OS reconnect or process death.
+
+### Previous local checkpoint: bounded annual-history scale (2026-10-02)
 
 The separate opt-in method `localRoomAnnualHistoryAtBoundedSyntheticScale`
 compares two fresh file-backed Room fixtures on the SAME unchanged product APK:
