@@ -141,14 +141,9 @@ listener. Rollout flags must not bypass any security checks.
 
 ### Integration checks still required
 
-- Replace the overloaded current `Checkpoint` apply result with explicit deferred
-  outcomes for own pending outbox and unresolved parents. A locally pending parent
-  tombstone is not proof of a permanently deleted remote parent.
-- Do not overwrite a different pending placement mutation while resolving a remote
-  membership collision; defer the incoming row instead.
-- Retain confirmed deletion revisions for unknown placements before accepting any
-  older live snapshot. All remote apply paths, including push-conflict responses
-  and fallback pulls, must honor that protection; a pull-only mutex is insufficient.
+- The common remote-apply seam now implements explicit deferred outcomes, pending
+  membership protection and confirmed tombstone receipts (evidence below). The
+  future delta adapter must still persist recheck markers for deferred documents.
 - Bound the full worker budget, not just each group. Stop a completed group cycle:
   repeatedly starting Idle at the same boundary inside one run would replay forever.
 - Timestamp trust remains an adapter obligation. The Android public snapshot API
@@ -172,7 +167,45 @@ cover indexed free positions, unchanged collision policy, tombstones and synthet
 offline emulator run passes 57 tests in 15.123 seconds. Debug/test builds and release
 Kotlin compilation pass; no signed release build was performed.
 
-Only the indexed free-position fast path is active in the worker. The delta state
-machine, Room store and auth lease remain integration groundwork, not enabled sync.
+At that foundation checkpoint only the indexed free-position fast path was active.
+The delta state machine and Room store are still not enabled; the auth lease and
+common remote-apply protection are now active as described below.
 No Firestore delta-read savings or cross-device timing claim is made from these
 local tests. See `RELEASE_27.md` for the measured local lookup and its limitations.
+
+### Active full-pull and push-response protection (2026-10-01)
+
+Every private-worker run now holds an observed Firebase token/account generation
+lease. Task completion and Room commit boundaries reject stale leases, including
+an observed A-to-B-to-A transition. Cancellation or a late account change rolls
+back local writes. This cannot cancel an already-sent remote transaction; its
+durable, idempotent outbox is retained for the next valid session. The existing
+entitlement checks and security rules remain separate and authoritative.
+
+All four private-record apply paths, including conflict replies and parent reads,
+use a common Room helper. It defers own outstanding mutations and other pending
+placement memberships, distinguishes missing/terminal parents, and retains confirmed
+unknown binder/placement deletion revisions in owner-scoped metadata. An old live
+snapshot cannot resurrect a record below that receipt. Invalid/corrupt evidence
+does not discard the current outbox. Receipts have no TTL and are not permissions.
+Critical identity/revision/position/price fields are validated, but legacy optional
+description/cover/page/creation-time fallbacks remain: this is not a strict validator
+for every field. A dependency returned from SERVER is additionally checked for
+cache/pending-write metadata before it can create a collection parent in Room.
+
+The current ID bookmark still pages a FULL scan, not an incremental high-watermark.
+Blocked documents are revisited after the next full cycle; no permanent-orphan
+inference or hot continuation solely for a missing parent is made. This must not
+be reused as the delta adapter's deferred-document policy. Remote apply and the
+current bookmark are separate transactions; crash replay must remain idempotent.
+
+Final isolated emulator evidence: 78 tests pass in 3.054 s, including 16 common-
+apply Room tests and 12 transaction/session/SDK-Task tests, plus existing ACK,
+checkpoint, sharing/work and startup tests. The snapshot-metadata cases exercise
+the actual guard with all Boolean combinations and Room callbacks, not live
+Firestore. The cancellation test uses synthetic metadata, not a real outbox table.
+There is no earlier executed RED baseline for the 16 new common-apply cases.
+An initial runner invocation had two wrong fully-qualified class names; the corrected
+78-case run passed. Evidence: `gate4-confirmed-dependency-instrumentation.log` and
+`gate4-confirmed-dependency-build.log`. The latter passes debug/test builds, release
+Kotlin compilation and 154 selected JVM tests. No release signing or production call.

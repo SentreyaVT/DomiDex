@@ -7,12 +7,12 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
 
 /**
- * One pull-run lease, invalidated by every observed token/account event after registration.
+ * One private-sync-run lease, invalidated by every observed token/account event after registration.
  * Comparing only the current UID would incorrectly accept an A -> B -> A round trip.
  * This does not grant entitlement: callers still perform the existing verified access check,
  * and Firestore Rules remain authoritative. No token value is read, retained or logged here.
  */
-internal class PrivatePullAuthSession private constructor(
+internal class PrivatePullAuthSession internal constructor(
     val lease: PrivatePullSessionLease,
     private val generation: AtomicLong,
     private val closed: AtomicBoolean,
@@ -21,6 +21,10 @@ internal class PrivatePullAuthSession private constructor(
     fun isCurrent(candidate: PrivatePullSessionLease = lease): Boolean =
         candidate == lease && !closed.get() && generation.get() == lease.generation &&
             currentOwner() == lease.ownerUid
+
+    fun requireCurrent() {
+        if (!isCurrent()) throw PrivatePullAccountChangedException()
+    }
 
     companion object {
         suspend fun <T> use(

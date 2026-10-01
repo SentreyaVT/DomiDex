@@ -2,9 +2,14 @@ package com.dominik.cardvault.data.sync
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PrivateBinderSyncPolicyTest {
+    @Test fun blockedOrInvalidRemoteReplyMustNotDiscardCurrentMutation() {
+        assertTrue(shouldRestorePrivateMutationAfterRemoteApply(PrivateRemoteApplyResult.DeferredLocal))
+        assertTrue(shouldRestorePrivateMutationAfterRemoteApply(PrivateRemoteApplyResult.Invalid))
+    }
     @Test fun completedParentContinuesImmediatelyButOfflineOrConflictedParentKeepsBackoff() {
         // The sidecar itself is still queued after its parent was acknowledged during the pull.
         assertEquals(PrivateSyncContinuation.APPEND, privateSyncContinuation(

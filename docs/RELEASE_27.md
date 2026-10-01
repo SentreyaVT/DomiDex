@@ -286,6 +286,20 @@ Only PID 21379 / 02:10 UTC lines in the measurement log are the final comparison
 the earlier PID 21257 baseline was superseded. Remaining delta integration risks
 and acceptance tests are listed explicitly in `docs/SYNC.md`.
 
+### Active session and remote-apply follow-up
+
+The prepared auth lease is now connected to the existing private worker, without
+enabling the delta protocol. A shared remote-apply path protects pending mutations,
+terminal parents and confirmed deletion revisions across full pulls and push-conflict
+responses. Collection dependency reads reject cached or pending-write overlays.
+See `docs/SYNC.md` for the exact boundaries and retained legacy fallbacks.
+
+Final local run: 78/78 offline-emulator tests in 3.054 s; 154/154 selected JVM tests;
+debug/test APK builds and release Kotlin compilation pass (43 s combined build).
+The original test command contained two incorrect test-class names; this was a
+runner configuration failure, followed by the corrected passing run. No live
+account switch, Firestore E2E, network-saving or full Gate 4 completion is claimed.
+
 ## Gate 5 Android import safety (partial, local validation)
 
 The existing atomic Cardmarket import now serializes overlapping UI/worker imports,
