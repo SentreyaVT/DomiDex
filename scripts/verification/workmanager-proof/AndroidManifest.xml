@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Only the opt-in run-scoped diagnostic package uses this manifest. -->
+    <application android:label="DomiDex isolated sync proof" tools:replace="android:label"
+        android:networkSecurityConfig="@xml/debug_emulator_network_security">
+        <provider android:name="com.google.firebase.provider.FirebaseInitProvider" tools:node="remove" />
+        <provider android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup" tools:node="merge">
+            <meta-data android:name="androidx.work.WorkManagerInitializer" tools:node="remove" />
+        </provider>
+        <!-- This disposable package must never become a launcher/share-link handler. -->
+        <activity android:name="com.dominik.cardvault.MainActivity" tools:node="remove" />
+        <activity android:name="com.dominik.cardvault.SharedBinderActivity" tools:node="remove" />
+    </application>
+</manifest>

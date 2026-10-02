@@ -26,6 +26,43 @@ R27 full-sync lifecycle, offline/conflict, multi-client and scale checks still
 apply; this decision does not claim instantaneous sync, zero remaining bugs,
 completed hardware validation or authorization to deploy/sign.
 
+## Active private worker: actual WorkManager retry and APPEND (2026-10-02)
+
+The isolated debug proof passes **1/1 with no skips in 36.744 s**. The unchanged
+production scheduler enqueues the unchanged `PrivateBinderSyncWorker` through
+WorkManager 2.11.2's `TestScheduler`, using `USE_TIME_BASED_SCHEDULING`, the real
+clock/backoff and controlled constraint delivery. An allowlisted factory creates
+the actual worker; it does not call `doWork` directly or manufacture results.
+Default Firebase Auth/Firestore point only to the local demo project, and the
+normal `CardVaultDatabase.get` opens its literal filename inside a fresh,
+run-specific application package.
+
+Unsatisfied constraints cause no invocation or write in the bounded observation.
+With the subject SDK transport disabled, constraint delivery produces a genuine
+retry with all fourteen Room tables and the server unchanged. After transport
+recovery, the second factory invocation occurs
+30,052 ms after the first and 24 ms after the recorded 30-second eligibility
+boundary. The real transaction, revision-1 ACK and small four-group FULL pull
+succeed. A second production enqueue has the first WorkSpec as its prerequisite
+and succeeds idempotently: two WorkSpecs, actual attempt counts `[0, 1, 0]`,
+unchanged final Room/server payload and timestamp, and unchanged foreign owner.
+Independent Admin observations verify the entire initially empty server tree,
+the one exact final binder and both nominal Google accounts.
+
+Evidence: `artifacts/release27-engineering-20261002/workmanager-proof/`
+`5bfca253658a4c7f844cb245428c73b0/runtime/` contains `manifest.json`,
+`device-proof.json`, `server-proof.json` and `instrumentation.log`. Inputs and
+the ordinary installed app remain unchanged; owned Room files and temporary
+packages are removed. The earlier `b59c7c91ef114684b52a49142e908ee2` run retains
+its pre-worker fixture failure: Android's `/data/user/0` and `/data/data` aliases
+required canonical-file equality, not weakening the package/marker guards.
+
+This proves actual WorkManager **TestScheduler** integration and measured retry,
+not OS JobScheduler/network delivery, process death/restart, physical-device
+timing or automatic large-budget continuation. The separate 1001-record case
+below still invokes its continuations explicitly. No release signing, production
+access or deployment occurred; wider lifecycle and release gates remain open.
+
 ## Active FULL worker: actual page-budget continuation and Room reopen (2026-10-02)
 
 The actual local SDK suite passes **14/14**. The new owner has 1001 immutable
