@@ -2,6 +2,146 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-02.
 
+### Latest exact-binary checkpoint and owner-operated Redmi scans (2026-10-02)
+
+Current standard-debug app SHA256:
+`6f8cee6b9a81e0e444dce2c78a6f434b87439232ad58e612c075264087e19835`;
+test APK: `ac7f2e8daed63577b86d0cd52756f211a613f48ed770d431bc97d75585d5e2fd`.
+The same app APK is installed on the explicitly authorized Redmi. No uninstall,
+data clear, release key, new AAB, Play operation or deployment occurred.
+
+- **371/371** fresh fixed Android regressions, no skipped/failed cases, 298.267 s
+  instrumentation; frozen sources/APKs and offline/no-reverse afterward:
+  `artifacts/android-regression/20261002T000810Z-c3faeca9/manifest.json`.
+- **18/18** focused Room/Flow/projection/ACK cases and installed-file digest check:
+  `artifacts/release27-engineering-20261002/history-product-room-235453-ecea92cc/`.
+- **1/1 unchanged annual-history benchmark**, 58 samples, all 15-table hashes,
+  full valuations, owner checks and exact owned-file cleanup; 120.738 s test time.
+  New-binary warm medians at 365 dates: portfolio **3058.43 ms**, private contents
+  **2675.52 ms**, collection19.33, set summaries34.75, private summaries41.18.
+  At two dates: portfolio48.45/private49.61 ms. Evidence: dated engineering dir,
+  `history-scale-review/room-scale-annual-20261002T000532Z-fea265ab0c354861af1b03a8b0348b1f/`.
+  Earlier paired before/after numbers below retain their original binary identities;
+  the new result is not substituted silently. Roughly 2.7–3.1 s remains at large
+  retained history. No UI, physical-device, cold-disk, p95 or network SLA claim.
+- **14/14 actual local SDK cases**, complete independent Admin preflight/readback
+  after each case, all 15 nominal accounts and prior owners unchanged; frozen
+  inputs, free ports/empty reverse/idle afterward. New 1001-binder case18.507s,
+  whole harness236.007s. Web evidence:
+  `outputs/collection-sync-session-local/2026-10-01T23-56-21-042Z-6e75c4ca78764c4e8c77bccf03c3a004/`.
+  Four explicit worker passes prove bounded FULL continuation, genuine Room reopen
+  and idempotence across two cycles. This is not automatic WorkManager delivery,
+  OS process death, simultaneous physical devices or arbitrary-scale coverage.
+- **Isolated R8/DEX verification PASS**, build3m45s, 32 allowed task paths,
+  28 executed/two up-to-date actionable tasks, five valid DEX, no APK/AAB/signing.
+  Inputs/schemas/existing outputs and the complete v26 archive remain byte-identical.
+  Evidence: `artifacts/release27-engineering-20261002/r8-only-history-order/verification.json`;
+  source manifest `c0e37763689276bacb2357823a62466b4f5cc714737ebfb1f081d8a0e3ef459f`.
+  Mapping `dab26ad7a0afd5c2487615fcc7df3afa855cf61de37dcc5f9d99f146466a597b`
+  is diagnostic only, NOT for upload or association with release26. Existing
+  conservative R8 rules remain unchanged; no native-symbol/Play acceptance claim.
+
+Owner-operated Redmi manual scans were read afterward without retaining photos,
+OCR, card identities or raw scan IDs. Three captures arrived only 0.77/0.85 s
+apart. Active processing: **4524 / 4984 / 3932 ms**; approximate queue-to-terminal:
+**4531 / 8755 / 11842 ms**. Timer starts after acquiring the single processing
+slot. Outcomes: one `MANUAL_REVIEW`, two `AMBIGUOUS`; the owner confirms the right
+card was among suggestions. This is candidate recall, NOT three automatic matches.
+The latter two top-score pairs are 84:84 and 83:83; no margin threshold is weakened.
+
+The post-normalization analysis window is 3465/3911/3382 ms, including ROI setup,
+OCR/orientation/parsing and descriptors, not isolated ML Kit time. Descriptor
+8/4/3ms is already inside that window. Geometry674/354/312ms and perspective79/56/42ms
+are smaller. All captures are one frame/manual with fallback geometry; sharpness
+scores 0.02839/0.10846/0.06041 fall below the existing0.12 limit. With preserved card
+boundaries this is consistent with the intended soft-card manual-review path,
+not proof of a new regression or grounds to reduce quality checks. No image review
+or exact release26 comparator was performed. Further controlled sequential scans
+and the wider hardware matrix remain open. Minimal evidence:
+`artifacts/release27-engineering-20261002/history-performance-fix/redmi-scans-20261002.json`.
+
+Full sync remains active; Delta is deferred. WorkManager/OS lifecycle, real
+multi-device conflicts, full live-price coverage, controlled live load/monitoring,
+complete deletion/retention operations and final packaged-release checks remain
+open. **Gate15 is locked; overall R27 is NOT READY.**
+
+### Previous follow-up: annual-history query fix and bounded proofs (2026-10-02)
+
+The actual counterfactual below justified one narrow product change in
+`CardVaultDao`: transport the same four owner/source-filtered history fields in
+existing product/date index order, then restore chronological order using a
+stable sort on `Dispatchers.Default`. No dates are discarded. Filters, pricing,
+schema, indexes, dependencies, FULL sync and Room invalidation tables are unchanged.
+Independent review includes both generated Debug/Release Room implementations.
+
+The **UNCHANGED annual business benchmark passes 1/1**, 58 exact samples, 15-table
+hash/integrity checks, all 365 valuation points, complete card equality, owner
+isolation and exact owned-file cleanup. Three warm resubscription medians in ms:
+
+| Flow | Before, 365 dates | After, 365 dates | After, 2 dates |
+|---|---:|---:|---:|
+| Collection | 20.28 | 19.21 | 17.52 |
+| Set binder summaries | 35.87 | 32.58 | 48.03 |
+| Private binder summaries | 37.21 | 36.41 | 52.27 |
+| Portfolio | 16,101.36 | 2,713.24 | 51.75 |
+| Private binder contents | 16,108.68 | 2,615.00 | 54.39 |
+
+Evidence: `artifacts/release27-engineering-20261002/history-scale-review/`
+`room-scale-annual-20261001T233749Z-3b7e80a0397543c6aab11606f45d27a7/manifest.json`.
+This is a fixed debug-emulator fixture with 346,750 eligible history rows, NOT
+physical-device/UI/network latency, cold-disk, peak memory, p95 or a global SLA.
+Approximately 2.6–2.7 s remains a large-history limitation; no broad claim that
+Gate12 or the complete R27 mission is finished. Summary timing variation is not
+claimed as a product optimization. All full-sync/retention semantics remain intact.
+
+Product-fix build, actual fresh JVM execution (**914 PASS / one existing optional
+live-price SKIP**), release Kotlin and both lints pass in 3m32s. **18/18** focused
+actual Room/Flow/projection/ACK cases and **371/371** fixed Android regression pass
+on product APK `1440ca33…d3eb96`, test APK `7d45119d…15ed25`; no failed/skipped Android
+cases. Frozen-source receipts: `history-product-room-233542-7dbe21ee/manifest.json`
+and `artifacts/android-regression/20261001T234051Z-e8124b6b/manifest.json`.
+Web broad regression: **1287/1287**, 78 files, 28.52 s,
+`outputs/release-local/2026-10-01T23-31-18-741Z-16540.{json,log}`. Two additive cases
+characterize the existing 5000-raw-placement budget including tombstones; no
+limit increase, deletion policy, legacy filtering or share behavior change.
+Existing React act/Canvas and dependency-deprecation warnings remain visible.
+
+The two new actual local Admin-SDK knowledge cases pass together with all previous
+33 private-operation cases: **35/35**, harness 53.567 s, new cases 5.860/3.696 s.
+Canonical aggregation persists three concurrent contributor votes correctly; exact redelivery
+is a full stored-graph/server-timestamp no-op. A genuinely stale evidence version
+and deletion lock block writes, and removing only the synthetic lock allows the
+same valid version to apply. Evidence: Web `outputs/private-operations-local/`
+`2026-10-01T23-47-21-660Z-52ae5b8f/manifest.json`, exit0, frozen inputs/free ports.
+This manually invokes the genuine callback with genuine server snapshots; it does
+NOT prove Eventarc delivery, retries actually occurred, production contention or
+real-user consent. No production change or altered transaction attempt limit.
+
+At the owner's subsequent explicit request the fresh standard-debug APK was
+installed **only as DomiDex** on the Redmi, in place, without uninstall/data clear.
+Installed/local SHA256 both
+`6f8cee6b9a81e0e444dce2c78a6f434b87439232ad58e612c075264087e19835`, code27,
+`1.0-closed-alpha.6`. The previously installed code27 APK differed. A local APK
+path disappeared during this session; its cause is not inferred. A fresh 19s
+debug rebuild plus **18/18** focused cases verifies the replacement identity;
+broader tests on this new binary are tracked separately, not silently inherited.
+Receipt: `history-performance-fix/redmi-install-20261001T235622Z.json` under the
+dated engineering directory. Installation success is not a hardware test PASS.
+
+Read-only Cloud configuration was inspected, not changed: default Firestore
+TTL/backup-schedule/backup list queries return empty arrays; PITR and deletion
+protection are disabled, with a 3600s version-retention window. Initial Logging
+bucket page shows `_Default` 30 days and locked `_Required` 400 days, not a proven
+complete log inventory. Storage soft-delete window is 604800s; it is not automatic
+expiry of live images. Two read Cloud Run revisions have 1 CPU/512Mi, concurrency40,
+timeout60s and maxScale2. Service default traffic and latest-ready differ; Hosting
+pinTag routing is **not** established by those values. No live load, alert,
+deletion, restore or legal-compliance conclusion follows. Minimal receipts are in
+`artifacts/release27-engineering-20261002/lifecycle-gates-review/`.
+
+Full sync remains active; Delta remains unwired/deferred. Gate15 stays locked.
+No release package, upload key use, Play upload, deployment or production writes.
+
 ### Scope decision: retain full synchronization for R27 (2026-10-02)
 
 The owner explicitly chose the currently secured full-sync implementation for
@@ -15,7 +155,8 @@ Correctness, data integrity and existing regressions take priority. The remainin
 full-sync lifecycle/offline/multi-client tests and all non-delta mission gates
 remain applicable. Historical delta experiments below are retained as evidence,
 not current rollout instructions. Overall NOT READY is not lifted solely by
-this scope adjustment. Release-signing/production/Xiaomi restrictions remain.
+this scope adjustment. Release-signing/production restrictions remain; subsequent
+physical-device work uses only the separately authorized scope described above.
 
 ### In-progress follow-up: isolate annual-history cost (2026-10-02)
 
@@ -1182,16 +1323,16 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS, FULL retained | Latest actual SDK suite 12/12 on current product APK adds durable offline private-worker retry, file reopen, real ACK/FULL and idempotence; 11/11 Room controls. Actual scheduler/UI/process, page/budget-scale and multi-client boundaries remain. Delta activation and its separate acceptance gates are deferred by explicit owner decision 2026-10-02, not R27 requirements; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS, FULL retained | 14/14 actual local SDK cases include durable offline retry, separate-client stale-base convergence and 1001-binder FULL-budget/Room-reopen/idempotence; 18/18 focused Room controls. Automatic WorkManager/UI/OS/process delivery, simultaneous physical devices and broader scale remain open. Delta is deferred, not an R27 requirement; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded Android import with 3 actual Room persistence/rollback cases, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card decoded-body cap/cancellation proven 14/14, cache/package regression 83/83; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
-| 8 Recognition | IN PROGRESS (limited replay PASS) | additive identity oracle 12/12; 60 observations with matching input hashes and unchanged historical outputs, 42/42 geometry outputs unchanged; no demonstrated overall speed/recall gain or physical-printing accuracy |
-| 9 Community knowledge | IN PROGRESS (local safety/aggregation tests PASS) | confidence/freshness/lifecycle faults fixed; 48 focused JVM + 11 Android cases; counter/key hardening and 61 synthetic concurrency tests pass; actual trigger contention/live evidence remain |
-| 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | feedback backup owner/session and Web deletion-consent races corrected; 47 focused Android + 8 JVM and 27 real local Firebase tests pass; provider retention/live deletion and complete workflow remain unverified |
-| 11 Observability/cost | PARTIAL (local audit/model) | safe-log inventory and hypothetical 1k/5k/10k/50k resource model, 6 tests; actual metrics, alerts, prices and external retention remain unverified |
-| 12 Load/scale | PARTIAL; annual-history performance gap | 10/40/80 sharing concurrency and 1k/5k/20k two-date Room baselines. Fresh 1003-product 2/365-date file-Room test passes 58 samples and full integrity/owner checks, but portfolio/private contents reach ~16.1s warm medians at 346750 owned-history rows. No retention/read-architecture change made; targeted follow-up required. O(N) sharing reads/fan-out and production load remain unverified |
-| 13 Full regression | IN PROGRESS | Current product APK: 914 JVM PASS/1 existing optional SKIP reused, fresh 371/371 emulator cases, 12/12 actual SDK and 11/11 Room controls; three earlier analyzer cases share the same product APK. R8-only source 2dce825 PASS. Fresh broad Web product suite 1285 PASS; 103 public-cache cases and 33 local backend/Web-client SDK cases retain their separate dated scopes. Build/lint and historical failures remain documented; physical/live contracts remain untested |
+| 8 Recognition | IN PROGRESS (limited replay PASS) | Historical identity/geometry replays retain exact original scope. Three fresh Redmi manual scans: owner confirms correct candidates, one manual review/two ambiguous, processing3.9–5.0s plus queue delay. No automatic-match, speedup vs26 or complete physical-printing accuracy claim; quality checks unchanged |
+| 9 Community knowledge | IN PROGRESS (local safety/aggregation tests PASS) | Existing 61 synthetic concurrency cases plus two actual canonical callback/Admin transaction cases within35/35 private operations cover concurrent votes, redelivery, stale evidence and deletion locks. Eventarc delivery, actual retry/load contention and real-user consent remain unproved |
+| 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | Owner/session and deletion-consent fixes retain prior tests;35 local private-operation cases pass. Read-only metadata partly confirms provider configuration including seven-day Storage soft delete, not live-object TTL. Complete deletion/purge/operator workflow and retention decisions remain open |
+| 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Two actual Run revision resource configurations and partial retention metadata read-only verified; Hosting pinTag target, live metrics/alerts/billing and complete inventories remain unverified |
+| 12 Load/scale | PARTIAL; measured history improvement | Same unchanged annual benchmark after narrow query-order fix: previous~16.1s portfolio/private history reduced to~2.7–3.1s on latest APK,58 samples/full integrity pass. No retention/schema/delta change.1001-binder actual FULL continuation passes; O(N) sharing/fan-out, residual history cost and production load remain open |
+| 13 Full regression | IN PROGRESS | Latest exact APK6f8cee…/ac7f2e…:371/371 fixed emulator,18/18 focused Room,14/14 actual SDK,annual58 samples. Fresh isolated R8/DEX proof source-manifestc0e377… passes without packaging/signing.914 JVM PASS/one optional live-price SKIP,1287 broad Web and35 actual local private-operation cases retain separate recorded scopes. Physical/live/final release contracts remain open |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |

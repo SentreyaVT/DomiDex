@@ -7,6 +7,17 @@ Console lesend. Die anschließenden lokalen Änderungen und Teststände sind im
 und keine produktive Veröffentlichung. Der Engineeringbranch heißt
 `codex/release-27-hardening`; sein Ausgangscheckpoint ist `53b4e40d`.
 
+**Fortschreibung 02.10.2026:** Full-Sync bleibt für R27 aktiv, Delta bleibt
+deaktiviert. Der nachgewiesene große History-Engpass wurde eng ohne Schema- oder
+Aufbewahrungsänderung verbessert. Dieselbe aktuelle Debug-APK ist ausdrücklich
+freigegeben auf dem Redmi installiert und besteht lokal371 Regressionen,18
+fokussierte Room-Fälle,14 echte lokale SDK-Fälle und den unveränderten
+58-Messpunkte-Jahreshistorientest. R8-only/DEX ist geprüft, kein neuer Release
+signiert oder veröffentlicht. Drei Benutzer-Scans belegen vorhandene richtige
+Vorschläge, nicht eindeutige automatische Treffer. Hardware-/Mehrgeräte-/Scheduler-,
+Live-/Datenschutz-Betriebs- und Release-Nachweise sind weiterhin offen. Gate15
+bleibt gesperrt; genaue Artefakte und Grenzen im aktuellen Release-27-Ledger.
+
 ## Unterschiedliche Projektstände
 
 | Ebene | Befund vor diesem Dokumentations-Commit |

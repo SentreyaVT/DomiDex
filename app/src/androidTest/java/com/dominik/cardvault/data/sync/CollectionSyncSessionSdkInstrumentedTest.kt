@@ -100,9 +100,153 @@ class CollectionSyncSessionSdkInstrumentedTest {
     private var deferredRoomOwnerMarker: String? = null
     private var deferredInitialSeed: Map<String, Map<String, Any>>? = null
 
-// REVIEW DRAFT ONLY. Insert these members into CollectionSyncSessionSdkInstrumentedTest.
-// Setup and @After integration are specified in android-integration-and-fixture-contract.txt.
-// No new imports beyond those already present in the 12-case class are required.
+    /**
+     * Two actual bounded FULL cycles, with an owned SQLite reopen between the first
+     * budget-limited pass and its explicit continuation. Does NOT run WorkManager.
+     * The server fixture is Admin-created outside Android and immutable throughout.
+     */
+    @Test fun largePrivateFullPullContinuesAfterBudgetAndRoomReopen() = runBlocking(Dispatchers.IO) {
+        withTimeout(150_000) {
+            check(scenario == "private-full-budget" && owner == "sdk-proof-collection-private-full-budget")
+            requireActualEntitlement()
+            val serverBefore = fullBudgetServerSnapshot()
+            val initial = offlinePrivateFullSnapshot()
+            for ((table, rows) in initial) {
+                assertEquals("Fresh FULL fixture: $table", if (table == "app_metadata") 1 else 0, rows.size)
+            }
+            assertEquals(mapOf("deferred-sdk-fixture-owner" to checkNotNull(deferredRoomOwnerMarker)),
+                offlinePrivateMetadata())
+
+            // 997 binders plus the three empty-group logical read units consume 1,000.
+            // The existing product uses pages of at most 200. This test proves actual
+            // applied/checkpointed results, not a count of SDK wire queries/billed reads.
+            fullBudgetWorkerPass(expectContinuation = true)
+            assertFullBudgetRoom(expectedCount = 997, incomplete = true)
+            val interrupted = offlinePrivateFullSnapshot()
+            assertEquals(serverBefore, fullBudgetServerSnapshot())
+
+            closeAndReopenDeferredRoom()
+            assertEquals("Every persisted row and cursor must survive the exact owned file reopen",
+                interrupted, offlinePrivateFullSnapshot())
+            assertFullBudgetRoom(expectedCount = 997, incomplete = true)
+
+            // Explicit invocation of the same real worker. The recorded APPEND request
+            // above does not prove its eventual delivery by WorkManager or Android.
+            fullBudgetWorkerPass(expectContinuation = false)
+            assertFullBudgetRoom(expectedCount = 1_001, incomplete = false)
+            val completed = offlinePrivateFullSnapshot()
+            assertEquals(serverBefore, fullBudgetServerSnapshot())
+
+            // A fresh FULL cycle still exceeds one invocation, even with no new Room
+            // records to apply. It must not report a false single-pass completion.
+            fullBudgetWorkerPass(expectContinuation = true)
+            assertFullBudgetRoom(expectedCount = 1_001, incomplete = true)
+            assertEquals("A repeated partial sweep must not alter any business row",
+                completed - "app_metadata", offlinePrivateFullSnapshot() - "app_metadata")
+            assertEquals(serverBefore, fullBudgetServerSnapshot())
+            fullBudgetWorkerPass(expectContinuation = false)
+            assertFullBudgetRoom(expectedCount = 1_001, incomplete = false)
+            assertEquals("Second complete cycle must preserve every Room row and full-pull marker",
+                completed, offlinePrivateFullSnapshot())
+            assertEquals("All remote values, revisions and server timestamps remain unchanged",
+                serverBefore, fullBudgetServerSnapshot())
+            assertEquals(0, continuationCount) // The separate collection scheduler was never used.
+        }
+    }
+
+    private fun fullBudgetId(index: Int): String {
+        require(index in 0..1_000)
+        return "paging-" + index.toString().padStart(4, '0')
+    }
+
+    private fun fullBudgetBinder(index: Int): PrivateBinderEntity {
+        val id = fullBudgetId(index)
+        return PrivateBinderEntity(
+            id = id, ownerUid = owner, name = "Synthetic paging binder $id",
+            description = null, coverStyle = "DOMIDEX", minimumPageCount = 1,
+            createdAtEpochMillis = FIXTURE_TIME, updatedAtEpochMillis = FIXTURE_TIME,
+            lastOpenedAtEpochMillis = null, syncState = SYNC_CLEAN, remoteRevision = 1,
+            deletedAtEpochMillis = null,
+        )
+    }
+
+    private suspend fun fullBudgetWorkerPass(expectContinuation: Boolean) {
+        var opens = 0
+        val appends = mutableListOf<String>()
+        val shares = mutableListOf<Pair<String, String>>()
+        val result = withTimeout(45_000) {
+            runPrivateBinderSync(owner, null, subject.auth, subject.firestore,
+                database = { opens++; database },
+                appendPrivate = { uid -> appends.add(uid); Unit },
+                continueSharing = { uid, binder -> shares.add(uid to binder); Unit })
+        }
+        assertEquals("Actual FULL worker must succeed; no fabricated completion", ListenableWorker.Result.success(), result)
+        assertEquals("The original lazy provider opens exactly the owned Room", 1, opens)
+        assertEquals("Budget continuation must be neither missing, duplicated nor foreign",
+            if (expectContinuation) listOf(owner) else emptyList<String>(), appends)
+        assertTrue("No sharing operation is requested", shares.isEmpty())
+        assertEquals(owner, canonicalCollectionOwnerUid(subject.auth.currentUser))
+        assertEquals(owner, canonicalCollectionOwnerUid(control.auth.currentUser))
+    }
+
+    private suspend fun assertFullBudgetRoom(expectedCount: Int, incomplete: Boolean) {
+        require(expectedCount == 997 || expectedCount == 1_001)
+        // Real typed DAO values compare ALL entity fields, not merely a row count or ID set.
+        val expectedBinders = (0 until expectedCount).map(::fullBudgetBinder)
+        val actualBinders = withTimeout(10_000) { dao.observePrivateBinders(owner).first() }
+        assertEquals(expectedBinders, actualBinders)
+        assertTrue("No foreign-owner binder leak", withTimeout(10_000) { dao.observePrivateBinders(OTHER_OWNER).first() }.isEmpty())
+        val metadata = buildMap {
+            put("deferred-sdk-fixture-owner", checkNotNull(deferredRoomOwnerMarker))
+            put(PrivateFullPullMetadataStore.phaseKey(owner), if (incomplete) "rr1|1|14" else "rr1|1|0")
+            for (group in 0..3) put(PrivateFullPullMetadataStore.cursorKey(owner, group),
+                if (incomplete && group == 0) "paging-0996" else "")
+        }
+        assertEquals("Exact persisted cursor, rotation and EOF evidence", metadata, offlinePrivateMetadata())
+        for ((table, rows) in offlinePrivateFullSnapshot()) {
+            assertEquals("No missing, extra, pending, foreign or unrelated rows: $table", when (table) {
+                "private_binders" -> expectedCount
+                "app_metadata" -> metadata.size
+                else -> 0
+            }, rows.size)
+        }
+        assertTrue(dao.pendingPrivateBinderSyncOutbox(owner, 1).isEmpty())
+    }
+
+    private suspend fun fullBudgetServerSnapshot(): Map<String, Map<String, Any>> {
+        check(scenario == "private-full-budget")
+        // One extra result detects excess data rather than quietly truncating it. This
+        // independently named witness never mutates the fixture or uses the subject cache.
+        val snapshot = control.firestore.collection("users/$owner/privateBinders")
+            .orderBy(FieldPath.documentId()).limit(1_002).get(Source.SERVER).bounded()
+        assertFalse(snapshot.metadata.isFromCache)
+        assertFalse(snapshot.metadata.hasPendingWrites())
+        assertEquals((0..1_000).map(::fullBudgetId), snapshot.documents.map { it.id })
+        val rows = snapshot.documents.associate { document ->
+            assertFalse(document.metadata.isFromCache)
+            assertFalse(document.metadata.hasPendingWrites())
+            val timestamp = checkNotNull(document.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.NONE))
+            assertTrue(timestamp.seconds > 1_700_000_000L)
+            val id = document.id
+            val expected = mapOf(
+                "binderId" to id, "ownerUid" to owner, "name" to "Synthetic paging binder $id",
+                "description" to null, "coverStyle" to "DOMIDEX", "minimumPageCount" to 1L,
+                "createdAtClient" to FIXTURE_TIME, "updatedAtClient" to FIXTURE_TIME,
+                "lastOpenedAtClient" to null, "deleted" to false, "revision" to 1L,
+                "lastMutationId" to "private-full-$runId-$id", "updatedAt" to timestamp,
+            )
+            assertEquals("All exact server fields for $id", expected, document.data)
+            id to checkNotNull(document.data)
+        }
+        for (collection in listOf("collectionEntries", "privateBinderPlacements", "collectionLayouts", "collectionPriceSelections")) {
+            assertTrue("No unrelated server rows: $collection", lateServerRows(collection).isEmpty())
+        }
+        val access = control.firestore.document("accountAccess/$owner").get(Source.SERVER).bounded()
+        assertFalse(access.metadata.isFromCache)
+        assertFalse(access.metadata.hasPendingWrites())
+        assertFalse("Only the real Google identity and appAccess claim grant access", access.exists())
+        return rows
+    }
 
     private data class PrivatePairRoom(
         val name: String, val file: File, val marker: String, val db: CardVaultDatabase,
@@ -388,6 +532,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "deferredPlacementPointReadSurvivesRoomReopenUntilParentDelivery" -> "deferred-point-read"
             "offlinePrivateMutationSurvivesRoomReopenAndCompletesFullPull" -> "private-offline-retry"
             "twoClientPrivateBinderStaleEditConvergesWithoutRemoteRewrite" -> "private-two-client"
+            "largePrivateFullPullContinuesAfterBudgetAndRoomReopen" -> "private-full-budget"
             else -> error("Unreviewed collection-session proof method")
         }
         owner = "sdk-proof-collection-$scenario"
@@ -404,13 +549,14 @@ class CollectionSyncSessionSdkInstrumentedTest {
                 Socket().use { it.connect(InetSocketAddress(PrivatePullDemoGrpcGate.HOST, port), 3_000) }
             }
             if (scenario == "private-two-client") room = createPrivatePairRoom("a").db
-            else if (scenario in setOf("deferred-point-read", "private-offline-retry")) createDeferredRoomFixture()
+            else if (scenario in setOf("deferred-point-read", "private-offline-retry", "private-full-budget")) createDeferredRoomFixture()
             else room = Room.inMemoryDatabaseBuilder(context, CardVaultDatabase::class.java).build()
             gate = PrivatePullDemoGrpcGate().also { it.verifyForeignDatabaseFailsBeforeStart() }
             subject = client("subject")
             control = client("control")
             signIn(subject.auth, owner)
             signIn(control.auth, owner)
+            if (scenario == "private-full-budget") return@withTimeout
             if (scenario == "private-two-client") {
                 assertDiagnosticServerEmpty()
                 assertPairFresh(privatePairRooms.single())
@@ -1850,7 +1996,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
     }
 
     private suspend fun createDeferredRoomFixture() {
-        check(scenario in setOf("deferred-point-read", "private-offline-retry") && room == null && deferredRoomName == null)
+        check(scenario in setOf("deferred-point-read", "private-offline-retry", "private-full-budget") && room == null && deferredRoomName == null)
         val nonce = UUID.randomUUID().toString()
         val name = "domidex-deferred-sdk-$runId-$nonce.db"
         val file = context.getDatabasePath(name).canonicalFile

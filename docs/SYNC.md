@@ -26,9 +26,31 @@ R27 full-sync lifecycle, offline/conflict, multi-client and scale checks still
 apply; this decision does not claim instantaneous sync, zero remaining bugs,
 completed hardware validation or authorization to deploy/sign.
 
+## Active FULL worker: actual page-budget continuation and Room reopen (2026-10-02)
+
+The actual local SDK suite passes **14/14**. The new owner has 1001 immutable
+Admin-seeded private binders, no dependent collection records and no outbox.
+Four real worker invocations perform two bounded FULL cycles. Pass one imports
+997 binders and preserves cursor `paging-0996` with `rr1|1|14`; its owned Room
+file is reopened unchanged. Pass two imports the remaining four and completes
+at `rr1|1|0`. The second cycle requires the same continuation and ends with every
+Room business field/metadata and remote field/revision/timestamp unchanged.
+APPEND requests are observed, but the test explicitly invokes continuations.
+
+Fourteen complete Admin preflights/readbacks verify every prior owner and all
+15 nominal Google accounts. Only the final exact-owner fixture permits its 1001
+known paths plus absent parent beyond the unchanged 32 ordinary-reference bound;
+unknown paths/collections fail closed. The 22 pure host validation cases pass.
+Evidence in the sibling Web repository: `outputs/collection-sync-session-local/`
+`2026-10-01T23-56-21-042Z-6e75c4ca78764c4e8c77bccf03c3a004/manifest.json`.
+
+This proves genuine worker/Room/SDK persistence for this bounded fixture, not
+automatic WorkManager delivery, OS/process restart, simultaneous physical devices
+or general large-catalog convergence. FULL remains active; Delta stays deferred.
+
 ## Active FULL worker: separate-client stale-base convergence (2026-10-02)
 
-Thirteen actual SDK cases now pass. The new case uses two independently marked
+At that checkpoint, thirteen actual SDK cases passed. The case uses two independently marked
 file-backed Room databases and three named SDK clients (A, B, SERVER witness).
 A creates revision1 through the real worker; B imports through FULL. Different
 pending base1 edits then exist in both databases. A commits revision2, B's later
@@ -56,7 +78,7 @@ After real SERVER access returns, the unchanged worker performs the actual
 transaction, revision1 ACK and four-group FULL pull. A second online pass leaves
 all Room and remote fields, revision and server timestamp exactly unchanged.
 
-12/12 actual SDK cases and 11/11 Room controls pass on the current parser APK,
+12/12 actual SDK cases and 11/11 Room controls passed on that checkpoint's parser APK,
 with 16 pure host validators. Twelve full Admin preflights/readbacks check every
 document/reference and all thirteen nominal Google accounts. Evidence: Web
 `outputs/collection-sync-session-local/2026-10-01T22-27-50-753Z-8fc2d585e11e4d0881894a53d65a83f2/`;
@@ -78,7 +100,8 @@ remain authoritative. All three remote seeds and prior owners stay unchanged in
 complete independent Admin observations; twelve nominal accounts stay exact.
 
 11 SDK / 11 Room controls and 14 pure host validators PASS. Exact evidence and
-APKs are in the latest `RELEASE_27.md` checkpoint. No production code changed.
+APKs are in the dated "real deferred point read across Room reopen" checkpoint
+of `RELEASE_27.md`, not the evolving latest entry. No production code changed.
 Checkpoint revision intentionally advances, but cursor phase/scope/epoch do not.
 This known isolated singleton does not establish general timestamp provenance or
 query completeness. File reopen is not process death; marker consumption is not
@@ -104,7 +127,8 @@ delivery, automatic WorkManager execution or process restart. Thirteen new pure
 gate/policy cases, all 912 JVM cases (one existing optional skip), 11 Room controls
 and fixed 371 emulator regressions PASS. Complete server preflight/readback stays
 equal for all three diagnostic owners. Evidence and exact frozen APK identities
-are in the latest `RELEASE_27.md` checkpoint. No new sync protocol, source of
+are in the dated "bounded event-driven session recheck" checkpoint of
+`RELEASE_27.md`. No new sync protocol, source of
 truth, Rules/schema/outbox/scheduler-policy change or production deployment.
 Gate 4 remains open; the separate delta foundation is not activated.
 
