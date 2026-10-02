@@ -2,6 +2,36 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-02.
 
+### Clarified Redmi follow-up: three correct Nidorina suggestions (2026-10-02)
+
+The installed APK digest was read-only rechecked and remains `6f8cee6b…e19835`.
+Six newer observations were present. The owner explicitly clarified that their
+report concerns the **last three cards currently in the queue**, all correctly
+displayed: Nidorina MEP101. Root initially attributed this ground truth to the
+first three earlier sequential observations; that attribution was incorrect and
+is retracted. The earlier three cards' ground truth is not established.
+
+The intended triple independently logs `MEP101`/`mep` three times, two candidates
+each and score pairs84:84. Active processing **4688/4384/4190ms**; approximate
+capture-to-terminal **4691/8298/11761ms**, because these three were captured in a
+burst. Correct suggested cards plus an `AMBIGUOUS` final state is not a failed
+card lookup; nor does it prove uniquely accepted physical printing. The catalog
+has two Nidorina printings and the resolver explicitly retains unpriced candidates.
+No Cardmarket-filter defect is demonstrated; no product fix was made.
+
+Earlier sequential observations independently show5108/4000/4350ms processing,
+no material queue wait and no candidates, but must not be labelled Nidorina failures.
+Several new sharpness scores exceed0.12 while processing remains around4s;
+low sharpness is not a general explanation. `usedGeometryFallback` describes a
+contour path, not by itself the soft-card review reason. The local post-normalization
+block includes preparation/OCR/parsing/descriptors and still dominates; precise
+subphase evidence is required before a quality-neutral optimization.
+
+Minimal receipt: `artifacts/release27-engineering-20261002/history-performance-fix/`
+`redmi-scans-followup-20261002.json`. No photos/raw OCR persisted, no app/device/
+production changes. Previous local regression/R8 results remain valid; this
+limited user observation does not close the full hardware or release gate.
+
 ### Latest exact-binary checkpoint and owner-operated Redmi scans (2026-10-02)
 
 Current standard-debug app SHA256:
@@ -1327,7 +1357,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 5 Pricing/catalog | IN PROGRESS | bounded Android import with 3 actual Room persistence/rollback cases, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card decoded-body cap/cancellation proven 14/14, cache/package regression 83/83; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
-| 8 Recognition | IN PROGRESS (limited replay PASS) | Historical identity/geometry replays retain exact original scope. Three fresh Redmi manual scans: owner confirms correct candidates, one manual review/two ambiguous, processing3.9–5.0s plus queue delay. No automatic-match, speedup vs26 or complete physical-printing accuracy claim; quality checks unchanged |
+| 8 Recognition | IN PROGRESS (limited replay PASS) | Historical replays retain their scope. Latest owner-confirmed queue triple: Nidorina MEP101 read correctly3times, correct suggestions, two candidates each,4.2–4.7s active plus burst queue delay. Earlier sequential no-candidate observations have unknown ground truth and are not Nidorina failures. No automatic-printing, speedup vs26 or full hardware claim; quality checks unchanged |
 | 9 Community knowledge | IN PROGRESS (local safety/aggregation tests PASS) | Existing 61 synthetic concurrency cases plus two actual canonical callback/Admin transaction cases within35/35 private operations cover concurrent votes, redelivery, stale evidence and deletion locks. Eventarc delivery, actual retry/load contention and real-user consent remain unproved |
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | Owner/session and deletion-consent fixes retain prior tests;35 local private-operation cases pass. Read-only metadata partly confirms provider configuration including seven-day Storage soft delete, not live-object TTL. Complete deletion/purge/operator workflow and retention decisions remain open |
 | 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Two actual Run revision resource configurations and partial retention metadata read-only verified; Hosting pinTag target, live metrics/alerts/billing and complete inventories remain unverified |
