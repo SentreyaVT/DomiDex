@@ -8,6 +8,9 @@ import androidx.room.Transaction
 import androidx.room.Update
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import com.dominik.cardvault.data.catalog.SAFE_COLLECTION_PRICE_LINK_SQL
 
 @Dao
@@ -304,7 +307,15 @@ interface CardVaultDao {
     """)
     suspend fun rebasePendingCollectionLayout(ownerUid: String, entrySyncId: String, revision: Long)
 
-    /** Only required trend fields from this owner's exact linked products enter portfolio memory. */
+    /** Restore the public chronological contract after the product-ordered SQL transport. */
+    fun observeOwnedRawPriceHistory(ownerUid: String, source: String): Flow<List<OwnedPriceHistoryProjection>> =
+        observeOwnedRawPriceHistoryByProduct(ownerUid, source).map { prices ->
+            // Sorting stays off Main even for callers outside the repository's Default flowOn.
+            // A fixed source and unique product/source/date exclude same-product timestamp ties.
+            withContext(Dispatchers.Default) { prices.sortedBy { it.effectiveAtEpochMillis } }
+        }
+
+    /** Product-ordered transport for the chronological wrapper; same exact ownership/source filters. */
     @Query("""
         SELECT p.cardId, p.effectiveAtEpochMillis, p.trendValueMinor, p.holoTrendValueMinor
         FROM raw_price_snapshots p
@@ -317,9 +328,9 @@ interface CardVaultDao {
             WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
               AND """ + SAFE_COLLECTION_PRICE_LINK_SQL + """
         )
-        ORDER BY p.effectiveAtEpochMillis
+        ORDER BY p.cardId, p.effectiveAtEpochMillis
     """)
-    fun observeOwnedRawPriceHistory(ownerUid: String, source: String): Flow<List<OwnedPriceHistoryProjection>>
+    fun observeOwnedRawPriceHistoryByProduct(ownerUid: String, source: String): Flow<List<OwnedPriceHistoryProjection>>
 
     /**
      * History stays tied to the exact Cardmarket product linked to this entry.

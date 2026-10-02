@@ -37,6 +37,14 @@ gezielte Sicherheits-, Sync-, Preis-, Scanner- und Backup-Korrekturen werden auf
 Gates stehen im [Release-27-Ledger](docs/RELEASE_27.md). Kein neues signiertes AAB,
 keine Veröffentlichung und keine Gesamtfreigabe werden damit behauptet.
 
+Gezielter lokaler Performance-Fix: Große behaltene Preisverläufe werden ohne
+Datenverlust indexgerecht gelesen und außerhalb des UI-Threads chronologisch
+geordnet. Im unveränderten Jahresdaten-Test sinken die warmen Portfolio-/Binder-
+Ladezeiten von rund 16,1 auf 2,6–2,7 Sekunden. Das ist ein Debug-Emulator-Nachweis,
+kein versprochenes Handy- oder Netzwerktiming. Full-Sync bleibt erhalten;
+Delta-Sync ist ausdrücklich nicht Teil von R27. Zusätzliche echte lokale
+SDK-/Knowledge-Prüfungen und ihre verbleibenden Grenzen stehen im Ledger.
+
 Bereits vor dem ursprünglichen Audit vorhanden, damals teils unversioniert: Scanner-Lifecycle-/OCR-
 Vorbereitungsoptimierungen, überprüfte Knowledge-Hinweise, zusätzliche genaue
 Katalog-/Preiszuordnungen, explizite Alternativen bei fehlendem Trendpreis mit
