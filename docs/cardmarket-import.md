@@ -2,6 +2,44 @@
 
 Prüfstand: 1. Oktober 2026. Quellenbasis ist der vorhandene Code; lokale Release-27-Erweiterungen werden ausdrücklich von veröffentlichten Releases getrennt.
 
+## Ergänzung R27: widersprüchliche Preiszeilen abweisen (2. Oktober 2026)
+
+Die lokale Vorprüfung lehnt jetzt eine vollständige Preisdatei ab, wenn dieselbe
+`idProduct` darin unterschiedliche geparste Werte besitzt. Alle neun Preisfelder,
+Kategorie und auch fehlende gegenüber vorhandenen Werten werden verglichen, bevor
+der Produktkatalog verknüpft wird. Auch weiter auseinanderliegende Widersprüche
+werden erkannt. Identische Wiederholungen behalten Reihenfolge und Datensatzanzahl;
+eine spätere unabhängige Datei darf denselben Quellzeitpunkt weiterhin korrigieren.
+
+Ohne diese Prüfung gewinnt bei widersprüchlichen Zeilen zuletzt Room REPLACE.
+Der tatsächliche Parser-/Datenbanktest hat vor dem Fix das Überschreiben des
+vorhandenen Katalogs und der Preise reproduziert: drei bestehende Fälle bestanden,
+der neue Integritätstest scheiterte. Mit dem Fix bestehen unverändert **4/4** Fälle,
+einschließlich späterer zulässiger Korrektur und Rollback nach einer späten
+SQLite-Ausnahme. Die gezielten JVM-Fälle reproduzierten zunächst35PASS/1FAIL;
+die vollständige anschließende JVM-Suite besteht mit **917PASS/1 bestehendem
+optionalen Live-SKIP**, ohne Fehler. Debug-/Test-APK, Release-Kotlin und beide
+Lint-Prüfungen bestehen; bestehende Warnungen bleiben sichtbar.
+
+Garantiert wird die Ablehnung vor dem Speichern der eingehenden Katalog-/Preiswerte,
+nicht eine unveränderte komplette Produktions-Statuszeile: der bestehende äußere
+Importer schreibt zunächst RUNNING und bei Fehlschlag ERROR mit neuem Versuchstermin
+und Fehlertext, unter Beibehaltung der früheren Erfolgs-/Quell-/Anzahlangaben. Diese
+HTTP-/Statushülle ist nicht Gegenstand des neuen Room-Tests.
+
+Die zusätzliche lokale Prüfung benötigt erwartbar O(n) Zeit und O(u) temporären
+Map-Speicher für eindeutige IDs. Sie kopiert keine Preisobjekte und persistiert
+keinen zusätzlichen Cache; genaue zusätzliche Laufzeit/Spitzenbelegung wurde nicht
+gemessen. Netzwerk, Schema, Historie und Full-Sync wurden nicht verändert.
+
+Belege im ignorierten Engineering-Verzeichnis
+`artifacts/release27-engineering-20261002/pricing-duplicate-review/`:
+`red-011429-1f823aa9/`, `room-124815-f2ca6444/`,
+`green-124911-83029c8c/` und `room-125324-14b2f629/`.
+Der geprüfte eingefrorene Download enthielt keine doppelten IDs; diese Härtung
+erklärt daher **nicht** dessen offene Preis-/Mapping-Lücken und erzeugt keine
+zusätzlich belegten Preise. Noch nicht veröffentlicht; Release26 bleibt unverändert.
+
 ## Tatsächlich verwendete Quellen
 
 Der Android-Import `app/src/main/java/com/dominik/cardvault/data/sync/CardmarketSync.kt` verwendet die offiziellen öffentlichen Pokémon-Downloads:

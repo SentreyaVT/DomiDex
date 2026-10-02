@@ -83,6 +83,15 @@ internal fun prepareCardmarketImport(
     val effectiveAt = requireNotNull(parseCardmarketSourceTime(sourceCreatedAt)) {
         "Der Cardmarket-Preisguide enthält keinen gültigen Quellzeitpunkt."
     }
+    // Validate within this one guide only. Another download at the same source
+    // timestamp may legitimately correct values and still replaces them in Room.
+    val firstPrices = HashMap<Long, CardmarketPrice>()
+    for (price in prices.records) {
+        val first = firstPrices.putIfAbsent(price.productId, price)
+        require(first == null || first == price) {
+            "Der Cardmarket-Preisguide enthält widersprüchliche Daten für dasselbe Produkt."
+        }
+    }
     val productIds = products.records.asSequence().map { it.id }.toHashSet()
     val matchedPrices = prices.records.filter { it.productId in productIds }
     // Necessary minimum only: a join is not proof that every card has a price.

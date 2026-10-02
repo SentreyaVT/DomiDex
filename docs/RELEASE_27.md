@@ -2,6 +2,95 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-02.
 
+### Conflicting price-guide rows: reproduced and rejected before persistence (2026-10-02)
+
+One narrow importer preflight now rejects differing parsed values for the same
+Cardmarket product within one guide. All nine prices, nulls and category are
+compared before catalog joining. Equal duplicates preserve order/counts; later
+independent files can still correct the same source timestamp. Schema, network,
+identity mapping, history and FULL sync are unchanged. The temporary map adds
+expected O(n) traversal/O(unique IDs) references; added peak memory/time is not
+yet quantified and no performance improvement is claimed.
+
+The original code fails the new integrity test using the real parser and Room:
+catalog rename/new product and conflicting prices overwrite the prior good rows.
+Focused JVM RED is35PASS/1intentionalFAIL; Room RED3PASS/1intentionalFAIL. After the
+fix the complete JVM suite is **917PASS, 1 existing optional live SKIP, 0 failures**
+(134classes), and Room is **4/4PASS**, 0.821s. Separate HTTP/outer RUNNING→ERROR
+status handling is not exercised by that Room test; it must not be described as
+preserving the entire production status row. Existing rollback/correction tests
+are unchanged. Independent review found no blocker.
+
+Debug/test APKs, release Kotlin and both lints pass in3m37s; lint retains148debug/
+151release warnings, no errors. Inputs and the complete protected v26 archive
+remain unchanged during the build. New standard debug APK SHA256:
+`09cdad1dfafd62f37f482cf2d63a7c287009b074f0dd8ba2402a531e1a864633`;
+test APK `08dab2f72777522dce5f799accfcd8b23f2e38ea74409bee75b0b257d0618741`.
+Only the offline emulator received them; **the Redmi was not changed**.
+Evidence: `artifacts/release27-engineering-20261002/pricing-duplicate-review/`
+`red-011429-1f823aa9/`, `room-124815-f2ca6444/`, `green-124911-83029c8c/`,
+`room-125324-14b2f629/`. Exact semantics/limits: `docs/cardmarket-import.md`.
+
+The first unchanged371-case rerun, `artifacts/android-regression/`
+`20261002T125359Z-f666efba/`, is **INCOMPLETE, NOT PASS**: Windows Event1000 records
+qemu-headless0xc0000005 at14:54:31CEST, unknown fault module, during the same Holo
+preview selector previously documented as renderer-sensitive. The host process
+crash is confirmed; a specific graphics-driver cause or Android code failure is
+not. Recovery uses the earlier proven host-GPU/4GiB configuration, no snapshot,
+no data wipe or persistent AVD change. Receipt: `emulator-recovery.json` alongside
+the price evidence. The unchanged full matrix subsequently passes **371/371**, no
+skips/errors, 260.948s, with frozen inputs/APKs and offline/no-reverse afterward:
+`artifacts/android-regression/20261002T130324Z-51cfd6db/manifest.json`. All24 pure
+runner contracts also pass. The4 importer Room cases are separate, not hidden
+inside the371 selection. Different renderer/RAM excludes a performance A/B claim.
+
+The frozen official download had no duplicate IDs: this is preventive integrity
+hardening, **not** closure of its outstanding Cardmarket coverage gaps. Earlier
+WorkManager/R8 proofs retain their own recorded source/binary identities.
+**Gate15 remains locked; no signing, AAB, deployment, push or Play action.**
+
+### Actual local WorkManager retry and shared-view work reduction (2026-10-02)
+
+The unchanged production private-binder scheduler/worker has now run through real
+WorkManager2.11.2 with the official TestScheduler, real clock and local Auth/Firestore
+SDKs. Root result: **1/1 PASS, 36.744s**, exactly two WorkSpecs and factory attempts
+`[0,1,0]`. Held CONNECTED constraint invokes nothing; genuine SDK network failure
+causes retry without any local/remote mutation. The second attempt starts24ms after
+its unchanged30s eligibility (30,052ms between factory invocations), receives the
+actual remote ACK and persists FULL metadata. A second actual APPEND_OR_REPLACE
+enqueue leaves the exact document/revision/server timestamp unchanged.
+
+All14 domain Room tables and the foreign owner's pending binder/outbox are checked.
+Independent Admin readback verifies the complete synthetic server tree and unchanged
+account claims. Own databases, two UUID-scoped test packages and local reverses are
+cleaned up. Full source/output inventories and ordinary installed APK
+`6f8cee6b...e19835` remain unchanged. No product-source or Gradle/dependency/signing
+change was needed; only the explicit opt-in test init adds official work-testing.
+The Redmi was not used. Evidence under
+`artifacts/release27-engineering-20261002/workmanager-proof/`
+`5bfca253658a4c7f844cb245428c73b0/runtime/` includes manifest/device/server proof and
+the raw instrumentation log. Durable runner and scope: `scripts/verification/workmanager-proof/`.
+
+Earlier harness failures are retained: compiler-JAR task guard, AGP9 separate Kotlin
+sources, debug-certificate DN order, and raw/canonical Android path comparison.
+The successful receipt confirms `/data/user/0` and `/data/data` aliases for the same
+owned database. No assertions about worker behavior were weakened. The pure runner
+contract suite passes3/3, including malformed/extra signer and skipped-test negatives.
+
+This proves controlled TestScheduler integration, **not** OS JobScheduler, real
+connectivity change, process death, large-budget automatic continuation, expedited
+quota or simultaneous physical-device behavior. Those lifecycle limits remain open.
+Full-Sync stays active; Delta remains deferred. **Gate15 stays locked.**
+
+Separately, Web commit `4d9e1c9` reuses the DTO's exact printing/trend instead of
+resolving it twice when trend is missing. No reads, auth, DTO fields or pricing rules
+changed. The real forwarding-spy fixture reproduces128→64 resolver calls for64
+complete DTOs. Full RED1294PASS/1intentionalFAIL becomes **1295/1295 PASS** (78files,
+23.53s), with seven complete parity cases. Typecheck and focused lint pass. Evidence:
+Web `outputs/release-local/2026-10-02T00-46-18-162Z-16120.*` and
+`2026-10-02T00-49-35-054Z-18684.*`. Existing act/Canvas warnings are retained.
+This is not a measured live speedup or an O(N)/fan-out solution. Nothing deployed.
+
 ### Clarified Redmi follow-up: three correct Nidorina suggestions (2026-10-02)
 
 The installed APK digest was read-only rechecked and remains `6f8cee6b…e19835`.

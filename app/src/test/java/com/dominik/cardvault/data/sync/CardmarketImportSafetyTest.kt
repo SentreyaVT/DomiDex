@@ -163,6 +163,67 @@ class CardmarketImportSafetyTest {
         assertNull(prepareCardmarketImport(products(), prices(records = listOf(price.copy(trendMinor = null)))).prices.single().trendMinor)
     }
 
+    @Test fun contradictoryPriceRowsInOneGuideAreRejectedInEitherOrder() {
+        val complete = price.copy(
+            average1Minor = 1100, average7Minor = 1150, average30Minor = 1175,
+            holoAverageMinor = 2100, holoLowMinor = 1900, holoTrendMinor = 2200,
+        )
+        // Every currently parsed value participates, including null versus present.
+        val conflicts = listOf(
+            complete.copy(categoryId = 52),
+            complete.copy(averageMinor = 1201), complete.copy(lowMinor = 1001),
+            complete.copy(trendMinor = 1501), complete.copy(average1Minor = 1101),
+            complete.copy(average7Minor = 1151), complete.copy(average30Minor = 1176),
+            complete.copy(holoAverageMinor = 2101), complete.copy(holoLowMinor = 1901),
+            complete.copy(holoTrendMinor = 2201),
+            complete.copy(averageMinor = null), complete.copy(lowMinor = null),
+            complete.copy(trendMinor = null), complete.copy(average1Minor = null),
+            complete.copy(average7Minor = null), complete.copy(average30Minor = null),
+            complete.copy(holoAverageMinor = null), complete.copy(holoLowMinor = null),
+            complete.copy(holoTrendMinor = null),
+        )
+        conflicts.forEach { other ->
+            assertNotEquals(complete, other)
+            listOf(listOf(complete, other), listOf(other, complete)).forEach { records ->
+                rejectsBeforeCommit(products(), prices(records = records))
+            }
+        }
+        // Full-file validation must not silently hide a conflict through the catalog join.
+        val unknown = complete.copy(productId = 11)
+        listOf(
+            listOf(complete, unknown, unknown.copy(trendMinor = 1501)),
+            listOf(complete, unknown.copy(trendMinor = 1501), unknown),
+        ).forEach { records -> rejectsBeforeCommit(products(), prices(records = records)) }
+        // Conflicts need not be adjacent, and an agreeing repeat is not an end marker.
+        val conflicting = complete.copy(trendMinor = 1501)
+        listOf(
+            listOf(complete, unknown, conflicting),
+            listOf(complete, unknown, complete.copy(), conflicting),
+        ).forEach { records -> rejectsBeforeCommit(products(), prices(records = records)) }
+    }
+
+    @Test fun agreeingDuplicatePriceRowsKeepOrderAndExistingImportCounts() {
+        val second = price.copy(productId = 11, trendMinor = null)
+        val records = listOf(price, second, price.copy(), second.copy())
+        val prepared = prepareCardmarketImport(
+            products(listOf(product, product.copy(id = 11))), prices(records = records),
+        )
+        assertEquals(records, prepared.prices)
+        assertEquals(sourceTime, prepared.sourceCreatedAt)
+        assertEquals(Instant.parse("2026-09-22T00:48:57Z").toEpochMilli(), prepared.effectiveAtEpochMillis)
+    }
+
+    @Test fun differentFilesMayCorrectTheSameSourceTimestampWithoutStickyDuplicateState() {
+        val corrected = price.copy(trendMinor = null, averageMinor = 1625, holoTrendMinor = 2500)
+        val original = prepareCardmarketImport(products(), prices(records = listOf(price)))
+        val next = prepareCardmarketImport(products(), prices(records = listOf(corrected)))
+        assertEquals(listOf(price), original.prices)
+        assertEquals(listOf(corrected), next.prices)
+        assertEquals(original.sourceCreatedAt, next.sourceCreatedAt)
+        assertEquals(original.effectiveAtEpochMillis, next.effectiveAtEpochMillis)
+        assertEquals(original, prepareCardmarketImport(products(), prices(records = listOf(price))))
+    }
+
     @Test fun malformedJsonNeverReachesCommitBoundary() {
         var commits = 0
         assertThrows(IOException::class.java) {

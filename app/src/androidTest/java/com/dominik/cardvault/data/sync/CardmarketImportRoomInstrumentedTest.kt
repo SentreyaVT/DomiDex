@@ -19,6 +19,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.time.Instant
+import okio.Buffer
 
 /** Real importer persistence and DAO reads, not a provider download or WorkManager test. */
 @RunWith(AndroidJUnit4::class)
@@ -193,6 +194,45 @@ class CardmarketImportRoomInstrumentedTest {
     }
 
     private fun product(id: Long) = CardmarketProduct(id, "Product $id", 1, 6_601, null)
+
+    @Test fun contradictoryRowsCannotReplaceTheLastGoodRoomSnapshotInEitherOrder() = runBlocking(Dispatchers.IO) {
+        persistCardmarketImport(database, prepared(
+            listOf(product(42), product(43)),
+            listOf(price(42).copy(trendMinor = 1000, holoTrendMinor = 2000), price(43)),
+        ), fetchedAt)
+        val before = snapshot()
+        val first = duplicateGuideRow(trend = "2.25", reverse = "3.75")
+        val conflicts = listOf(
+            duplicateGuideRow(trend = "4.50", reverse = "3.75"),
+            duplicateGuideRow(trend = "2.25", reverse = "7.50"),
+            duplicateGuideRow(trend = "2.25", reverse = "3.75", average = "null"),
+        )
+        conflicts.forEach { other ->
+            listOf(listOf(first, other), listOf(other, first)).forEach { rows ->
+                val guide = CardmarketParsers.prices(Buffer().writeUtf8(
+                    """{"version":1,"createdAt":"$sourceTime","priceGuides":[${rows.joinToString(",")}]}""",
+                ))
+                assertEquals("The actual parser must deliver both rows", 2, guide.records.size)
+                assertNotEquals(guide.records[0], guide.records[1])
+                val incomingProducts = ParsedDownload(1, sourceTime, listOf(
+                    product(42).copy(name = "Must not overwrite the original"), product(44),
+                ))
+                val failure = runCatching {
+                    // These are the same preflight and transaction called by CardmarketImporter.
+                    // Deliberately do not manufacture its separate RUNNING/ERROR catch state.
+                    val incoming = prepareCardmarketImport(incomingProducts, guide)
+                    persistCardmarketImport(database, incoming, fetchedAt + 5000)
+                }.exceptionOrNull()
+                assertEquals("Rejected input cannot change products, prices or SUCCESS metadata", before, snapshot())
+                assertTrue("A contradictory guide must fail in preflight", failure is IllegalArgumentException)
+            }
+        }
+    }
+
+    private fun duplicateGuideRow(trend: String, reverse: String, average: String = "5.32") =
+        """{"idProduct":42,"idCategory":1,"avg":$average,"low":4.50,"trend":$trend,
+            "avg1":5.00,"avg7":5.10,"avg30":5.20,"avg-holo":8.00,"low-holo":7.00,
+            "trend-holo":$reverse}"""
 
     private fun price(id: Long) = CardmarketPrice(
         productId = id, categoryId = 1, averageMinor = 532, lowMinor = 450, trendMinor = null,
