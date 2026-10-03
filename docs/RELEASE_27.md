@@ -53,6 +53,61 @@ GitHub source backup and an AAB release are separate operations. A push of
 replacing `master`; no GitHub stable release or Play upload follows implicitly.
 
 
+### Storage foundation, verified source backup and deployment scope (2026-10-04)
+
+The authorized engineering branch was pushed successfully and remote-read back
+as `339ac430dabc33164af5005912028189fd746730`. It preserves the previous hardening
+history and separately records artwork/search (`9acf47b`), Espresso compatibility
+(`9700103`), audit tools (`d469c4f`) and status (`339ac43`). `master` and the old UI
+branch were not replaced. No GitHub Release, tag or Play upload was created.
+The new artwork audit helpers passed all46 Node cases, no skips/failures. A scoped
+signature/path scan covered all95 previously outgoing Git text snapshots and the
+then49 changed/untracked files: no real credential finding in those categories;
+one incomplete private-key header is an intentional negative test. This is not a
+guarantee against arbitrary obfuscation or an audit of binary/archive contents.
+Local hardware-proof scaffolding and all ignored data/build artifacts stay local.
+
+Two small storage foundations are now locally verified:
+
+- Coil3.3 uses the same existing `coil3_disk_cache` directory and one shared lazy
+  DiskCache with an explicit64MiB LRU target. No RAM policy, photo, scanner upload,
+  Outbox, Firebase cache, permissions or database data is changed. Coil already had
+  a default bounded LRU; it was not shown to be the cause of13GB growth. Open edits,
+  snapshots/journal overhead and a large pre-existing journal before the next trim
+  can exceed64MiB temporarily. This is not an instantaneous filesystem hard cap.
+- A pure UTC twelve-calendar-month policy and optional window parameters in both
+  portfolio builders preserve all pre-window state updates and emit only real
+  in-window observations. The existing default remains unchanged. These helpers
+  are **not yet wired into the repository, price importer or maintenance**, and
+  therefore have not deleted or shortened any stored history.
+
+Final offline JVM/debug-lint proof for these parts:
+`artifacts/release27-engineering-20261004/storage-prerequisite/`
+`jvm-231641-5fc5860f/manifest.json`, SHA256
+`cb0e3cec8c3542c8bc5326afbce48f00108b5215b1d3b732f25d178cd638a71d`.
+All source/protected inputs remain unchanged across that run.144 suites contain
+999 cases: **998 PASS, 1 existing opt-in live SKIP, 0 FAIL/ERROR**. This adds four
+real Coil journal/file tests and fourteen calendar/window tests; original test
+bodies/assertions are retained. Debug lint has0 errors,167 warnings,4 hints.
+The preceding proof `jvm-231251-d15dc4e5` had the same successful case count; a
+nullable-parent warning in the new test was then made explicit and the full
+suite rerun. Neither run builds an APK/AAB, signs a release or touches a device.
+
+The user also explicitly permits the necessary new Firebase/Web backend pieces
+to be deployed **after successful local tests**. This is not a claim they exist,
+passed, or were deployed; no production write has occurred in this follow-up.
+Google Play and automatic personal-photo uploads remain excluded. The next
+implementation is a versioned public-market snapshot contract, bounded local
+price maintenance and isolated large-data verification; no change to FULL sync.
+
+Existing AVDs have10G data partitions, insufficient for the13GB test and safe
+compaction overhead. A separate larger test environment is required; no existing
+AVD or phone is resized/cleared. The existing366095-row seed took76.044s and its
+database was74616832 bytes: a simple linear projection is roughly4h to seed13GiB
+with that old row helper, **an estimate only**, not a measurement at that scale.
+Generator calibration, actual low-space/restart/reclamation proofs and the
+central cache/restore implementation remain OPEN. Gate15 remains blocked.
+
 ### German visual name search and targeted Redmi update (2026-10-03)
 
 The user reported that Add card > Pokemon search returned English Cardmarket
