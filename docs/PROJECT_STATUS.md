@@ -20,6 +20,16 @@ bleibt gesperrt; genaue Artefakte und Grenzen im aktuellen Release-27-Ledger.
 
 ## Unterschiedliche Projektstände
 
+**Fortschreibung 04.10.2026:** Der Nutzer hat Signierung und GitHub-Push
+grundsätzlich freigegeben, aber vor dem Start zusätzlich eine nachzuweisende
+Speicherbegrenzung als Voraussetzung für das AAB ergänzt. Preisverläufe dürfen
+nach ausdrücklicher Auswahl auf zwölf Monate begrenzt werden. Persönliche Daten,
+Gastdaten und ausstehende Synchronisierung dürfen dabei nicht verloren gehen.
+Die bisherige History-Optimierung begrenzt die gespeicherten Zeilen noch nicht;
+ein Cloud-Vertrag für alte Marktpreisstände ist nicht vorhanden. Gate15 bleibt
+bis zur Speicherabnahme und den übrigen kritischen Nachweisen gesperrt. Ein
+Engineering-Push ist keine Releasefreigabe. Google Play bleibt unberührt.
+
 | Ebene | Befund vor diesem Dokumentations-Commit |
 | --- | --- |
 | GitHub Standardbranch | `master`, `9bbe7bc`, App `1.0-beta`, code 16 |

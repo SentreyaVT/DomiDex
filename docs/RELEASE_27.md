@@ -1,6 +1,544 @@
 # Release 27 engineering ledger
 
-This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-03.
+This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
+
+### Release authorization and new storage prerequisite (2026-10-04)
+
+The user authorized creating the signed R27 AAB and pushing the engineering
+branch; Google Play upload remains explicitly excluded. Before any signing or
+build started, a new user-authorized requirement arrived from the parallel
+architecture audit: bounded local storage and a safe large-installation migration
+must PASS before Gate15. The originating human instruction was read back and
+verified. This newer prerequisite takes precedence over the earlier permission
+to create an artifact. **No R27 AAB has been built or signed in this follow-up.**
+
+The user subsequently chose **price history limited to 12 months**, instead of
+retaining the complete history in a new cloud archive. This authorizes shortening
+price history only, not deleting collections, private binders, layouts, photos,
+price preferences, guest data or unacknowledged synchronization work. FULL sync
+remains the R27 strategy; Delta remains disabled.
+
+Read-only verification confirms the October1 retention finding: every distinct
+Cardmarket guide timestamp appends global product history, with no runtime
+retention. The previous portfolio projection fixes read costs, not stored rows.
+The current public Web endpoints serve current metadata/prices, not a persistent
+historical-price restoration contract. A 12-month cutoff alone therefore neither
+proves a fixed byte budget nor makes all Room rows reproducible from Firebase.
+
+Safety constraints for the forthcoming implementation:
+
+- Do not apply a global Room file/page cap or evict user tables. Gast/local-only
+  state, PENDING/ERROR/CONFLICT mutations, tombstones and both outboxes may be the
+  only current copy. Fresh cloud collection rows do not restore personal photo
+  bytes or grading analyses; FULL completion is not an atomic server snapshot.
+- Price pruning must preserve the latest source-qualified price, an exact
+  pre-window state for portfolio carry-forward (including null/zero), and the
+  independently defined Normal/Reverse percentage bases. Removing old rows or
+  filtering delta events before computing the initial value can corrupt charts.
+- An image cache is distinct from personal photos, scanner evidence and pending
+  uploads. Only reconstructible cache files may be evicted.
+- The 13-GB migration proof is not yet executed. Resumption, low free space,
+  WAL/temporary growth, logical integrity and actual physical reclamation must
+  be tested; a row DELETE alone is not proof that disk space was returned.
+
+The storage gate and the previous critical gate failures remain OPEN. In
+particular API37.1 still records 368/371 and the SDK lock-only case 17/18. API26
+public2/edge13/count3/multi-window proofs already PASS; its annual aggregate13
+run remains incomplete at the diagnostic-plan cap. The real TestScheduler retry
+and bounded FULL continuation already PASS, but are not physical multi-device or
+real OS scheduling evidence. No old failed artifact is relabelled as passing.
+
+GitHub source backup and an AAB release are separate operations. A push of
+`codex/release-27-hardening` is permitted without labelling it release-ready or
+replacing `master`; no GitHub stable release or Play upload follows implicitly.
+
+
+### German visual name search and targeted Redmi update (2026-10-03)
+
+The user reported that Add card > Pokemon search returned English Cardmarket
+product records instead of cards with German names and images. That UI branch
+called the price-product catalogue; it now queries the German visual catalogue,
+keeps exact card/set/local-number identity and opens the chosen card directly.
+Results show image, German name, set and number, without price-product metadata.
+Pagination, debouncing, stale-query cancellation, explicit error/retry and a
+bounded 24-page/15-minute memory cache are covered. The physical-card filter uses
+the provider's Pocket-series membership, not a guessed ID/number boundary.
+Missing German artwork can use an existing image of the exact same card ID and
+local number; that fallback never replaces the German name or supplies prices.
+The selected card still uses the unchanged exact-printing Cardmarket resolver.
+Scanner, Full-Sync, schemas, rules and production configuration were not changed.
+
+Frozen debug build `green-185220-47fa643b` completed in 3m57s: **938 JVM cases,
+937 PASS, 1 existing opt-in SKIP, 0 FAIL/ERROR**, including 12 new search cases.
+Debug and test APK assembly, release Kotlin compilation and debug/release lint
+passed. Release-26 AAB, mapping and symbol artifacts retained their exact hashes.
+No new release AAB or release signing was performed.
+
+The offline owned API36 emulator ran four new real Compose/Room search cases and
+the four byte-unchanged BinderPricePreview cases: **8/8 PASS, 0 skips, 34.696s**.
+Tests verify rendered image pixels, German names, direct selection, pagination,
+secret numbers, stale results/retry and no namesake-price borrowing. Fixtures are
+synthetic; this is not an exhaustive live-provider or all-card image guarantee.
+`runtime-green8-496c75585aff4294a205498c02867802` preserves the raw evidence.
+The runner's overall exit remains **1**, because its strict post-run idle guard
+found cached test PID8454 (`cached=true`, process state18/CRE). Source/APK hashes,
+installed hashes and offline/no-reverse checks passed. No test was weakened, no
+result rewritten and no Android process was stopped to disguise this guard result.
+
+At the user's request the ordinary app was updated in place on Redmi e30bd3ce,
+model24115RA8EG, with APK SHA256
+`21f117a80b791008abb2dddfd1a82b500395223b95c6e370e002fb935a6d18c7`.
+Its normal debug certificate is unchanged (`61e8314b...`); installed-file readback
+matches exactly. Version remains27/1.0-closed-alpha.6. Original first-install time
+2026-10-01 07:55:34 is retained; last update2026-10-03 21:00:40. No uninstall or
+data clear occurred. Launch returned Status ok/COLD, TotalTime2202ms/WaitTime2231ms;
+PID8412 and foreground MainActivity were verified, with no AndroidRuntime error
+in the scoped post-launch log. Network settings remain airplane0/Wi-Fi1/mobile1.
+This is an installation/start check, not a live search or scanner hardware proof.
+Evidence is under ignored `artifacts/release27-engineering-20261003/german-name-search-review/`.
+The complete R27 gates were not rerun or declared closed; Gate15 remains locked.
+
+### User-requested Redmi debug update and manual-test launch (2026-10-03)
+
+The user explicitly requested installation and launch on the connected Redmi.
+The existing ordinary APK `6f8cee6b...` was first pulled to the local ignored
+`artifacts/release27-engineering-20261003/redmi-debug-install-20261003T1835/`
+directory. Both it and current debug APK `2c9ae510...` verify with the same normal
+Android debug certificate `61e8314b...`. In-place `-r -t` installation returned
+Success; the installed file was independently hashed as exactly `2c9ae510...`.
+Version remains27/1.0-closed-alpha.6; original first-install time remains
+2026-10-01 07:55:34 and update time is2026-10-03 20:34:31. Existing45,236,224-byte
+collection database and424,392-byte WAL retained their pre-launch sizes/timestamps.
+No uninstall, app-data clear, private-data export or network-setting change occurred.
+
+Launching `.MainActivity` returned Status ok, COLD, TotalTime1451ms/WaitTime1481ms;
+PID4391 and the foreground MainActivity were subsequently verified. This is a
+single launch observation, not scanner/performance regression proof or verification
+of the user's signed-in state. The user can now test the ordinary app. The planned
+separate33-case hardware container has not been installed or executed; automated
+device tests must not interrupt this manual session. `observed-install.json`
+records the scoped observation. No new build, release signing, Play upload,
+backend/configuration mutation or release approval occurred. Gate15 stays locked.
+
+### API26 actual compatibility results and newest-stable Android17 follow-up (2026-10-03)
+
+The isolated API26 run now has actual, distinct results, all with unchanged
+product/test APKs `2c9ae510...` / `54a1ac35...` and successful offline/idle/input
+postchecks. Under `artifacts/release27-engineering-20261003/api26-compatibility-review/`:
+
+- `runtime-api26-public2-756e24fdeb4e473cb0dfed46bb26c1d9`: PASS2/2,1.945s.
+- `runtime-api26-edge13-4e3d1d08fb3b453ba4a5412687428023`: PASS1/1,12.109s,
+  all13 original counterfactual states. The earlier `edge13-3e164b1c...` remains
+  overall FAIL despite JUnit1/1: API26's `head` lacks `-c`. The separate export
+  fix uses `cat` only after exact remote byte-count/SHA256 checks, with the same
+  host byte cap and repeated metadata verification; no Android assertion changed.
+- `runtime-api26-count3-4014b9f036744844985e0245c54071c8`: PASS1/1,61.605s,
+  complete 20000-safe -> 20001-legacy-fallback -> 20000-safe transitions.
+- `runtime-api26-windows1-2cda29c72bc149b19f14f8e39ae8c70c`: PASS1/1,69.067s,
+  full structured proof, all three phases with100001 typed tuples, both independent
+  writer commits before a real cursor refill, all15-table hash restoration and
+  exact owned-fixture cleanup. This is actual API26/SQLite3.18.2 evidence, not
+  physical-device, release/minified or performance-equivalence proof.
+- `runtime-api26-aggregate13-9b999a5c63aa40c0b44883cac06c7609`: **FAIL remains**,
+  101.706s. The real Android test hits `postFixExplain`'s64-row diagnostic cap on
+  the aggregate SQL plan, not a reported model mismatch. The13 preceding samples
+  and owner/model comparisons completed, but final hash/FK/sync assertions were
+  not reached. A subsequent read-only, size/digest-verified export preserves the
+  original FAIL report in `failed-aggregate-report-diagnostic/`: legacy plan5rows,
+  aggregate plan incomplete, owned UUID database closed and files absent. This
+  does not qualify as complete annual proof; no cap/assertion was relaxed.
+
+The user separately approved the newest stable Android17 emulator. Google's
+[stable-release overview](https://developer.android.com/topic/generic-system-image/releases)
+identifies Android17QPR1 as stable and QPR2 as Beta;
+[API mapping](https://developer.android.com/media/platform/xhe-aac-encoding)
+identifies QPR1 as API37.1. Therefore the installed37.2-beta3 image is not used as
+the newest-stable proof. Only `system-images;android-37.1;google_apis_ps16k;x86_64`
+revision9 was additionally installed (76.438s), no new license acceptance, all
+protected Release26/tool/existing-AVD hashes unchanged. Setup receipt:
+`api37-compatibility-review/image-install/result.json`. New AVD
+`DomiDex_R27_Compatibility_API37_1` uses port5560, emulated rear camera (no webcam),
+2GiB RAM and no snapshots. Only the newly created, idle5558 API26 emulator was
+shut down after its tests to free RAM; existing5554/5556 and physical phones were
+not changed. Android17 runtime proof is pending; targetSdk37 is not that proof.
+
+The actual new image reports stable `REL`, preview0, SDK37, `sdk_full=37.1`
+and an empty `sdk_minor` (not an invented minor-property value), fingerprint
+`google/sdk_gphone16k_x86_64/emu64xa16k:17/CP31.260623.012/16064790:userdebug/dev-keys`.
+Actual `getconf PAGE_SIZE` is16384; this is x86_64 emulator evidence, not physical
+ARM64. The old Espresso3.5.1 dependency was unsuitable for the new target37
+MessageQueue according to [Android's compatibility guidance](https://developer.android.com/about/versions/17/changes/messagequeue).
+Only `espressoCore` in the test version catalog changed to3.7.0. Actual generated
+AndroidTest dependency XML `9d085a72...` resolves core/idling3.7.0, Test core/runner1.7.0,
+monitor1.8.0 and unchanged ext-junit1.1.5. No MessageQueue compatibility override
+was disabled, and no runtime/release dependency was changed.
+Build `api37-compatibility-review/green-180347-0553f724` passes3m53s,104 tasks,
+20 executed84 UP-TO-DATE, both lints/release Kotlin; JVM is UP-TO-DATE, not a fresh
+925-case claim. Product APK remains byte-identical `2c9ae510...`; only the test APK
+changes to `9354bed5...`. All frozen sources/Release26 files are unchanged during
+that build. First installation on only5560 passes exact certificate/installed-hash,
+zero-account/offline/idle/no-reverse checks (`installed-debug.json`).
+The separate Full371 runner has23 pure checks passing0.054s and independent peer
+review. A caught selection-hash transcription typo was corrected against the
+unchanged actual selection file, not by altering any test identity or assertion.
+Final runner `72c36e11...`, observed profile `0682cb6f...`, boot
+`1e1b10f1-1923-4dce-b45b-c1259a95999e`; live read-only preflight is CHECKED with all
+postguards and frozen inputs intact. The actual unchanged371-case runtime
+`runtime-api37-full371-8716343fa8164b57b65697517032f79d/` completed in280.558s:
+**368/371 PASS,3 FAIL,0 skips; overall FAIL remains**. The three failures are:
+
+- `PortraitScannerCameraInstrumentedTest#originalCameraJpegsRemainPortraitForEveryDisplayRotation`:
+  the fresh emulator lacked the CAMERA runtime grant. The missing permission was
+  subsequently granted only on owned5560 and verified; a complete rerun is pending.
+- `ScannerSessionIsolationInstrumentedTest#cancelDuringLeasedNativeOcrReleasesInputsAndAllowsAnotherIdentity`:
+  the second capture returned no number instead of098/197 after the earlier lease,
+  cancellation and bitmap-cleanup assertions had passed.
+- `ScannerSessionIsolationInstrumentedTest#sameAnalyzerReadsNewIdentityFromSecondSameSizedCapture`:
+  already the first capture returned no number instead of094/084; name OCR returned
+  Pikachu ex. This run does not establish a stale second-session cache defect.
+
+Actual scanner logs report orientation score20 and
+`orientation_evidence_insufficient` for both OCR failures. The conservative manual
+fallback deliberately clears the number in that state. Timeout, font/image and
+ML-Kit causes are not yet distinguished. No OCR deadline or identity assertion
+was weakened. The original runner also failed its strict post-idle check because
+cached test PID3608 remained; frozen inputs and offline state were intact. A bounded
+read-only diagnostic preserves these observations in
+`failed-full371-diagnostics.json`. Only the newly created idle5560 emulator was
+then stopped to release host memory; no ordinary app was force-stopped or cleared.
+Its two-core720x1600 profile differs from the four-core1080x2400 API36 regression
+emulator, so these runs are not a controlled performance comparison.
+
+The user subsequently supplied physical Redmi `24115RA8EG`, Android16/API36,
+ARM64/4096-byte pages, serial `e30bd3ce`, and authorized necessary local test
+installation/cleanup. Its ordinary debug R27 app currently hashes `6f8cee6b...`
+and contains existing collection data. Initial inspection changed nothing. A
+separate disposable offline-permission test package is being prepared for a small
+hardware-compatible selection; emulator-only suites will not have their guards
+bypassed. This is not yet a physical-device test result.
+
+Local scanner recreation source checkpoint is `8b53083`. All results above are
+local debug evidence. Full-Sync remains R27, Delta disabled; Gate15 remains locked.
+No signing, new AAB, Git push, production modification or publication occurred.
+
+### New Android-8 test environment and scanner recreation checkpoint (2026-10-03)
+
+The user explicitly authorized downloading the official API26 image and creating
+a separate local debug-test emulator. Only `system-images;android-26;google_apis;x86_64`
+revision16 was installed (41.172s); no new license was accepted. The exact existing
+Release26 files, SDK tools and existing AVD configurations retain their recorded
+hashes. New `DomiDex_R27_Compatibility_API26` uses only `emulator-5558`, Android8/API26,
+model `Android SDK built for x86_64`, SQLite3.18.2, 1536MiB RAM, two cores and no
+camera. It is offline with zero accounts and no reverse mappings. Only the newly
+created emulator needed a root-only airplane-mode broadcast/Wi-Fi/data setup;
+the normal shell broadcast was denied and was not falsely treated as successful.
+No ADB-server restart, existing-emulator configuration change or phone operation
+occurred. Setup receipts live in `artifacts/release27-engineering-20261003/`
+`api26-compatibility-review/`. First installation of the normal debug app `2c9ae510...`
+and test APK `54a1ac35...` passed exact installed-hash, debug-certificate, source,
+offline/idle and protected-file checks. This setup alone is NOT API26 app proof.
+The new API26 runner/report contracts remain separate from the fixed API36 ones.
+SQLite3.18.2 uses the documented old EQP positional format, not the newer node tree;
+no original report or existing API36 validator is rewritten to manufacture a pass.
+
+The additive real MainActivity recreation test runs through the production scanner
+screen: old Activity destroyed, old PreviewView detached/IDLE, new Activity/View
+distinct and STREAMING, restored scanner route, no implicit capture/upload and
+protected preferences/files unchanged. Before launch it checks only the existing
+schema13 database through a read-only framework handle and a throw-only corruption
+handler, with no pending backup journal/presentation restore. No Room migration or
+default corruption repair/deletion is invoked. Twelve pure parser tests pass0.079s.
+Build `green-172125-fce12b2c` passes1m21s,104 tasks8 executed96 UP-TO-DATE, with both
+lints and release Kotlin; the product APK remains exactly `2c9ae510...`.
+The actual `g7-recreation-review/runtime-recreation1-`
+`2cb25ec9f7784edeab3645d9399f764f/` has **1/1 JUnit PASS,13.581s**, zero skips,
+all Android preconditions and frozen-input checks, but **overall FAIL remains**:
+strict post-idle detected cached test PID7865. A subsequent independently guarded
+background-test-only `am kill` verified exact PID/start/UID/APK and closed camera,
+activities/services before acting; `assisted-cached-test-7865.json` records exit0.
+This is assisted cleanup, not natural process-exit proof and not a rewritten PASS.
+No app force-stop/data clear occurred. G7 still lacks physical/process-death and
+other lifecycle coverage; Gate15 is not unlocked by this finite recreation test.
+
+The prior rebuilt test APK `443db33e...` also passed the complete unchanged
+**371/371** selection, zero skips/failures,305.723s:
+`artifacts/android-regression/20261003T170036Z-60880268/`. Its cached test PID4575
+required separately recorded guarded assistance (`g7-mainactivity-review/`
+`assisted-cached-test-4575.json`). No natural-exit claim is made for that run either.
+Local-only Git checkpoints now preserve the portfolio fix (`3da0e5c`), executor
+test correction/evidence (`af472a2`), and Web SDK harness (`22012b9` in DomiDex-Web).
+No push, signing, AAB build, deployment, Play upload or production change occurred.
+Full-Sync remains R27; Delta-Sync remains disabled. Critical gates remain open.
+
+### Test-only callback correction and broad scale rerun (2026-10-03)
+
+The separately isolated six-case gRPC executor regression proves the exact defect
+before its fix: `g9-grpc-executor-review/runtime-executor6-red-`
+`2203864e649441e7930cf6bc98edeaeb/` has precisely five intended assertion failures
+and one unchanged delegate-control PASS (0.172s). It remains RED/exit1, not a gate
+success. After the reviewed test-only correction preserves the original
+`CallOptions.executor`, `runtime-executor6-green-aa6f07147eb249d9a5302fc160ca7943/`
+passes6/6 (0.165s), zero skips, with exact source/APK, offline/idle and no-reverse
+guards. The eight pure parser checks also pass; synthetic logs are not SDK proof.
+The product APK stays `2c9ae510...`; build `green-164540-5ecb81ec` passes1m17s,
+both lints/release Kotlin, with JVM task UP-TO-DATE. Only test APK `7cc57023...`
+was installed on owned5556. No production code, Rules, deadline, assertion or
+existing18-case contract was relaxed. The actual18-case rerun now completes
+**17/18 PASS, overall RED**,230.550s: Web `outputs/collection-sync-session-local/`
+`2026-10-03T16-51-59-914Z-ae6def1ed997488c87e64ba673141a76/`. The formerly crashing
+cache/sign-out case passes1.884s; no process crash remains in this run. Only the
+unchanged lock-only listener case fails31.923s. The lock-plus-data-change case
+passes2.737s and final1001-binder case18.436s. All18 complete Admin preflights and
+readbacks, nineteen unchanged accounts, both exact scoped CAS restoration
+protocols and all frozen-input/port/reverse/instrumentation postchecks complete;
+no readback errors. `serverVerified=false` and overall exit1 remain correct,
+because the mandatory original-listener denial was not observed in30s.
+Official [Firebase documentation](https://firebase.google.com/docs/firestore/pricing#cloud_firestore_security_rules)
+describes listener Rules reevaluation after dependent-document updates but gives
+no30s guarantee. The installed CLI15.28.2/Firestore1.22.0 metadata matches the
+[official pinned distribution](https://raw.githubusercontent.com/firebase/firebase-tools/v15.28.2/src/emulator/downloadableEmulatorInfo.json).
+No exact documented Firestore-emulator1.22.0 exception was found. This is an unresolved local boundary,
+not an established production defect or confirmed emulator-internal bug.
+
+The unchanged1k/5k/20k Room-scale selection also passes1/1, all87 samples,
+75.468s: `regression-isolation-review/runtime-scale87-`
+`7a63e207ae9b4c0c8c966e5bf2ec3d20/`. Integrity/cleanup and frozen source/APK,
+offline/idle postguards pass. Portfolio warm medians61.2812/191.4158/1352.0678ms;
+private detail53.7067/191.1109/1137.5155ms. This is the original two-date scale
+fixture, not annual-history, physical-device, p95 or production-load evidence.
+The separate100000-timestamp multi-window test now passes1/1,82.971s with a
+full structured PASS, not merely JUnit success: `g12-portfolio-aggregate-review/`
+`runtime-windows1-e482248c7fe1492bab83617435f2184a/`. All three phases consume
+100001 exact typed tuples across five actual CursorWindows. In BOTH correction
+phases, the independent writer's real commit precedes the next real cursor refill;
+every old-generation tuple remains coherent, then the new safe/unsafe state is
+verified (including public legacy fallback). Both writers terminate; all15-table
+hashes are restored and only the owned UUID fixture files are removed. Nine actual
+queries/cursors, canonical SQL/four bindings and all source/APK/offline/idle guards
+pass. The13 pure report tests distinguish missing overlap as PARTIAL/exit1.
+This is API36/SQLite3.44.3 evidence, not an API26 or performance result.
+Local inventory confirms API26 has no installed system image; API25 cannot replace
+minAPI26. Full-Sync stays active and Gate15 locked.
+
+### Current portfolio boundary evidence and remaining SDK failures (2026-10-03)
+
+The app `2c9ae510...` / test `6a5325d5...` pair passes the fixed **371/371**
+Android regression selection, zero skips/failures, 298.627s:
+`artifacts/android-regression/20261003T160550Z-e2ee2e55/`. A subsequent strict
+idle check detected only cached test PID24720. Exact process/start/UID/APK and
+closed-resource checks preceded assisted background-test cleanup; receipt
+`g7-mainactivity-review/assisted-cached-test-24720.json` preserves that distinction.
+No app data was cleared; this is not a natural-process-exit claim.
+
+Three additional strict owned5556 wrappers now pass, with the same APKs,
+unchanged sources, offline/no-reverse and idle postchecks. Under
+`artifacts/release27-engineering-20261003/g12-portfolio-aggregate-review/`:
+- `runtime-aggregate13-2e93ed695f1c47508bef67b3b8bf7317`: 1/1 PASS,150.139s,
+  all13 samples; four complete actual portfolio models, separate legacy/compact
+  chart parity, all15-table hashes, real SQL/bindings and complete41-node aggregate
+  plan (SQLite3.44.3).346750 legacy rows versus366 compact rows. Public warm median
+  1234.4848ms; sequential diagnostics3614.0961/1432.0562ms, not a new matched SLA.
+- `runtime-edge13-69c034943af840fba91e6c269881adcf`: 1/1 PASS,17.810s,
+  all13 original mutation states and all3 owners; full cards/placements/history
+  and all15-table read-preservation checks.
+- `runtime-count3-eafc6745fa6d48e7b29d3b5989ceb633`: 1/1 PASS,69.372s,
+  exact20000 safe ->20001 fallback ->20000 safe after tombstone; all3 state/field
+  checks and only the test-owned UUID database cleanup. No latency claim here.
+The pure report validator passes10 methods including83 negative cases. These
+synthetic validator records are not device proof. API26 and real multi-window
+concurrent-commit coverage are still open; the additive test draft is not executed.
+
+Actual SDK run `DomiDex-Web/outputs/collection-sync-session-local/`
+`2026-10-03T16-15-12-189Z-ba946e2f37624fa09d756a0bb2318660/` is **16/18, RED**.
+The new lock-plus-valid-seed-change case passes2.686s, including original-target
+SDK denial and local preservation; its ten-event owned CAS restore completes.
+The original lock-only case still fails31.791s without original-listener denial.
+Separately, the previously passing cache/sign-out case crashes during test cleanup:
+an early, not-yet-started test gRPC call invokes its close callback from the wrong
+thread. Stack identifies test-only `PrivatePullDemoGrpcGate.finishLocally`; do not
+label it a production-app crash or waive it. A separate deterministic regression
+and minimal original-executor correction are being reviewed, not yet applied.
+All18 preflights/readbacks and both narrow restore barriers retain45 snapshots,
+nineteen unchanged accounts and final16collections/1029references/1019documents.
+No readback errors; input, port, reverse and instrumentation postchecks pass.
+No whole-run SDK PASS or lock-only permission timing guarantee is claimed.
+
+R8-only revalidation passes3m40s: `r8-portfolio-review/verification.json`, source
+manifest `619da0bb...`, R8 9.3.16/minAPI26, all32 permitted tasks and five DEX
+headers/checksums verified. New portfolio classes appear in mapping `950c5647...`.
+Sources, schemas, harness and every pre-existing build output/Release26 file match
+before/after verification. No APK/AAB was packaged; this diagnostic mapping is
+not an upload artifact and does not prove minified runtime/native-symbol coverage.
+Later additive test-only build `green-162944-1ceae92a` passes2m6s; product APK2c9ae510
+is unchanged, test APKd96ef203 contains the new six-case executor regression and
+multi-window proof. Only that test APK was installed on owned5556; strict source,
+certificate, installed hashes and offline/idle checks pass. Those new tests have
+not yet executed. Generated bytecode separately confirms the test observer's
+read-only transaction calls delegate directly to the real database implementation.
+Full-Sync remains unchanged, Delta disabled. Gate15 stays locked; no upload/push/deploy.
+
+### Guarded portfolio history: genuine RED/GREEN and first matched annual comparison (2026-10-03)
+
+The unchanged-product baseline is now established before the product optimization.
+`regression-isolation-review/runtime-portfolio2-ddf99827bc08457bb72b80fbd88ab89f/`
+has one sustained full-model PASS and exactly one intended final transport failure:
+the safe portfolio still materializes the complete owner history (expected0/actual1).
+Every preceding model, chart, typed15-table hash and no-sync-write assertion passes.
+The earlier two baseline failures remain retained, not rewritten: their unexpected
+Unicode case revealed an oracle assumption, not a product regression. Android's
+literal `lower('reverſe') LIKE '%reverse%'` is characterized independently of any
+fixture/model/query output; the oracle retains separate Kotlin history semantics.
+No comparison, timeout or edge case was dropped to obtain the intended RED.
+
+The narrow read-only product change aggregates bounded weighted historical price
+changes in one transactional SQL snapshot. Unsupported/unsafe states use the
+unchanged chronological history fallback. All original timestamps remain, including
+zero/invalid-price events; no history retention, schema, index, network or sync change.
+This is chart arithmetic, **not Delta-Sync**. Full-Sync remains active and unchanged.
+Generated Debug/Release Room implementations are byte-equal SHA256 `7ab09b7e...`:
+transaction flag true, exactly collection/catalog/raw-price invalidations, four
+owner/source bindings, integer/nullable-long mappings and full cursor iteration
+inside the transaction. API26 and concurrent multi-CursorWindow proof remain open.
+
+Guarded build `pricing-duplicate-review/green-155334-feb219e2/` passes4m7s:
+debug/test APKs, release Kotlin, both lints, **925 executed JVM PASS, one existing
+opt-in SKIP, zero errors/failures**. App `2c9ae510...`, test `8d348968...` are installed
+only on owned offline5556, with exact before/after file hashes and debug certificate.
+Release26 AAB/mapping/symbols and existing bundle/mapping outputs remain byte-exact.
+No release packaging/signing, device action or deployment.
+
+Post-fix portfolio2 passes2/2 in1.531s; focused29 passes29/29 in11.415s, zero skips.
+Both strict wrappers pass frozen inputs, unchanged APKs, idle and offline/no-reverse
+checks. Evidence suffixes `ace37f58c16941a8b4e6a30f0419ab05` and
+`5e45f012216e46be92858e6e00ced374` under `regression-isolation-review/`.
+The unchanged annual58 method passes100.926s, two complete15-table hash sets and
+own-file cleanup: `history-scale-review/room-scale-annual-20261003T160040Z-`
+`7d14136de6a349629b8286c3548c97c3/`; wrapper exit0 and all postguards pass.
+Same owned API36 AVD, fixture, selector, sampling order and three warm repeats as
+baseline `20261003T130504Z-2757ccb4d7dc4442a3ccd35baa6d5b82`:
+365-day public portfolio median **2950.9101 -> 1154.0951ms** (about60.9% shorter).
+The fixture retains366095 raw rows/346750 eligible observations/950 active cards.
+Private detail45.3884 ->53.7927ms is also reported; no private-detail speedup claim.
+These are sequential local debug observations, not a randomized hardware comparison,
+p95/SLA, UI rendering, peak memory, production performance or whole-G12 closure.
+
+An additive18th SDK scenario (lock plus valid seed change) and its exact19-account
+host protocol are now implemented, runtime still pending. The original lock-only
+RED remains mandatory.76 host/stop/safety tests pass twice, zero skips; retained
+Web TAP `outputs/collection-sync-session-local/g9-host18-20261003-1605.tap`.
+Focused oxlint passes. This is host orchestration evidence, not SDK success.
+Subsequent test-only build `green-160338-dbc0d8cb` passes with unchanged app2c9ae510
+and test6a5325d5; its JVM task is UP-TO-DATE, not another execution claim.
+The full371 regression and new aggregate/edge/count runtime proofs remain pending
+at this checkpoint. **Gate15 remains locked; no AAB, signing, push or publication.**
+
+### Existing-listener denial isolated; actual MainActivity lifecycle proof (2026-10-03)
+
+The current diagnostic SDK run remains **16/17 PASS, overall RED**, not a waived
+gate: Web `outputs/collection-sync-session-local/`
+`2026-10-03T15-26-22-772Z-96672a3985a449928db77db74f57fb57/`.
+The original knowledge listener receives no SDK denial within the unchanged30s
+window. A separate real SERVER read of a different existing knowledge document,
+governed by the same Rules, returns **PERMISSION_DENIED** under the lock. Before
+and after this control, the audited original target6 has one ADD, CURRENT/ready,
+zero denial and no audit error; both owners and Auth epoch1 remain unchanged.
+The test intentionally still fails31.636s with the original timeout cause. This
+isolates fresh authorization versus existing-listener reevaluation in this local
+setup; it does not prove the emulator-internal cause or production behavior.
+The product's local-preservation success tail was not reached, so is not claimed.
+All38 complete Admin snapshots/eighteen accounts, exact one-lock create/delete
+barrier, original update-time CAS, restored full tree, frozen172 inputs, owned5556
+offline identity, empty reverses/instrumentation and free ports pass independently.
+Final1001-binder case passes17.338s. No Rules/product/claims change was made.
+
+Current-binary ordinary Android selection passes **371/371**, zero skips/failures,
+288.151s: `artifacts/android-regression/20261003T150751Z-abca265f/`.
+This receipt belongs to app5158a655/test3892dbe1, before the additive tests below.
+Guarded build `green-151551-5c7e2df3` passes1m35s (104tasks,9executed/95up-to-date),
+debug/test APKs, release Kotlin and both lints; JVM is retained UP-TO-DATE evidence,
+not a newly executed917-case claim. App5158a655 unchanged, test8fd0f5b5. No AAB.
+
+New genuine MainActivity navigation/PreviewView test passes twice:13.144s and
+12.801s. It observes actual STREAMING -> Activity CREATED -> IDLE held for1s
+(including every observer event) -> RESUMED -> STREAMING, same activity/view,
+manual shutter UI, no capture/import/queue/upload and unchanged protected capture,
+knowledge/evidence/consent files. Normal startup housekeeping is not whole-DB
+immutability. It is not HOME/OS-death, fresh JPEG, permission-revoke or OEM proof.
+The second wrapper parses **1/1 PASS**, but remains exit1 because Android retains
+a cached test process after return. The first also exposed a singleton-summary
+parser gap. A narrow new-suite-only adapter now requires exactly `OK (1 test)`
+and retains the original strict identity/status/count checks;12 pure adversarial
+tests pass. Shared371 validator and pinned annual/scale runners remain unchanged.
+No original failed log/manifest was rewritten or relabelled as full-wrapper PASS.
+Runtime directories in `regression-isolation-review/`:
+`runtime-maincamera1-5ac73ff1faec4e99b6d5a4f6c7ea8b6b/`,
+`runtime-maincamera1-6edc6d27564a4ee78bc65f6ccbf29d7a/`.
+Before the next runs, fresh strict process identity/cached state/absent app and
+activities/services/closed camera checks allowed only background `am kill` of
+owned test PID19262, later22315. Receipts under `g7-mainactivity-review/` retain
+the reads. This assisted preparation is not natural-exit evidence; no force-stop,
+app clear, physical device or ordinary user AVD was used.
+
+Full-Sync remains unchanged, Delta disabled; portfolio candidate is still under
+matched baseline/fix verification. Gate15 stays locked, no signing/upload/push.
+
+### Real revocation RED, fresh Web regression and camera resource diagnostic (2026-10-03)
+
+The added real knowledge-permission listener proof remains **RED:16/17**. After
+the actual product listener publishes a positive SERVER record, the host reads its
+exact run-owned readiness, independently checks all accounts/documents, creates
+one deletion lock, joins Android and deletes only the unchanged owned lock using
+its original update-time precondition. That complete barrier/restore receipt passes.
+The original live target does not deliver SDK PERMISSION_DENIED in30seconds; the
+new Android case times out at31.616s. It is not passed by cleanup, sign-out, forced
+relisten, fake transport errors or longer waits. Rules do reference the deletion
+lock. Emulator reevaluation versus actual app behavior remains under investigation.
+No product, Rules, claim, signing or sync architecture change was made for this case.
+
+Evidence: Web `outputs/collection-sync-session-local/`
+`2026-10-03T14-59-03-323Z-e748b8810d2d4b25bc5ed0453cb5f2ee/` (exit1).
+All17 complete preflights/readbacks and eighteen nominal accounts are retained;
+final16collections/1028references/1018documents, earlier owners, frozen inputs,
+offline AVDid, no reverse/active instrumentation and free ports remain verified.
+The failed case alone does not prove its Android teardown. Earlier transport-only
+RED `14-45-20-685Z-6a9a01eb63104d4c81eb22e018f4e9f3` created no lock: Windows adb
+changed LF to CRLF. The corrected byte-exact Base64 transport preserves strict
+marker validation and remote shell-v2 exit status.63 host/stop/safety tests pass,
+0skips; TAP is retained under the same output root. Fixture ownership now rejects
+adoption/cleanup of a pre-existing run directory/preferences even after failed setup.
+
+Current guarded build `green-142853-ee040f8f` passes1m38s,104tasks/8executed/
+96up-to-date, debug/test APKs, release Kotlin and both lints. JVM was UP-TO-DATE,
+not newly executed: retained917PASS/one existing opt-in SKIP. Product APK remains
+`5158a6556bfea004ff81f6599b18f70674ba74bec73718da65de6420a1fe7ab3`;
+new test APK `3892dbe1d9d92306834f7f0b0366aecb8e508a4f2e901bbcd07e47e842758a74`.
+Only owned5556's debug test package was updated; hashes independently rechecked.
+
+Fresh existing Web selection passes1295/1295 in27.93s (78files, no failure/skip),
+`outputs/release-local/2026-10-03T14-37-52-355Z-20188.json`. Fresh real local
+private-operations35/35 passes44.170s, unchanged inputs/free ports/exit0:
+`outputs/private-operations-local/2026-10-03T15-03-06-745Z-eeec2e26/`.
+Existing React/JSDOM and SDK/CLI deprecation/blocked-metadata warnings are retained.
+These are local tests, not Eventarc, provider purge, production traffic or consent proof.
+
+Unchanged virtual-camera tests again pass2/2 in16.729s, while their strict wrapper
+remains exit1 for an existing test process. Before/after passive observations prove
+same boot/APKs, absent app process, no active camera clients, device1 closed, no
+app/test activities or test services, and restored rotation settings. Only cached
+test PID15697/UID10218/start652430 remains (cch/CRE,frozen), whereas camera history
+names app PID15581. This is resource poststate, not proof of the exact unbind instant.
+Root subsequently reverified identity/resources and used only `am kill --user0`
+on that owned background test package; the unchanged strict preflight then passes.
+No force-stop, user app/device, test assertion or old failed manifest was changed.
+An initial cleanup guard rejected the historical appended camera dump as if current;
+it performed no kill. The corrected guard separates the explicitly labelled history.
+Receipts: `artifacts/release27-engineering-20261003/g7-camera-passive-review/`
+`observation-245444c51db040b3aabfd769aec4dc1a/`; camera wrapper
+`regression-isolation-review/runtime-camera2-3401797d9f614d91a06dba12684eb628/`.
+
+Full-Sync stays active; Delta deferred. Remaining portfolio, real-device, live and
+release gates are not closed. Gate15 remains locked. No release build/signing,
+Play upload, production/deployment change, Git push or phone action.
 
 ### Current-binary sixteen-case SDK and malformed knowledge proof (2026-10-03)
 
@@ -1742,16 +2280,16 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS, FULL retained | Current16/16 actual local SDK cases retain durable offline retry, separate-client stale-base convergence and explicitly continued1001-binder FULL/Room-reopen/idempotence. Actual WorkManager retry1/1 and automatic large-budget continuation1/1 retain isolated-package scopes; exact4WorkSpecs/two cycles/complete local-remote integrity.18/18 focused Room controls remain dated. UI/OS/process delivery, simultaneous physical devices and broader mixed scale remain open. Delta is deferred; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS, FULL retained | Current collection/binder SDK cases pass, including durable offline retry, separate-client stale-base convergence and1001-binder FULL/Room-reopen/idempotence (latest18.436s). Whole SDK run remains17/18 RED for the separate Gate9 lock-only case. Actual WorkManager retry1/1 and automatic large-budget continuation1/1 retain isolated-package scopes; exact4WorkSpecs/two cycles/complete local-remote integrity.18/18 focused Room controls remain dated. UI/OS/process delivery, simultaneous physical devices and broader mixed scale remain open. Delta is deferred; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded Android import with4/4 real parser/Room persistence/rollback/conflicting-row cases, Web snapshot/identity fixes, seven verified mappings and incremental pricing tested. Conflicting duplicates were not found in the frozen provider download; this hardening does not close full coverage or centralized delivery |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card body cap/cancellation14/14, cache/package83/83. Missing-trend DTO resolves once instead of twice, full parity verified. O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
-| 7 Camera stability | PARTIAL (emulator functional evidence) | Current standard debug pair passes four virtual display rotations and one actual CREATED->RESUMED CameraX cycle, fresh frames/JPEG, no rebind. Overall camera wrapper exit1 is retained for cached test-process idle failure; separately verified owned cleanup, not retroactive whole-run PASS. Physical camera, MainActivity transitions, permission revocation and OS/background matrix remain open |
+| 7 Camera stability | PARTIAL (emulator functional evidence) | Prior virtual rotation/CameraX fresh-JPEG tests retain their scopes. Actual MainActivity PreviewView STREAMING->CREATED/IDLE held1s->RESUMED/STREAMING passes twice13.144/12.801s without capture/queue/upload. New actual recreation/old-view retirement/new-view STREAMING test has1/1 JUnitPASS13.581s with protected-state checks. Overall wrapper failures for cached test-process idle are retained; separately verified owned cleanup is not retroactive whole-run PASS. Physical camera, HOME/OS-death, permission revocation and broader background matrix remain open |
 | 8 Recognition | IN PROGRESS (limited replay PASS) | Historical replays retain their scope. Latest owner-confirmed queue triple: Nidorina MEP101 read correctly3times, correct suggestions, two candidates each,4.2–4.7s active plus burst queue delay. Earlier sequential no-candidate observations have unknown ground truth and are not Nidorina failures. No automatic-printing, speedup vs26 or full hardware claim; quality checks unchanged |
-| 9 Community knowledge | IN PROGRESS (narrow SDK listener/Auth/malformed PASS) | Current16/16 actual local SDK cases include full cache replacement, confirmed absence, real sign-out and malformed string-version rejection with exact file/consent preservation. Prior61 synthetic concurrency and35/35 private operations retain dated scopes. Revoked/transport listener paths, Eventarc delivery, actual retry/load contention and real-user consent remain unproved |
+| 9 Community knowledge | IN PROGRESS, current expanded SDK run RED | Current17/18 after test-only executor fix: cache/sign-out passes without cleanup crash; lock-plus-valid-data-change gives genuine original-listener denial/null with preservation; lock-only still lacks denial in30s. Executor has genuine5FAIL/1PASS to6PASS regression.45 complete Admin snapshots/CAS restoration pass independently. Earlier16/16/61 synthetic/35 private-operation proofs retain their dated scopes. No fresh data leak or confirmed emulator cause inferred; cached identity-free hints are not forcibly erased by revocation. Eventarc/retry/load and live consent remain open |
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | Owner/session and deletion-consent fixes retain prior tests;35 local private-operation cases pass. Read-only metadata partly confirms provider configuration including seven-day Storage soft delete, not live-object TTL. Complete deletion/purge/operator workflow and retention decisions remain open |
 | 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Two actual Run revision resource configurations and partial retention metadata read-only verified; Hosting pinTag target, live metrics/alerts/billing and complete inventories remain unverified |
-| 12 Load/scale | PARTIAL; private-history bottleneck fixed | Current private-detail projection has genuine RED/GREEN, complete-model sustained invalidation and preservation proofs. Annual58-sample benchmark: private45.39ms, fullportfolio2950.91ms (365dates); unchanged1k/5k/20k87-sample test passes, private20k1092.80ms. New owned AVD/local warm flows only, no matched cross-environment ratio/SLA. No retention/schema/delta change. Residual full-history cost, O(N) sharing/fan-out and production load remain open |
-| 13 Full regression | IN PROGRESS | Current app5158a6…/testb5f919… pass371/371 fixed matrix and16/16 real local SDK. Prior29/29 focusedRoom and917JVM PASS/one optional live skip retain dated scope; latest JVM task UP-TO-DATE. Both lints/releaseKotlin pass. R8/fiveDEX manifest42567f… covers unchanged product source;1295Web/35private-operation scopes remain historical. Camera2tests PASS but final wrapper idle cleanup FAIL is retained. Physical/live/final packaged-release contracts remain open |
+| 12 Load/scale | PARTIAL; bounded portfolio history now compact | Genuine RED/GREEN and current2/2 sustained complete-model +29/29 focused Room proofs. Matched annual58 comparison: portfolio2950.91->1154.10ms for365dates, private45.39->53.79ms (no private improvement claimed). New13-sample full-model/SQL/15-table proof passes; all13 edge states x3owners and20000/20001/20000 fallback boundary pass. Original87-sample1k/5k/20k rerunPASS75.468s. ActualAPI36 multi-window testPASS82.971s, both concurrent commits before refill, all3x100001tuples coherent and15hashrestore. Unsafe states keep full history; no retention/schema/sync change. API26, O(N) sharing/fan-out and production load remain open |
+| 13 Full regression | IN PROGRESS, API37.1 RED | API36 app2c9ae510/test443db33e passes371/371, zero skips/failures,305.723s. New stableAPI37.1/16KiB run with unchanged app2c9ae510/test9354bed5 is368/371,3FAIL,0skip,280.558s: one fresh-device CAMERA grant plus two native OCR identity failures; strict cached-test idle also fails. Permission corrected only on owned5560, rerun pending; OCR diagnosis not resolved. Test-only Espresso3.7.0 supports target37 MessageQueue without compatibility bypass. Current SDK17/18 RED remains separate.925 executed JVM PASS/one existing opt-in skip retains its dated scope; later JVM UP-TO-DATE is not fresh proof. Both lints/releaseKotlin pass; no signing/minified runtime claim.1295Web/35private-operation retain dated scopes. Physical/live/final release contracts remain open |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
@@ -2662,3 +3200,184 @@ hypothetical Light/Average/Heavy inputs for 1k/5k/10k/50k users. It separates lo
 operations/new-upload bytes from billed reads/current storage, and leaves currency,
 compute and unknown production values null. No budget, monitoring backend or
 production telemetry was activated; the inventory is not Gate-11 completion.
+
+### German physical-set artwork audit and repair — 2026-10-03
+
+Scope: Android catalogue/search/selected-card and display-only saved-card artwork.
+No database migration, saved-card rewrite, price mapping, sync architecture, cloud
+deployment, release signing, Play upload or R26 AAB change. Full-Sync remains R27;
+Delta stays disabled and Gate 15 is not opened by this image checkpoint.
+
+The frozen public TCGdex inventory covers **144 physical German-index sets and
+19,477 exact source card IDs** (11 Pocket sets excluded). There are 843 identities
+with neither DE nor EN image metadata, not necessarily 843 blank app cards:
+47 already have app-maintained artwork. Another 4,872 use declared EN fallbacks.
+The full chosen high-image HEAD/MIME pass checked 18,634 distinct URLs. Its first
+pass found 9 HTTP404s and 131 transient 503/timeouts; only those 131 were retried.
+Final: **18,625 reachable, 9 unavailable, zero unknown/unchecked**. This is not
+pixel validation of all 18,634 files, all thumbnails or every printed language.
+
+The added immutable, exact-identity registry has **843 entries: 592 German and
+251 English**. Candidate files were downloaded, SHA-bound and actually decoded;
+DE takes precedence, no foreign-name-only or main-set-total mapping is used.
+312 gallery images resolve to their manifest-proven parent CDN paths. 234 existing
+English fallbacks can now use verified German artwork. Six German format gaps
+use real PNGs, not broken WebPs; an older EX English format gap is also repaired.
+All nine unavailable inventory high-image identities have verified replacements.
+Three legacy XY promos (XY39/XY46/XY68) only have verified lower-resolution files.
+Only exact known failed/replaced URLs are overridden; newly corrected URLs,
+private photos, different source IDs and non-German saved-card languages remain
+untouched. The catalogue displays an English replacement notice. Its thumbnail
+loader retries a failed small image once with the same card's large image and
+resets on identity/URL changes. No image binaries are bundled into the APK.
+
+Of the 843 missing-both metadata identities, 600 now have registry coverage,
+including 47 pre-existing curated entries: **553 newly covered** (312 DE/241 EN).
+**243 remain unresolved in 12 sets**. Across all 5,715 missing-DE metadata entries,
+587 have verified DE replacements (41 previously curated); 5,128 still lack a
+verified German-language image in these checked sources. An English image does
+not become German artwork or establish equivalence of stamped/finish variants.
+The maintained 20-card supplement has 17 MEP identities inside today's inventory
+and three older `30th-rgb-*` identities outside it. New upstream `30th-R/G/B` image
+aliases were verified separately; duplicate canonical/source representations are
+an existing catalogue-identity follow-up, not silently migrated by this repair.
+
+Remaining exclusions include rejected ambiguous/variant joins, missing DE/EN
+manifest candidates and one verified two-quality404 (HGSS18). French-only images
+were not substituted. Official SM75 page automation encountered an HTTP200
+Incapsula iframe: those responses are retained as access-boundary failures, never
+artwork proof. The boundary detector was corrected and no bypass was attempted.
+
+Evidence: ignored `artifacts/release27-engineering-20261003/german-image-source-review/`
+and `C:/Users/Dominik/DomiDex-audits/`. Inventory SHA256
+`83187e0e6d9e547c477532f4c1e88ab95835de10ba592b20bb111b03b72cd950`;
+final registry evidence file SHA256
+`cba2653bd244fc4d83643147cd54eb7a29a20b785422dd70d6e52c756f747279`;
+canonical tuple SHA256
+`dc729c34dbe7590c65d8fd1234c76cdd2200656a9160562d9c1466140c7039a6`.
+The production table is independently pinned against these retained receipts.
+Initial RED proved the missing saved-gallery image; the first full regression also
+exposed a saved gallery URL omitted from the unavailable policy. That policy was
+fixed from exact negative receipts, not by weakening its assertion. Earlier EN
+expectations were updated to the newly proven DE PNG and assert no EN request.
+Final build/runtime/Redmi receipts follow below; this audit is not R27 release
+readiness or an assertion that every German printed artwork has been located.
+
+Final artwork verification receipts:
+
+- `green-201428-b8e4ec03`: debug/test APKs, release Kotlin compilation, debug/release
+  lint PASS in 3m24s. JVM **969 cases, 968 passed, zero failures/errors, one existing
+  opt-in Cardmarket-live test skipped**. Inputs and protected releases unchanged.
+- `runtime-artwork12-0e0f72bbb4cf45fb8fb82220b48e3549`: **12/12 assertions PASS**,
+  zero skips, 63.683s on offline owned emulator-5556. Includes four real decoded
+  pixel tests, four German search tests and four byte-unchanged binder-price tests.
+  APK/source/installed hashes remained identical, offline/no-reverse guard passed.
+  **The harness still exits 1:** its strict post-idle guard rejects Android's
+  retained test process. Read-only inspection found PID9011 cached CRE/frozen;
+  the guard was not weakened, the process was not stopped to manufacture PASS,
+  and the complete harness is not recorded as green.
+- 46 diagnostic/source-identity/access-boundary tests independently PASS.
+- `coverage.json` SHA256
+  `d1ecd928ffdea8f1f8f116312c3b7c457cf9af7ff6cadb3cc0e656793a084d76`
+  binds 23 sources and explicitly lists all unresolved identities in bwp, cel25,
+  cel25cc, ecard2, exu, hgssp, mee, mep, sve, svp, swshp and xya.
+- `redmi-install-201842-a3409766`: authorized normal-debug update on exact Redmi
+  e30bd3ce (24115RA8EG), install-r-t success and installed APK hash read back:
+  `36a45a9622d8ddd53acfadcd161134314fcfc5e270919be9e72e2b3726a67345`.
+  Previous debug APK retained locally for rollback. No uninstall/data clear;
+  MainActivity cold launch succeeded (1814ms, not a scanner benchmark).
+  This is installation/start evidence, not proof of every image on the phone.
+
+R26 signed AAB remains SHA256
+`079608e27bcb5d440252ed727e238b162b449f3dba4b1c28986d4a4570d9b14b`.
+No AAB, release/upload signing, Google Play, cloud deployment, Git commit or push
+was performed by this artwork run. Remaining R27 gates are not waived.
+
+### Missing-source artwork completion — 2026-10-04 (local only)
+
+The separately frozen all-set recheck contains 402 genuinely image-less entries
+(243 physical cards and 159 Pocket cards), not the larger count of cards whose
+only available image is English. Its SHA256 is
+`38ba78fe18fbd06bbf0b1eeb7808e90cc7e145e957a2d77027c6e540a6cc28d7`.
+This follow-up adds **396 exact-identity image mappings: 187 DE and 209 EN**.
+That is 237 physical cards (187 DE/50 EN) plus all 159 Pocket entries (EN).
+No claim is made that these English fallbacks are German printed artwork.
+
+New coverage: B1a 1, B2a 131, P-A 27, bwp 2, cel25 1, cel25cc 25,
+ecard2 4, exu 28, mee 16, mep 95, sve 24, svp 33, swshp 3 and xya 6.
+All **553 selected image URLs** have retained downloaded files, verified hashes,
+successful full decoding and portrait-card dimensions. Sources are published
+TCGdex/PokemonTCG manifests, Limitless and Serebii set/detail pages, with explicit
+card identity and special-print evidence. No name-only or guessed URL joining.
+Eleven Serebii thumbnails were landscape artwork crops, not complete cards; they
+were rejected and the verified full image is used for both display sizes.
+
+Six identities remain unresolved, deliberately not supplied with a similar card:
+
+- `ecard2-50b`, `ecard2-74b`, `ecard2-95b`, `ecard2-103b`: retained scans visibly
+  identify the a-print and corresponding e-Reader microcode, not the b-print.
+- `hgssp-HGSS18`: no verified reachable exact front from the checked sources;
+  the earlier image URLs returned 404 and Worlds stamp variants are ambiguous.
+- `svp-500`: the candidate is Chinese, not a DE/EN fallback, and no safe published
+  numeric crosswalk establishes this source identity.
+
+These are limitations of the checked sources, not proof that no scan exists
+elsewhere. Encountered access boundaries were retained and not bypassed.
+
+`AdditionalPokemonCardArtwork.kt` is a separate additive table. The previous
+843-entry table remains byte-identical (SHA256
+`07c1cc16c19274454ded838b61d0fbc58b95f0acdedd8f3962fb151b04325dd7`),
+and its existing 843-count/provenance regression remains unchanged. New entries
+have no replaceable/unavailable URL policies: existing nonblank URLs and private
+photos win. Exact DE/EN notices are display-only. Prices, collection records,
+card names, HP/artist metadata, print variants and synchronization are not changed.
+The nonnumeric Museum identity, literal Unown punctuation, Classic source IDs
+and individual energy editions remain separate. Source metadata discrepancies
+(Pocket B2a 088/105/130, MEP035 and SVP190/192) have explicit image-only review
+decisions; contradictory metadata was not silently rewritten.
+
+Reproducible local evidence is retained under ignored
+`artifacts/release27-engineering-20261004/{pocket-missing-artwork,modern-missing-artwork,legacy-missing-artwork,missing-artwork-integration}/`.
+Final `validated-additions.json` SHA256:
+`2f948d38c8ba3720413e4f8fec6d7f3f8f3460f879ab001747868069a654aa00`.
+Independently pinned additive tuple SHA256:
+`b5f3cf2f1b7f2af5776f128268ae6f51b1ebdd3f5efbc67c89a1c624094f0534`.
+The 210 exact English URLs have ordinal canonical SHA256
+`3a702f271087fd5186db080c34e16747882db941e439180dc8cbd4f5c9216f5a`.
+
+Initial `red-221113-c7a2cffe` demonstrated two actual failing image regressions
+(MEP001 and SVE024 returned empty URLs); it was not a compilation failure.
+The new tests also exercise all additions, null/partial images, wrong identities,
+private photos, German manual search, the public Pocket set-loading path,
+cached calls, no additional per-card metadata requests and exact language hints.
+Final `green-223509-5b40b352`: full offline debug JVM suite and `lintDebug`
+PASS, build exit 0 in 2m50s. **981 cases: 980 passed, zero failures/errors,
+one existing opt-in Cardmarket live test skipped** (not weakened or newly skipped).
+Lint reports no errors, 167 warnings and four hints; this is not a warning-free
+claim. All input-source and protected-release hashes remained unchanged during
+the build. No APK/AAB or release/signing task was run and no device was touched.
+An independent offline review matched all 396 tuples and 210 EN URLs to the
+frozen receipts, rechecked 513 evidence files and 553 image files, and confirmed
+the exact 396+6 partition of the original 402 identities with no old-table overlap.
+These are source/image and JVM/lint proofs, not a new Redmi/emulator rendering
+test. No performance or full-release-readiness claim follows from them.
+R26 remains protected; no Google Play, Firebase, deployment, commit or push.
+Full-Sync remains the R27 solution and Gate 15 remains subject to its existing
+critical prerequisites. This follow-up does not waive any remaining R27 gate.
+
+User-authorized Xiaomi installation, 2026-10-04: the follow-up request explicitly
+allowed installing this image-completion test state. `apk-224206-e1391a49` ran
+only offline `assembleDebug`, succeeded in 34s, and bound all source/protected
+hashes to the preceding 981-case JVM/lint proof. Normal debug APK SHA256:
+`0395ace32c520317351793837848832612531df8d30e43b7a40165e7d7861781`.
+Package/version checked: `com.dominik.cardvault`, 27 / `1.0-closed-alpha.6`,
+debuggable, existing standard Android debug certificate, min26/target37.
+The first USB streamed transfer failed without changing the installed package;
+the exact device reconnected and a guarded retry succeeded.
+`redmi-install-224449-77729fad` records replacement on authorized e30bd3ce /
+24115RA8EG: previous APK backed up, both signatures verified, `install -r -t`
+Success, installed APK hash read back and matched, UID10411 unchanged, explicit
+MainActivity launch `Status: ok` and process present. No uninstall/data clear,
+no release/upload signing or AAB and all protected release hashes unchanged.
+The APK rollback copy is not a backup or checksum proof of the user's database.
+This is installation/start evidence, not a claim of every image rendered on-device.
