@@ -28,20 +28,30 @@ class HistoryProofRunner : AndroidJUnitRunner() {
         val run = checkNotNull(arguments.getString("historyProofRun"))
         check(run.matches(Regex("[0-9a-f]{32}")))
         check(targetContext.packageName == "com.dominik.cardvault.historyproof.r$run")
-        check(arguments.getString("historyProofMode") == "isolated-room-only")
-        check(arguments.getString("release27RoomScale") == "true")
-        check(arguments.getString("release27RoomSizes") == "1000")
-        check(arguments.getString("release27RoomRepeats") == "3")
-        check(arguments.getString("release27RoomHistoryPostFix") == "phase-first-positive")
-        val method = arguments.getString("class")
-        val label = when (method) {
-            "com.dominik.cardvault.Release27RoomScaleInstrumentedTest#localRoomPostFixHistoryPhasesAndFirstPositiveCounterfactual" -> "phase-$run"
-            "com.dominik.cardvault.Release27RoomScaleInstrumentedTest#localRoomFirstPositiveCounterfactualEdgeParity" -> "edges-$run"
-            else -> error("Unreviewed history proof method")
+        if (arguments.getString("historyProofMode") == "isolated-private-details-only") {
+            check(arguments.getString("class") in setOf(
+                "com.dominik.cardvault.PrivateBinderFirstPositiveInstrumentedTest#privateDetailsRetainCompleteCardsWithoutMaterializingWholeOwnerHistory",
+                "com.dominik.cardvault.PrivateBinderFirstPositiveInstrumentedTest#sustainedPrivateDetailsTrackPriceLinkCatalogOwnerPlacementAndSelectionChanges",
+            )) { "Unreviewed private-details proof method" }
+            check(arguments.keySet().none { it.startsWith("release27Room") }) {
+                "No history benchmark configuration in private-details mode"
+            }
+        } else {
+            check(arguments.getString("historyProofMode") == "isolated-room-only")
+            check(arguments.getString("release27RoomScale") == "true")
+            check(arguments.getString("release27RoomSizes") == "1000")
+            check(arguments.getString("release27RoomRepeats") == "3")
+            check(arguments.getString("release27RoomHistoryPostFix") == "phase-first-positive")
+            val method = arguments.getString("class")
+            val label = when (method) {
+                "com.dominik.cardvault.Release27RoomScaleInstrumentedTest#localRoomPostFixHistoryPhasesAndFirstPositiveCounterfactual" -> "phase-$run"
+                "com.dominik.cardvault.Release27RoomScaleInstrumentedTest#localRoomFirstPositiveCounterfactualEdgeParity" -> "edges-$run"
+                else -> error("Unreviewed history proof method")
+            }
+            check(arguments.getString("release27RoomLabel") == label)
+            val kind = if (label.startsWith("phase-")) "localRoomPostFixHistoryPhases" else "localRoomFirstPositiveEdgeParity"
+            check(!java.io.File(targetContext.cacheDir, "release27-room-scale-$label-$kind.json").exists())
         }
-        check(arguments.getString("release27RoomLabel") == label)
-        val kind = if (label.startsWith("phase-")) "localRoomPostFixHistoryPhases" else "localRoomFirstPositiveEdgeParity"
-        check(!java.io.File(targetContext.cacheDir, "release27-room-scale-$label-$kind.json").exists())
         for (key in listOf("package", "notClass", "annotation", "notAnnotation", "numShards", "shardIndex", "log", "coverage")) {
             check(!arguments.containsKey(key)) { "No alternate discovery, logging-only or coverage mode" }
         }

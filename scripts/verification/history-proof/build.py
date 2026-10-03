@@ -25,11 +25,14 @@ def snapshot():
             result['inputs'][file.relative_to(ROOT).as_posix()] = {'bytes': file.stat().st_size, 'sha256': digest(file)}
     return result
 def main():
-    if sys.argv[1:] != ['--build']:
-        raise ValueError('Use exactly --build; no runtime or release actions')
+    if sys.argv[1:] not in (['--build'], ['--build-private-details']):
+        raise ValueError('Use exactly --build or --build-private-details; no runtime or release actions')
+    private_details = sys.argv[1:] == ['--build-private-details']
+    build_mode = 'private-details' if private_details else 'history'
+    source_class = 'PrivateBinderFirstPositiveInstrumentedTest' if private_details else 'Release27RoomScaleInstrumentedTest'
     if (ROOT / 'keystore.properties').exists() or any(key.startswith('DOMIDEX_UPLOAD_') for key in os.environ):
         raise ValueError('No release credentials allowed')
-    source = ROOT / 'app/src/androidTest/java/com/dominik/cardvault/Release27RoomScaleInstrumentedTest.kt'
+    source = ROOT / ('app/src/androidTest/java/com/dominik/cardvault/' + source_class + '.kt')
     if not source.is_file() or len(list((HERE / 'androidTest').rglob('*.kt'))) != 1:
         raise ValueError('One complete ordinary test source plus exactly one diagnostic runner required')
     run_id = uuid4().hex
@@ -45,6 +48,7 @@ def main():
     if source_hash != before['inputs'][source.relative_to(ROOT).as_posix()]['sha256']:
         raise ValueError('Copied full history test is not byte-identical')
     record = {'runId': run_id, 'package': package, 'startedAt': datetime.now(timezone.utc).isoformat(),
+              'buildMode': build_mode, 'injectedSourceClass': source_class,
               'injectedSourceSha256': source_hash, **before}
     (directory / 'before.json').write_text(json.dumps(record, indent=2), encoding='utf-8')
     env = {key: value for key, value in os.environ.items() if key.upper() in {
@@ -91,7 +95,7 @@ def main():
         preserved = False
     classes = directory / 'app-build/intermediates/built_in_kotlinc/debugAndroidTest/compileDebugAndroidTestKotlin/classes'
     class_names = sorted(file.relative_to(classes).as_posix() for file in classes.rglob('*.class'))
-    prefixes = ('com/dominik/cardvault/HistoryProofRunner', 'com/dominik/cardvault/Release27RoomScaleInstrumentedTest')
+    prefixes = ('com/dominik/cardvault/HistoryProofRunner', 'com/dominik/cardvault/' + source_class)
     proof_classes = bool(class_names) and all(any(name == prefix + '.class' or name.startswith(prefix + '$')
         for prefix in prefixes) for name in class_names) and all(prefix + '.class' in class_names for prefix in prefixes)
     artifacts = {}
@@ -103,6 +107,7 @@ def main():
                'exitCode': code, 'inputsAndOldOutputsUnchanged': preserved,
                'buildFailureType': failure_type, 'timedOut': timed_out, 'ownedProcessCleanupError': cleanup_error,
                'proofClassesVerified': proof_classes, 'compiledClasses': class_names,
+               'buildMode': build_mode, 'injectedSourceClass': source_class,
                'injectedSourceSha256': source_hash, 'artifacts': artifacts}
     (directory / 'after.json').write_text(json.dumps(after, indent=2), encoding='utf-8')
     (directory / 'build-result.json').write_text(json.dumps(outcome, indent=2), encoding='utf-8')

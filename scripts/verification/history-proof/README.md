@@ -39,6 +39,46 @@ bounded output and a10-minute hung-test guard, not a performance SLA.
 
 ## Scope and interpretation
 
+### Private-detail RED / GREEN
+
+An explicit separate mode copies the complete
+`PrivateBinderFirstPositiveInstrumentedTest.kt` instead of the Room-scale class.
+It retains the same disposable package, offline/debug-only/immutable-release
+guards, and does not use the history JSON report contract:
+
+```powershell
+node --test scripts/verification/history-proof/contract.test.mjs scripts/verification/history-proof/private-contract.test.mjs
+python scripts/verification/history-proof/build.py --build-private-details
+node scripts/verification/history-proof/run.mjs <fresh-build-directory> --private-red
+# After a justified product fix: NEW build directory, same complete test source.
+node scripts/verification/history-proof/run.mjs <new-build-directory> --private-green
+```
+
+The sustained complete-model/invalidation control must genuinely pass first.
+RED accepts only the final named whole-history query-count assertion with a
+positive count, exact single-test failure and matching JUnit summary. It remains
+one **failed product test**, never a PASS. GREEN requires both genuine passes.
+Raw logs, APK/test-source hashes, parser results and cleanup are retained. Queued
+intermediate Flow states may occur; the test proves eventual full expected states,
+not atomic emissions or one emission per mutation. No performance inference is
+made from these tiny fixtures.
+
+Actual 2026-10-03 RED `ec26839e9d6d4ec8816ab52ba427f947`:
+control PASS0.984s; query expected FAIL0.489s, actual history queries1.
+GREEN `63775f4bf55b4406a6d8c825c1968ffd`: control PASS1.385s, query PASS0.490s.
+Both use complete test SHA256
+`2df185fee88ffbe5ce78f3476485fcb4be2f431c0d46468bf0e54148995576f3`.
+Both manifests confirm unchanged inputs/protected outputs, removed owned packages,
+and unchanged ordinary installed APK7f003…b105. Generated Debug Room observes
+collection_entries, catalog_cards and raw_price_snapshots for the new projection.
+Final release compilation, broader regression and large-history timings are
+separate requirements, recorded for the subsequent standard debug pair in
+`docs/RELEASE_27.md` (371/371 plus29/29; annual58 samples; isolated R8 only).
+Later parser hardening rejects inline stream exceptions;
+the retained real RED/GREEN logs contain no such exceptions.
+
+### History diagnostic
+
 Annual365 fixture:1003 products,950 active owner-A products,366095 raw prices,
 346750 eligible history observations. Full expected values, chart and placements
 remain unchanged. The raw candidate inherits the actual generated membership

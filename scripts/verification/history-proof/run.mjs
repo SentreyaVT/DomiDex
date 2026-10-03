@@ -5,22 +5,34 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ROOT, SERIAL, AVD, CLASS, RUNNER, identity, modeFor, snapshot, sha256, validateApk,
   validateInstrumentation, validateReport } from './contract.mjs';
-assert.equal(process.platform, 'win32'); assert.equal(process.argv.length, 3, 'Only the fresh successful build directory');
+import { PRIVATE_CLASS, privateModeFor, validatePrivateInstrumentation } from './private-contract.mjs';
+assert.equal(process.platform, 'win32');
+assert.ok(process.argv.length === 3 || (process.argv.length === 4 &&
+  ['--private-red', '--private-green'].includes(process.argv[3])), 'Build directory plus optional explicit --private-red/--private-green');
+const privateMode = process.argv[3]?.slice(2) ?? null;
+const sourceClass = privateMode ? 'PrivateBinderFirstPositiveInstrumentedTest' : 'Release27RoomScaleInstrumentedTest';
 const directory = path.resolve(process.argv[2]); const { id, app } = identity(directory);
 const json = file => JSON.parse(readFileSync(file, 'utf8'));
 const before = json(path.join(directory, 'before.json')); const build = json(path.join(directory, 'build-result.json'));
 assert.equal(build.exitCode, 0); assert.equal(build.inputsAndOldOutputsUnchanged, true);
 assert.equal(build.proofClassesVerified, true); assert.equal(build.runId, id); assert.equal(build.package, app);
 assert.equal(before.runId, id); assert.equal(before.package, app);
+assert.equal(build.buildMode ?? 'history', privateMode ? 'private-details' : 'history');
+assert.equal(before.buildMode ?? 'history', build.buildMode ?? 'history');
+assert.equal(build.injectedSourceClass ?? 'Release27RoomScaleInstrumentedTest', sourceClass);
+assert.equal(before.injectedSourceClass ?? 'Release27RoomScaleInstrumentedTest', sourceClass);
 assert.equal(build.buildFailureType, null); assert.equal(build.ownedProcessCleanupError, null); assert.equal(build.timedOut, false);
 assert.deepEqual(await snapshot(), { inputs: before.inputs, preserved: before.preserved });
 const safetyFile = 'C:/Users/Dominik/AndroidStudioProjects/DomiDex-Web/tests/private-operations-local/safety.mjs';
 const safetySha256 = await sha256(safetyFile);
 const { runChild } = await import(pathToFileURL(safetyFile));
-const copied = path.join(directory, 'injected-source/Release27RoomScaleInstrumentedTest.kt');
+const copied = path.join(directory, 'injected-source', sourceClass + '.kt');
+const sourceRelative = 'app/src/androidTest/java/com/dominik/cardvault/' + sourceClass + '.kt';
+assert.equal(before.inputs[sourceRelative].sha256, before.injectedSourceSha256);
 assert.equal(await sha256(copied), before.injectedSourceSha256);
 assert.equal(build.injectedSourceSha256, before.injectedSourceSha256);
-const runtime = path.join(directory, 'runtime'); mkdirSync(runtime); // Fresh-only, never replace a receipt.
+const runtime = path.join(directory, privateMode ? 'runtime-' + privateMode : 'runtime');
+mkdirSync(runtime); // Fresh-only, never replace a receipt.
 const java = 'C:/Program Files/Android/Android Studio/jbr/bin/java.exe';
 const sdk = 'C:/Users/Dominik/AppData/Local/Android/Sdk';
 const adb = path.join(sdk, 'platform-tools/adb.exe');
@@ -77,7 +89,8 @@ for (let index = 0; index < 2; index++) {
   } else { assert.ok(xml.includes(RUNNER)); assert.ok(xml.includes(app)); }
 }
 const receipt = { runId: id, package: app, serial: SERIAL, avd: AVD, startedAt: new Date().toISOString(),
-  build, runtimeInputs: { safetyFile, safetySha256 }, installed: [], cleanupPackages: [], ordinaryBefore,
+  mode: privateMode ?? 'history', build, runtimeInputs: { safetyFile, safetySha256 },
+  installed: [], cleanupPackages: [], ordinaryBefore,
   ordinaryAfter: null, methods: [], errors: [] };
 const receiptPath = path.join(runtime, 'manifest.json');
 const save = () => writeFileSync(receiptPath, JSON.stringify(receipt, null, 2));
@@ -98,6 +111,25 @@ try {
     receipt.installed.push(packages[index]); save();
     assert.equal(installedHash(packages[index]), build.artifacts[paths[index]].sha256);
   }
+  if (privateMode) {
+    // Independent complete-model/invalidation control runs first and must actually PASS.
+    // The old-product query regression remains an explicitly failed test, never a PASS.
+    for (const name of ['control', 'query']) {
+      const mode = privateModeFor(name); offline();
+      const args = ['shell', 'am', 'instrument', '-w', '-r', '-e', 'class', PRIVATE_CLASS + '#' + mode.method,
+        '-e', 'historyProofRun', id, '-e', 'historyProofMode', 'isolated-private-details-only',
+        app + '.test/' + RUNNER];
+      const { output, result } = await instrument(args, path.join(runtime, name + '-instrumentation.log'));
+      const expected = name === 'query' && privateMode === 'private-red' ? 'EXPECTED_FAILURE' : 'PASS';
+      const method = { name, result, expected, reportRetained: false, evidence: 'Exact instrumented JUnit status and retained raw log; no history JSON report' };
+      receipt.methods.push(method); save();
+      assert.equal(result.code, 0); assert.equal(result.stopped, null); assert.equal(result.error, null);
+      method.validated = validatePrivateInstrumentation(output, name, expected);
+      method.android = { tests: method.validated.tests, failed: method.validated.failed, skipped: method.validated.skipped };
+      noInstrumentation(); save();
+    }
+    assert.deepEqual(receipt.methods.map(method => method.name), ['control', 'query']);
+  } else {
   for (const name of ['phase', 'edges']) {
     const mode = modeFor(name); offline();
     const label = `${name}-${id}`;
@@ -123,6 +155,7 @@ try {
     method.validated = validateReport(report, name, id); save();
   }
   assert.deepEqual(receipt.methods.map(method => method.name), ['phase', 'edges']);
+  }
 } catch (error) {
   receipt.errors.push(error.message);
   // If the exact isolated process still exists, capture only that PID's bounded log.
@@ -158,6 +191,17 @@ finally {
   } catch (error) { receipt.errors.push('Final preservation checks: ' + error.message); }
   receipt.finishedAt = new Date().toISOString();
   receipt.exitCode = receipt.errors.length || receipt.methods.length !== 2 ||
-    receipt.methods.some(method => method.validated?.status !== 'PASS') || receipt.cleanupPackages.length !== 2 ? 1 : 0;
+    receipt.methods.some(method => method.validated?.status !==
+      (privateMode === 'private-red' && method.name === 'query' ? 'EXPECTED_FAILURE' : 'PASS')) ||
+    receipt.cleanupPackages.length !== 2 ? 1 : 0;
+  if (privateMode) {
+    receipt.verdict = receipt.exitCode ? 'INCOMPLETE_OR_UNEXPECTED_RESULT' :
+      privateMode === 'private-red' ? 'EXPECTED_RED_CONFIRMED_NOT_PRODUCT_PASS' : 'PRIVATE_DETAILS_GREEN';
+    receipt.validatedProductTests = {
+      executed: receipt.methods.reduce((sum, method) => sum + (method.validated?.tests ?? 0), 0),
+      failed: receipt.methods.reduce((sum, method) => sum + (method.validated?.failed ?? 0), 0),
+      skipped: receipt.methods.reduce((sum, method) => sum + (method.validated?.skipped ?? 0), 0),
+    };
+  }
   save(); console.log(`History manifest: ${receiptPath}`); process.exitCode = receipt.exitCode;
 }

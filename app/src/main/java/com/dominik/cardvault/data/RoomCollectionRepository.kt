@@ -139,6 +139,15 @@ class RoomCollectionRepository(
         dao.observeCollection(ownerUid), dao.observePriceSelections(ownerUid),
     ) { rows, selections -> collectionCards(rows, selections) }.flowOn(Dispatchers.Default)
 
+    /** Keep every private-card field and historical change without loading unused chart rows. */
+    private fun privateDetailCardsFor(ownerUid: String): Flow<List<CollectionCard>> = combine(
+        dao.observeCollection(ownerUid),
+        dao.observePriceSelections(ownerUid),
+        dao.observeOwnedFirstPositivePrices(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE),
+    ) { rows, selections, bases ->
+        collectionCards(rows, selections, firstPriceBases = bases.associateBy { it.cardId })
+    }.flowOn(Dispatchers.Default)
+
     private fun portfolioFor(ownerUid: String, includePortfolioHistory: Boolean = true): Flow<PortfolioSummary> = combine(
             dao.observeCollection(ownerUid),
             dao.observeOwnedRawPriceHistory(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE),
@@ -158,11 +167,19 @@ class RoomCollectionRepository(
         rows: List<CollectionProjection>,
         selections: List<CollectionPriceSelectionEntity>,
         cardmarketPrices: Map<String, List<OwnedPriceHistoryProjection>> = emptyMap(),
+        firstPriceBases: Map<String, OwnedFirstPositivePriceProjection>? = null,
     ): List<CollectionCard> {
         val selectionsByEntry = selections.associateBy(CollectionPriceSelectionEntity::collectionEntryId)
         return rows.map { row ->
-            val cardPrices = cardmarketPrices[row.priceCardId].orEmpty()
-            val first = cardPrices.asSequence().mapNotNull { it.trendValueFor(row.finish) }.firstOrNull()
+            val first = if (firstPriceBases == null) {
+                val cardPrices = cardmarketPrices[row.priceCardId].orEmpty()
+                cardPrices.asSequence().mapNotNull { it.trendValueFor(row.finish) }.firstOrNull()
+            } else {
+                firstPriceBases[row.priceCardId]?.let { base ->
+                    if (row.finish.contains("reverse", ignoreCase = true)) base.firstReverseTrendValueMinor
+                    else base.firstNormalTrendValueMinor
+                }
+            }
             val latest = row.marketValueMinor?.takeIf { it > 0L }
             val change = if (first != null && latest != null && first != 0L) (latest - first) * 100.0 / first else 0.0
             CollectionCard(row.entryId, row.cardId, row.name, row.setName, row.collectorNumber,
@@ -571,9 +588,9 @@ class RoomCollectionRepository(
 
     override fun privateBinderContents(binderId: String): Flow<List<PrivateBinderCard>> =
         activeOwnerUid.flatMapLatest { ownerUid ->
-            // Keep each card's real history-derived change, but skip the unused whole-portfolio chart.
-            combine(dao.observePrivateBinderPlacements(binderId, ownerUid), portfolioFor(ownerUid, includePortfolioHistory = false)) { placements, currentPortfolio ->
-                val cardsByEntry = currentPortfolio.cards.associateBy(CollectionCard::entryId)
+            // Same complete card mapper and first-positive semantics; the full chart remains separate.
+            combine(dao.observePrivateBinderPlacements(binderId, ownerUid), privateDetailCardsFor(ownerUid)) { placements, currentCards ->
+                val cardsByEntry = currentCards.associateBy(CollectionCard::entryId)
                 placements.mapNotNull { placement ->
                     cardsByEntry[placement.collectionEntryId]?.let { card ->
                         PrivateBinderCard(

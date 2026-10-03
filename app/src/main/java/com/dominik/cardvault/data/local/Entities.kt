@@ -357,6 +357,13 @@ data class OwnedPriceHistoryProjection(
     val holoTrendValueMinor: Long?,
 )
 
+/** Read-only change-percent bases; not synthetic historical observations or retained state. */
+data class OwnedFirstPositivePriceProjection(
+    val cardId: String,
+    val firstNormalTrendValueMinor: Long?,
+    val firstReverseTrendValueMinor: Long?,
+)
+
 @Entity(
     tableName = "graded_market_records",
     foreignKeys = [ForeignKey(entity = CatalogCardEntity::class, parentColumns = ["id"], childColumns = ["cardId"], onDelete = ForeignKey.CASCADE)],

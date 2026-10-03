@@ -2,6 +2,100 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-03.
 
+### Private Binder detail: integrated first-positive read, RED/GREEN and regression (2026-10-03)
+
+The previously measured private-detail bottleneck is now fixed in three product
+files. An additive read-only DAO projection returns each safely linked owned
+product's independently earliest positive Normal and Reverse trend. The existing
+complete card mapper consumes these bases instead of materializing the owner's
+entire history for a private Binder. It preserves prices, saved alternatives,
+historical percentage changes and all card/placement fields. Full portfolio/chart
+semantics, schema, indexes, retention, import, networking and FULL-sync are unchanged.
+Generated Debug **and Release** Room implementations observe collection_entries,
+catalog_cards and raw_price_snapshots; no cache or manually invalidated state added.
+
+Genuine isolated pre-fix RED `ec26839e9d6d4ec8816ab52ba427f947`: the sustained
+observer control passes; the complete-value/query test fails only its final named
+assertion (one whole-owner history query instead of zero). Post-fix GREEN
+`63775f4bf55b4406a6d8c825c1968ffd` passes both tests, using identical complete test
+source SHA256 `2df185fee88ffbe5ce78f3476485fcb4be2f431c0d46468bf0e54148995576f3`.
+The full portfolio is a positive query-counter control. Independent expected full
+models and all15 typed persisted-table hashes are checked. A single sustained
+subscription covers corrections, earlier dates, absent/returning trends, saved
+choices, catalog-only relinking, product/source changes, visual fields, placements,
+tombstones and A->B->A. Eventual correct states are proved, not atomic emissions.
+Both disposable builds preserve ordinary APK/output/v26 state and clean only their
+owned packages. Later strict parser hardening has12/12 pure contract tests; the
+retained real logs contain no hidden inline exception.
+
+Fresh standard debug/test build, all JVM tests, release Kotlin and both lints pass
+in5m42s: **917 JVM PASS /1 existing opt-in live SKIP /0 failures/errors**. New owned
+offline API36 AVD `DomiDex_R27_Regression_API36`/5556 uses existing image, host GPU,
+4GiB RAM and emulated back camera, never baseline userdata or a physical device.
+The original371-case selection passes **371/371,0 skips/failures,305.809s**. Separate
+complete Room/price/private-detail selection passes **29/29,10.739s**. Runner profile
+contracts pass30/30; the existing baseline profile and exact371 identities remain.
+
+Exact current standard APK hashes for these runs:
+
+- app: `5158a6556bfea004ff81f6599b18f70674ba74bec73718da65de6420a1fe7ab3`
+- test: `52fcb3cfd0adf40bce334e1276a4c955de75c59f89b3d14e5dd52cb71b2a368d`
+
+Unchanged annual-history benchmark on this pair passes1/1 in112.837s, all58 samples,
+15-table integrity and complete values/cleanup. Three-warm median private-detail
+read: **45.3884ms at365 dates**,54.2321ms at2 dates. Full portfolio remains
+**2950.9101ms at365 dates**,60.0822ms at2 dates. This is synthetic Room timing on a
+new AVD, not phone/UI/network/cold-start/p95 evidence or a matched historical A/B
+ratio. The full-history portfolio cost remains open; no general latency SLA claimed.
+
+Evidence: `artifacts/release27-engineering-20261003/history-proof/` RED/GREEN IDs;
+`artifacts/release27-engineering-20261002/pricing-duplicate-review/green-125023-9487ca58/`;
+`artifacts/android-regression/20261003T125728Z-4d25d3c7/`;
+`artifacts/release27-engineering-20261003/regression-isolation-review/`
+`runtime-focused29-4bde8ec479b24464b056f1db7620aa97/` and
+`runtime-annual58-2757ccb4d7dc4442a3ccd35baa6d5b82/`.
+Historical output roots contain fresh2026-10-03 timestamps, not overwritten runs.
+Owned test-package cleanup after371 was explicit and hash-verified; it is not OS
+recovery proof. On resuming, both emulators were absent; their termination cause
+was not observed. Root restarted only the same verified owned5556 config,
+verified unchanged installed hashes,
+no accounts and offline/no-reverse state, and stopped its own boot-started app
+process before the next diagnostic. Baseline5554 was not restarted or altered.
+The unchanged1k/5k/20k scale test then passes1/1, all87 samples and integrity
+checks. Private-detail three-warm medians:50.9906/169.8877/1092.7974ms respectively;
+these are local flow resubscriptions with two history dates, not a cold UI/network
+SLA. Evidence: same wrapper directory, `runtime-scale87-8d56556b7ddc46eb835b853289b8ed18/`.
+
+Separate virtual-camera run `runtime-camera2-c482524f02da4766a6168193db2486b7/`
+contains **2/2 functional PASS,16.995s**, no skips: all four display rotations and
+one actual CameraX CREATED->RESUMED cycle through the production wrapper, without
+manual rebind. Both preview/analyzer stop for continuous quiet windows, resume with
+fresh frames and produce one portrait JPEG. Test restores rotation, unbinds and
+removes its own captures. It is not MainActivity, OS death, permission revocation,
+OEM/physical camera or scanner-recognition evidence.
+
+The camera **wrapper remains exit1**, because its final idle guard found cached
+test-package PID4093 (cch/CRE), despite terminal instrumentation success. Root
+independently checked exact owned AVD/test APK, absent active instrumentation and
+closed current camera client, stopped only that owned test package, then reran
+read-only preflight successfully. No assertion was weakened and the original
+failed overall manifest is retained. This follow-up does not retroactively turn it
+into a wholly clean harness run.
+
+Fresh isolated offline R8 passes4m14s:32 exact task paths/28 executed/2 up-to-date
+actionable tasks, five DEX files with verified headers/checksums, no APK/AAB or
+signing. Source manifest `42567fa07b9c3be07d63950ba395e3e46983c4b9944a4c23879b532ec5513ab2`,
+schemas, existing outputs and complete v26 archive match before/after. Existing
+conservative no-shrink/no-optimize and targeted keep rules remain untouched;
+R8 mapping is for this isolated compiler output, **not for Play upload** without
+a corresponding final artifact. This is compilation/integrity, not R8 runtime,
+packaged release, hardware or native-symbol completeness proof. Evidence:
+`artifacts/release27-engineering-20261003/r8-private-binder-review/verification.json`.
+Independent review found no correctness blocker; private detail still processes
+the owner's current-card/base records, not only the displayed Binder's membership.
+**Gate15 remains locked.**
+No release-key signing, AAB, phone action, production write, deployment, push or Play.
+
 ### Current-history phase and first-positive counterfactual proof (2026-10-03)
 
 New isolated, offline Room diagnostic run `934ff50d449d416993598a6e51c9200c`
@@ -1607,13 +1701,13 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 4 Collection/binder sync | IN PROGRESS, FULL retained | 15/15 actual local SDK cases retain durable offline retry, separate-client stale-base convergence and explicitly continued1001-binder FULL/Room-reopen/idempotence. Fresh actual WorkManager retry1/1 and automatic large-budget continuation1/1 pass in isolated packages; exact4WorkSpecs/two cycles/complete local-remote integrity.18/18 focused Room controls remain dated. UI/OS/process delivery, simultaneous physical devices and broader mixed scale remain open. Delta is deferred; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded Android import with4/4 real parser/Room persistence/rollback/conflicting-row cases, Web snapshot/identity fixes, seven verified mappings and incremental pricing tested. Conflicting duplicates were not found in the frozen provider download; this hardening does not close full coverage or centralized delivery |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card body cap/cancellation14/14, cache/package83/83. Missing-trend DTO resolves once instead of twice, full parity verified. O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
-| 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
+| 7 Camera stability | PARTIAL (emulator functional evidence) | Current standard debug pair passes four virtual display rotations and one actual CREATED->RESUMED CameraX cycle, fresh frames/JPEG, no rebind. Overall camera wrapper exit1 is retained for cached test-process idle failure; separately verified owned cleanup, not retroactive whole-run PASS. Physical camera, MainActivity transitions, permission revocation and OS/background matrix remain open |
 | 8 Recognition | IN PROGRESS (limited replay PASS) | Historical replays retain their scope. Latest owner-confirmed queue triple: Nidorina MEP101 read correctly3times, correct suggestions, two candidates each,4.2–4.7s active plus burst queue delay. Earlier sequential no-candidate observations have unknown ground truth and are not Nidorina failures. No automatic-printing, speedup vs26 or full hardware claim; quality checks unchanged |
 | 9 Community knowledge | IN PROGRESS (narrow SDK listener/Auth PASS) | Actual adapter replaces full cache record, removes confirmed absent hint and invalidates on actual sign-out, inside15/15 local SDK cases. Prior61 synthetic concurrency and35/35 actual private operations retain dated scopes. Malformed/revoked/transport listener paths, Eventarc delivery, actual retry/load contention and real-user consent remain unproved |
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | Owner/session and deletion-consent fixes retain prior tests;35 local private-operation cases pass. Read-only metadata partly confirms provider configuration including seven-day Storage soft delete, not live-object TTL. Complete deletion/purge/operator workflow and retention decisions remain open |
 | 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Two actual Run revision resource configurations and partial retention metadata read-only verified; Hosting pinTag target, live metrics/alerts/billing and complete inventories remain unverified |
-| 12 Load/scale | PARTIAL; measured history improvement | Same unchanged annual benchmark after narrow query-order fix: previous~16.1s portfolio/private history reduced to~2.7–3.1s on latest APK,58 samples/full integrity pass. No retention/schema/delta change.1001-binder actual FULL continuation passes; O(N) sharing/fan-out, residual history cost and production load remain open |
-| 13 Full regression | IN PROGRESS | Product APK09cdad… and test1c175… pass371/371 fixed matrix and15/15 actual SDK; earlier same-product test08dab… passes4/4 importRoom.917JVM PASS/one existing optional skip; fresh1295Web and isolated R8/DEX source-manifest3f7e98… pass. Older18Room/annual58-sample/35private-operation proofs retain historical hashes. Physical/live/final packaged-release contracts remain open |
+| 12 Load/scale | PARTIAL; private-history bottleneck fixed | Current private-detail projection has genuine RED/GREEN, complete-model sustained invalidation and preservation proofs. Annual58-sample benchmark: private45.39ms, fullportfolio2950.91ms (365dates); unchanged1k/5k/20k87-sample test passes, private20k1092.80ms. New owned AVD/local warm flows only, no matched cross-environment ratio/SLA. No retention/schema/delta change. Residual full-history cost, O(N) sharing/fan-out and production load remain open |
+| 13 Full regression | IN PROGRESS | Current app5158a6…/test52fcb3… pass371/371 fixed matrix and29/29 focusedRoom,917JVM PASS/one existing optional live skip, both lints and releaseKotlin. Isolated R8/fiveDEX source-manifest42567f… passes. Dated15/15 SDK uses09cdad…/1c175…;1295Web and35private-operation scopes remain historical. Current camera2tests PASS but final wrapper idle cleanup FAIL is retained. Physical/live/final packaged-release contracts remain open |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |

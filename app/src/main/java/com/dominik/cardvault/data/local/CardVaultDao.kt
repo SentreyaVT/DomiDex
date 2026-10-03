@@ -332,6 +332,28 @@ interface CardVaultDao {
     """)
     fun observeOwnedRawPriceHistoryByProduct(ownerUid: String, source: String): Flow<List<OwnedPriceHistoryProjection>>
 
+    /** The private detail only needs each finish's first positive observation, not the chart. */
+    @Query("""
+        WITH owned(cardId) AS (
+            SELECT DISTINCT COALESCE(linked.id, c.id)
+            FROM collection_entries e
+            JOIN catalog_cards c ON c.id = e.cardId
+            LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource
+                 AND linked.externalProductId = e.externalProductId
+            WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
+              AND """ + SAFE_COLLECTION_PRICE_LINK_SQL + """
+        )
+        SELECT o.cardId,
+          (SELECT p.trendValueMinor FROM raw_price_snapshots p
+           WHERE p.cardId = o.cardId AND p.source = :source AND p.trendValueMinor > 0
+           ORDER BY p.effectiveAtEpochMillis ASC LIMIT 1) AS firstNormalTrendValueMinor,
+          (SELECT p.holoTrendValueMinor FROM raw_price_snapshots p
+           WHERE p.cardId = o.cardId AND p.source = :source AND p.holoTrendValueMinor > 0
+           ORDER BY p.effectiveAtEpochMillis ASC LIMIT 1) AS firstReverseTrendValueMinor
+        FROM owned o ORDER BY o.cardId
+    """)
+    fun observeOwnedFirstPositivePrices(ownerUid: String, source: String): Flow<List<OwnedFirstPositivePriceProjection>>
+
     /**
      * History stays tied to the exact Cardmarket product linked to this entry.
      * A catalog reference has entryId 0, where its catalog id is the safe fallback.
