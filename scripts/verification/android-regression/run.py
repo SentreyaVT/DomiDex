@@ -23,6 +23,8 @@ from validate import (cleanup_allowed, selection_from_text, validate_debug_apk,
 ROOT = HERE.parents[2]
 SERIAL = "emulator-5554"
 AVD = "DomiDex_R27_Baseline_API36"
+OWNED_REGRESSION_SERIAL = "emulator-5556"
+OWNED_REGRESSION_AVD = "DomiDex_R27_Regression_API36"
 APP = "com.dominik.cardvault"
 TEST = APP + ".test"
 INSTRUMENTATION = TEST + "/androidx.test.runner.AndroidJUnitRunner"
@@ -37,9 +39,21 @@ def options(arguments):
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="Read-only prerequisites; no install/run/output directory")
     mode.add_argument("--run", action="store_true", help="Install two standard debug APKs and run the fixed 371-case matrix")
+    parser.add_argument("--owned-regression-avd", action="store_true",
+                        help="Use only the separately prepared DomiDex_R27_Regression_API36 at emulator-5556")
     parser.add_argument("--sdk-root", type=Path, default=Path(os.environ.get("LOCALAPPDATA", "")) / "Android/Sdk")
     parser.add_argument("--java-home", type=Path, default=Path(os.environ.get("ProgramFiles", "")) / "Android/Android Studio/jbr")
     return parser.parse_args(arguments)
+
+
+def target_profile(args):
+    # One explicit second profile, never free-form serial/name or device discovery.
+    # The default profile is intentionally unchanged; it must not be used when
+    # preserving the owner's ordinary installation on emulator-5554.
+    owned = getattr(args, "owned_regression_avd", False)
+    if type(owned) is not bool:
+        raise ValueError("The owned regression profile must be an explicit boolean")
+    return (OWNED_REGRESSION_SERIAL, OWNED_REGRESSION_AVD) if owned else (SERIAL, AVD)
 
 
 def clean_environment(source):
@@ -111,6 +125,14 @@ class Runner:
         self.started = False
         self.run_token = uuid4().hex
 
+    @property
+    def serial(self):
+        return target_profile(self.args)[0]
+
+    @property
+    def avd(self):
+        return target_profile(self.args)[1]
+
     def command(self, arguments, timeout=20, accepted=(0,)):
         result = subprocess.run([str(value) for value in arguments], cwd=ROOT, env=self.env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -121,11 +143,11 @@ class Runner:
         return result.stdout.strip()
 
     def device(self, *arguments, timeout=20, accepted=(0,)):
-        return self.command([self.adb, "-s", SERIAL, *arguments], timeout, accepted)
+        return self.command([self.adb, "-s", self.serial, *arguments], timeout, accepted)
 
     def identity(self):
         if (self.device("get-state") != "device" or
-                self.device("shell", "getprop", "ro.boot.qemu.avd_name") != AVD or
+                self.device("shell", "getprop", "ro.boot.qemu.avd_name") != self.avd or
                 self.device("shell", "getprop", "ro.kernel.qemu") != "1" or
                 self.device("shell", "getprop", "ro.build.version.sdk") != "36"):
             raise ValueError("Only the fixed API-36 emulator/AVD is allowed; no device was changed")
@@ -160,12 +182,12 @@ class Runner:
         if certificates[0] != certificates[1]:
             raise ValueError("Both standard debug APKs must have the same certificate")
         validate_test_manifest(self.command([self.aapt, "dump", "xmltree", self.apks[1], "--file", "AndroidManifest.xml"]))
-        return {"serial": SERIAL, "avd": AVD, "offline": True, "reverseEmpty": True,
+        return {"serial": self.serial, "avd": self.avd, "offline": True, "reverseEmpty": True,
                 "certificateSha256": certificates[0], "adb": version,
                 "tools": {str(path): file_hash(path) for path in (self.adb, self.aapt, self.signer, self.java)}}
 
     def instrumentation_command(self):
-        return [str(self.adb), "-s", SERIAL, "shell", "am", "instrument", "-w", "-r", "-e", "class",
+        return [str(self.adb), "-s", self.serial, "shell", "am", "instrument", "-w", "-r", "-e", "class",
                 ",".join(self.selection["selectors"]), "-e", "domidexRegressionRunId", self.run_token, INSTRUMENTATION]
 
     def instrument(self, logfile):
@@ -227,7 +249,7 @@ class Runner:
                     receipt.write(name + " SHA256=" + before[name] + "\n" + output + "\n")
                 if not re.search(r"(?m)^Success\s*$", output) or file_hash(apk) != before[name]:
                     raise ValueError("Installation not confirmed or APK changed")
-                manifest["installed"].append({"file": name, "sha256": before[name], "serial": SERIAL})
+                manifest["installed"].append({"file": name, "sha256": before[name], "serial": self.serial})
             self.offline()
             self.idle()
             self.instrument(directory / "instrumentation.log")

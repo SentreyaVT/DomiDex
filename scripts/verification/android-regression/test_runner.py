@@ -243,5 +243,110 @@ class RunnerSafetyTests(unittest.TestCase):
         self.assertIs(False, spawn.call_args.kwargs["shell"])
 
 
+class OwnedRegressionProfileTests(unittest.TestCase):
+    def runner(self):
+        # Reuse the existing pure baseline fixture without changing its defaults
+        # or assertions. No Runner constructor, ADB or subprocess is invoked here.
+        obj = RunnerSafetyTests().runner()
+        obj.args.owned_regression_avd = True
+        return obj
+
+    def identity_responses(self):
+        return {
+            ("get-state",): "device",
+            ("shell", "getprop", "ro.boot.qemu.avd_name"): "DomiDex_R27_Regression_API36",
+            ("shell", "getprop", "ro.kernel.qemu"): "1",
+            ("shell", "getprop", "ro.build.version.sdk"): "36",
+        }
+
+    def test_only_two_exact_profiles_and_no_arbitrary_override(self):
+        self.assertEqual(("emulator-5554", "DomiDex_R27_Baseline_API36"),
+                         run.target_profile(run.options(["--check"])))
+        self.assertEqual(("emulator-5556", "DomiDex_R27_Regression_API36"),
+                         run.target_profile(run.options(["--check", "--owned-regression-avd"])))
+        for arguments in (["--run", "--owned-regression"],
+                          ["--run", "--owned-regression-avd=other"],
+                          ["--run", "--owned-regression-avd", "--serial", "emulator-5554"],
+                          ["--run", "--owned-regression-avd", "--avd", "other"]):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                run.options(arguments)
+        for invalid in ("true", 1, None):
+            with self.assertRaises(ValueError):
+                run.target_profile(SimpleNamespace(owned_regression_avd=invalid))
+
+    def test_device_and_instrumentation_target_only_owned_fixed_serial(self):
+        runner = self.runner()
+        runner.command = Mock(return_value="device")
+        self.assertEqual("device", runner.device("get-state"))
+        runner.command.assert_called_once_with(
+            [runner.adb, "-s", "emulator-5556", "get-state"], 20, (0,))
+        command = runner.instrumentation_command()
+        self.assertEqual(["-s", "emulator-5556", "shell", "am", "instrument", "-w", "-r", "-e", "class"],
+                         command[1:10])
+        self.assertEqual(",".join(SELECTION["selectors"]), command[10])
+        self.assertEqual(run.INSTRUMENTATION, command[-1])
+        self.assertNotIn("emulator-5554", command)
+        self.assertEqual(371, len(runner.selection["expected_ids"]))
+
+    def test_identity_requires_owned_name_emulator_and_exact_api_without_fallback(self):
+        runner = self.runner()
+        good = self.identity_responses()
+        runner.device = Mock(side_effect=lambda *args: good[args])
+        runner.identity()
+        for key, wrong in (
+                (("get-state",), "offline"),
+                (("shell", "getprop", "ro.boot.qemu.avd_name"), run.AVD),
+                (("shell", "getprop", "ro.kernel.qemu"), "0"),
+                (("shell", "getprop", "ro.build.version.sdk"), "35")):
+            values = {**good, key: wrong}
+            runner.device = Mock(side_effect=lambda *args: values[args])
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                runner.identity()
+            self.assertTrue(all(call.args[0] in ("get-state", "shell")
+                                for call in runner.device.call_args_list))
+
+    def test_owned_offline_guards_still_reject_any_network_or_reverse(self):
+        runner = self.runner()
+        good = {
+            **self.identity_responses(),
+            ("shell", "settings", "get", "global", "airplane_mode_on"): "1",
+            ("shell", "settings", "get", "global", "wifi_on"): "0",
+            ("shell", "dumpsys", "connectivity"): "Active default network: none",
+            ("reverse", "--list"): "",
+        }
+        runner.device = Mock(side_effect=lambda *args: good[args])
+        runner.offline()
+        for key, wrong in (
+                (("shell", "settings", "get", "global", "airplane_mode_on"), "0"),
+                (("shell", "settings", "get", "global", "wifi_on"), "1"),
+                (("shell", "dumpsys", "connectivity"), "Active default network: 100"),
+                (("reverse", "--list"), "emulator-5556 tcp:8187 tcp:8187")):
+            values = {**good, key: wrong}
+            runner.device = Mock(side_effect=lambda *args: values[args])
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                runner.offline()
+
+    def test_owned_cleanup_rejects_baseline_identity_before_any_stop(self):
+        runner = self.runner()
+        runner.started = True
+        values = self.identity_responses()
+        values[("shell", "getprop", "ro.boot.qemu.avd_name")] = run.AVD
+        runner.device = Mock(side_effect=lambda *args: values[args])
+        with self.assertRaises(ValueError):
+            runner.failure_cleanup()
+        self.assertFalse(any("force-stop" in call.args for call in runner.device.call_args_list))
+
+    def test_owned_check_never_installs_or_creates_output(self):
+        runner = self.runner()
+        runner.args.check = True
+        runner.preflight = Mock(return_value={
+            "serial": runner.serial, "avd": runner.avd, "offline": True})
+        runner.device = Mock(side_effect=AssertionError("No mutating device call"))
+        with patch.object(run, "file_hash", return_value="hash"), patch.object(run, "source_hashes", return_value={}), \
+                patch.object(Path, "mkdir", side_effect=AssertionError("No output directory")), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, runner.run())
+        runner.device.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

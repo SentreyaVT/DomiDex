@@ -130,3 +130,25 @@ Scanner-Qualitäts-/Latenzmessung, kein Firebase-/Produktions-/Xiaomi-E2E-Test, 
 Releasefreigabe und aktiviert weder den vorbereiteten Delta-Pull noch andere
 ungeprüfte Produktionspfade. Renderer-/Host-AVD-Abstürze werden als fehlgeschlagener
 Lauf dokumentiert, nicht ungeprüft als Android-Produktfehler umgedeutet.
+
+## Separately owned regression emulator
+
+The optional exact flag `--owned-regression-avd` selects only
+`DomiDex_R27_Regression_API36` / `emulator-5556`. Omitting it preserves the original
+baseline profile and its behavior. **Do not use the baseline `--run` when its
+ordinary user installation must remain unchanged.** There is no arbitrary-device
+or selector override. Both profiles retain the same exact371 identities, debug
+certificate, package, offline, input-freeze and cleanup-ownership checks.
+
+The runner never provisions or starts an AVD. Before using the additional profile,
+independently record ownership of its freshly initialized data directory, exact
+system image, launch arguments and camera configuration; do not copy baseline
+userdata/accounts/snapshots. Prepare it offline before any test and avoid host
+webcam/microphone passthrough. A different AVD is a functional-regression target,
+not an interchangeable performance baseline.
+
+```powershell
+python -I -B scripts/verification/android-regression/test_runner.py
+python -I -B scripts/verification/android-regression/run.py --check --owned-regression-avd
+python -I -B scripts/verification/android-regression/run.py --run --owned-regression-avd
+```
