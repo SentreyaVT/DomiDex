@@ -1,6 +1,7 @@
 package com.dominik.cardvault.data.sync
 
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.ApplicationInfo
 import android.database.sqlite.SQLiteDatabase
 import android.net.ConnectivityManager
@@ -17,6 +18,11 @@ import androidx.work.ListenableWorker
 import com.dominik.cardvault.auth.canUseFirebaseAppBackend
 import com.dominik.cardvault.auth.canonicalCollectionOwnerUid
 import com.dominik.cardvault.auth.currentVerifiedFirebaseEntitlementAccount
+import com.dominik.cardvault.data.knowledge.FirebaseScanKnowledge
+import com.dominik.cardvault.data.knowledge.ScanKnowledgeRecord
+import com.dominik.cardvault.data.knowledge.ScanKnowledgeStatus
+import com.dominik.cardvault.data.knowledge.SCAN_KNOWLEDGE_MAX_AGE_MILLIS
+import com.dominik.cardvault.data.knowledge.ScanKnowledgeStore
 import com.dominik.cardvault.data.local.CardVaultDatabase
 import com.dominik.cardvault.data.local.AppMetadataEntity
 import com.dominik.cardvault.data.local.CatalogCardEntity
@@ -99,6 +105,186 @@ class CollectionSyncSessionSdkInstrumentedTest {
     private var deferredRoomFile: File? = null
     private var deferredRoomOwnerMarker: String? = null
     private var deferredInitialSeed: Map<String, Map<String, Any>>? = null
+    private var knowledgeFixture: KnowledgeFixture? = null
+    private val knowledgeObservations = mutableListOf<AutoCloseable>()
+
+    /** Real exact-document SDK listeners and real sign-out; no enqueue/consent/worker call. */
+    @Test fun knowledgeListenerReplacesCacheRemovesMissingAndInvalidatesOnSignOut() = runBlocking(Dispatchers.IO) {
+        withTimeout(60_000) {
+            check(scenario == "knowledge-listener" && owner == "sdk-proof-collection-knowledge-listener")
+            requireActualEntitlement()
+            val roomBefore = localSnapshot()
+            val positive = "1".repeat(64)
+            val missing = "2".repeat(64)
+            val untouched = "3".repeat(64)
+            val remote = control.firestore.collection("scanKnowledge").document(positive).get(Source.SERVER).bounded()
+            assertTrue(remote.exists())
+            assertFalse(remote.metadata.isFromCache)
+            assertFalse(remote.metadata.hasPendingWrites())
+            val stamp = checkNotNull(remote.getTimestamp("lastUpdatedAt"))
+            assertEquals(mapOf<String, Any>(
+                "fingerprint" to positive, "cardId" to "sdk-knowledge-$runId-server",
+                "sourceSetId" to "synthetic-server-set", "cardNumber" to "101/202",
+                "status" to "STABLE", "confidence" to 91L, "confirmations" to 7L,
+                "corrections" to 2L, "knowledgeVersion" to 1L, "lastUpdatedAt" to stamp,
+            ), remote.data)
+            val confirmedMissing = control.firestore.collection("scanKnowledge").document(missing).get(Source.SERVER).bounded()
+            assertFalse(confirmedMissing.exists())
+            assertFalse(confirmedMissing.metadata.isFromCache)
+            assertFalse(confirmedMissing.metadata.hasPendingWrites())
+            val expected = ScanKnowledgeRecord(positive, "sdk-knowledge-$runId-server", "synthetic-server-set",
+                "101/202", ScanKnowledgeStatus.STABLE, 91, 7, 2, 1, stamp.toDate().time)
+            val now = System.currentTimeMillis()
+            assertTrue(expected.updatedAtEpochMillis > 0 && expected.updatedAtEpochMillis <= now &&
+                now - expected.updatedAtEpochMillis < SCAN_KNOWLEDGE_MAX_AGE_MILLIS)
+
+            val fixture = KnowledgeFixture().also { knowledgeFixture = it; it.initialize() }
+            val store = ScanKnowledgeStore(fixture.isolated)
+            val local = expected.copy(cardId = "sdk-knowledge-$runId-local", sourceSetId = "synthetic-local-set",
+                cardNumber = "9/9", status = ScanKnowledgeStatus.CANDIDATE, confidence = 22,
+                confirmations = 1, corrections = 0, updatedAtEpochMillis = System.currentTimeMillis() - 1_000)
+            val missingLocal = local.copy(fingerprint = missing, cardId = "sdk-knowledge-$runId-missing")
+            val untouchedLocal = local.copy(fingerprint = untouched, cardId = "sdk-knowledge-$runId-untouched")
+            listOf(local, missingLocal, untouchedLocal).forEach(store::put)
+            assertEquals(local, store.get(positive))
+            assertEquals(missingLocal, store.get(missing))
+            assertEquals(untouchedLocal, store.get(untouched))
+            val untouchedBytes = fixture.cacheFile(untouched).readBytes()
+            val preferenceBefore = fixture.preferences.all.toMap()
+            fixture.assertNoEvidence()
+            val knowledge = FirebaseScanKnowledge(fixture.isolated, subject.auth, subject.firestore)
+            val positives = Channel<ScanKnowledgeRecord?>(Channel.UNLIMITED)
+            val positiveInvalidationOwners = Channel<String?>(Channel.UNLIMITED)
+            val absences = Channel<ScanKnowledgeRecord?>(Channel.UNLIMITED)
+            try {
+                // The subject has not read this document; the named control client above is independent.
+                knowledgeObservations += knowledge.observeRelevant(positive) {
+                    // Capture account identity at null publication, before the test can call signOut.
+                    if (it == null) check(positiveInvalidationOwners.trySend(canonicalCollectionOwnerUid(subject.auth.currentUser)).isSuccess)
+                    check(positives.trySend(it).isSuccess)
+                }
+                assertEquals(local, positives.receive())
+                awaitKnowledgeHint(positives, expected, local)
+                assertEquals(expected, store.get(positive))
+                val positiveBytes = fixture.cacheFile(positive).readBytes()
+
+                knowledgeObservations += knowledge.observeRelevant(missing) { check(absences.trySend(it).isSuccess) }
+                assertEquals(missingLocal, absences.receive())
+                awaitKnowledgeHint(absences, null, missingLocal)
+                // Check disk BEFORE get(): get() can delete unusable data and must not supply this proof.
+                assertTrue(fixture.atomicFiles(missing).none(File::exists))
+                assertArrayEquals(positiveBytes, fixture.cacheFile(positive).readBytes())
+                assertArrayEquals(untouchedBytes, fixture.cacheFile(untouched).readBytes())
+                assertEquals(expected, store.get(positive))
+                assertEquals(untouchedLocal, store.get(untouched))
+                fixture.assertNoEvidence()
+                assertEquals(preferenceBefore, fixture.preferences.all)
+
+                // Reject earlier failure-null; keep the positive observation OPEN through signOut.
+                while (true) {
+                    val queued = positives.tryReceive()
+                    if (queued.isFailure) break
+                    assertEquals(expected, queued.getOrThrow())
+                }
+                assertEquals(owner, canonicalCollectionOwnerUid(subject.auth.currentUser))
+                subject.auth.signOut()
+                assertNull(subject.auth.currentUser)
+                awaitKnowledgeHint(positives, null, expected)
+                assertNull("A null published while still authenticated is not sign-out proof", positiveInvalidationOwners.receive())
+                assertNull(knowledge.cached(positive))
+                assertEquals(owner, canonicalCollectionOwnerUid(control.auth.currentUser))
+                // Auth invalidation removes the active hint, not the fresh offline cache.
+                assertArrayEquals(positiveBytes, fixture.cacheFile(positive).readBytes())
+                assertArrayEquals(untouchedBytes, fixture.cacheFile(untouched).readBytes())
+                assertTrue(fixture.atomicFiles(missing).none(File::exists))
+                assertEquals(preferenceBefore, fixture.preferences.all)
+                fixture.assertNoEvidence()
+                assertEquals(roomBefore, localSnapshot())
+            } finally {
+                // @After independently retries every observation cleanup on a failed close.
+                knowledgeObservations.forEach(AutoCloseable::close)
+            }
+        }
+    }
+
+    private suspend fun awaitKnowledgeHint(events: Channel<ScanKnowledgeRecord?>, expected: ScanKnowledgeRecord?,
+        previous: ScanKnowledgeRecord) = withTimeout(20_000) {
+        while (true) {
+            val value = events.receive()
+            if (value == expected) break
+            assertEquals("Only duplicate previous hints may precede the complete expected hint", previous, value)
+        }
+    }
+
+    /** Owned exact files plus uniquely named real SharedPreferences; never the app's consent file. */
+    private inner class KnowledgeFixture {
+        private val name = "domidex-knowledge-sdk-$runId-" + UUID.randomUUID().toString()
+        private val parent = context.filesDir.canonicalFile
+        private val root = File(parent, name)
+        private val marker = File(root, "owner.txt")
+        private val markerValue = "$owner:$runId:$name"
+        private val preferenceName = "$name-consent"
+        val preferences = context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
+        val isolated = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getFilesDir(): File = root
+            override fun getSharedPreferences(name: String, mode: Int): android.content.SharedPreferences {
+                check(name == "domidex_scan_knowledge_consent" && mode == Context.MODE_PRIVATE)
+                return preferences
+            }
+        }
+        fun initialize() {
+            check(root.canonicalFile == root && root.parentFile == parent && !root.exists())
+            check(preferences.all.isEmpty())
+            check(root.mkdir())
+            marker.writeText(markerValue, Charsets.UTF_8)
+            check(preferences.edit().putString("sdkFixtureOwner", markerValue).commit())
+            check(isolated.applicationContext === isolated && isolated.filesDir == root)
+        }
+        fun cacheFile(fingerprint: String): File {
+            check(fingerprint in listOf("1".repeat(64), "2".repeat(64), "3".repeat(64)))
+            return File(root, "scan_knowledge/cache/$fingerprint.json")
+        }
+        fun atomicFiles(fingerprint: String): List<File> = cacheFile(fingerprint).let {
+            listOf(it, File(it.path + ".bak"), File(it.path + ".new"))
+        }
+        fun assertNoEvidence() {
+            for (part in listOf("outbox-v2", "uploaded-v2")) {
+                val directory = File(root, "scan_knowledge/$part")
+                check(directory.isDirectory && directory.listFiles()?.isEmpty() == true)
+            }
+        }
+        fun cleanupPreferences() {
+            check(preferences.all == mapOf("sdkFixtureOwner" to markerValue))
+            check(context.deleteSharedPreferences(preferenceName))
+            check(context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE).all.isEmpty())
+        }
+        fun cleanupFiles() {
+            if (!root.exists()) return
+            check(name.matches(Regex("domidex-knowledge-sdk-[0-9a-f]{32}-[0-9a-f-]{36}")))
+            check(root.canonicalFile == root && root.parentFile == parent)
+            check(marker.isFile && marker.canonicalFile == marker && marker.readText(Charsets.UTF_8) == markerValue)
+            val knowledge = File(root, "scan_knowledge")
+            val cache = File(knowledge, "cache")
+            val outbox = File(knowledge, "outbox-v2")
+            val uploaded = File(knowledge, "uploaded-v2")
+            val files = listOf("1".repeat(64), "2".repeat(64), "3".repeat(64)).flatMap(::atomicFiles)
+            val allowed = (listOf(root, marker, knowledge, cache, outbox, uploaded) + files).toSet()
+            fun validate(directory: File) {
+                check(directory.canonicalFile == directory && directory in allowed)
+                directory.listFiles().orEmpty().forEach { child ->
+                    check(child in allowed && child.canonicalFile == child)
+                    if (child.isDirectory) validate(child) else check(child.isFile)
+                }
+            }
+            validate(root)
+            // No recursive delete: only verified exact fixture files and now-empty directories.
+            files.forEach { if (it.exists()) check(it.delete()) }
+            listOf(cache, outbox, uploaded, knowledge).forEach { if (it.exists()) check(it.delete()) }
+            check(marker.delete())
+            check(root.delete() && !root.exists())
+        }
+    }
 
     /**
      * Two actual bounded FULL cycles, with an owned SQLite reopen between the first
@@ -532,6 +718,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "deferredPlacementPointReadSurvivesRoomReopenUntilParentDelivery" -> "deferred-point-read"
             "offlinePrivateMutationSurvivesRoomReopenAndCompletesFullPull" -> "private-offline-retry"
             "twoClientPrivateBinderStaleEditConvergesWithoutRemoteRewrite" -> "private-two-client"
+            "knowledgeListenerReplacesCacheRemovesMissingAndInvalidatesOnSignOut" -> "knowledge-listener"
             "largePrivateFullPullContinuesAfterBudgetAndRoomReopen" -> "private-full-budget"
             else -> error("Unreviewed collection-session proof method")
         }
@@ -556,7 +743,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             control = client("control")
             signIn(subject.auth, owner)
             signIn(control.auth, owner)
-            if (scenario == "private-full-budget") return@withTimeout
+            if (scenario in setOf("knowledge-listener", "private-full-budget")) return@withTimeout
             if (scenario == "private-two-client") {
                 assertDiagnosticServerEmpty()
                 assertPairFresh(privatePairRooms.single())
@@ -2074,6 +2261,8 @@ class CollectionSyncSessionSdkInstrumentedTest {
             try { action() } catch (caught: Throwable) { if (failure == null) failure = caught else failure?.addSuppressed(caught) }
         }
         try {
+            knowledgeObservations.forEach { observation -> attempt { observation.close() } }
+            knowledgeObservations.clear()
             attempt { diagnosticSession?.close(); diagnosticSession = null }
             attempt { gate?.cancelCalls() }
             firestores.asReversed().forEach { firestore -> attempt { firestore.terminate().bounded() } }
@@ -2082,6 +2271,9 @@ class CollectionSyncSessionSdkInstrumentedTest {
             attempt { room?.close(); check(room?.isOpen != true) }
             attempt { cleanupPrivatePairRooms() }
             attempt { cleanupDeferredRoomFixture() }
+            attempt { knowledgeFixture?.cleanupPreferences() }
+            attempt { knowledgeFixture?.cleanupFiles() }
+            knowledgeFixture = null
         } finally {
             attempt { gate?.close() }
             attempt { check(FirebaseApp.getApps(context).none { it.name in appNames }) { "Named test app cleanup failed" } }

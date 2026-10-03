@@ -26,11 +26,13 @@ Tests und offene Gates stehen im [Release-27-Ledger](RELEASE_27.md).
    Offline/Reconnect, Revocation, Konflikte, Löschen und Teilen end-to-end.
    Für R27 bleibt auf ausdrücklichen Nutzerwunsch der abgesicherte vollständige
    Abgleich aktiv. Kein Delta-Rollout und kein unnötiger Lesepfad-Umbau.
-   Der aktuelle lokale Offline-/Datei-Reopen-Nachweis ist bestanden. Die getrennte
-   Jahresverlaufs-Messung zeigt bei 346.750 relevanten Preiszeilen etwa 16,1 s für
-   Portfolio/Binderdetails, während die Übersichten schnell bleiben. Diesen lokalen
-   Engpass gezielt aufteilen und erst mit vollständigem Preis-/Owner-Paritätsnachweis
-   optimieren; keine Historie kürzen, kein Sync-Umbau und keine Geräte-SLA ableiten.
+   Der lokale Offline-/Datei-Reopen-Nachweis sowie eine eng begrenzte echte
+   WorkManager-TestScheduler-Wiederholung sind bestanden; OS-/Prozessabbruch und
+   automatische Fortsetzung großer FULL-Zyklen bleiben offen. Der belegte
+   Jahresverlaufs-Engpass bei 346.750 relevanten Preiszeilen wurde gezielt verbessert:
+   Portfolio/Binderdetails etwa16,1s vorher, zuletzt etwa2,7–3,1s unter der unveränderten
+   vollständigen Integritätsprüfung. Diese Restkosten bleiben zu prüfen; keine
+   Historie wurde gekürzt, kein Sync-Umbau oder Geräte-SLA daraus abgeleitet.
 6. **Release-Gate:** unveränderte R8-Sicherheitsgrenzen, Mapping zum exakten AAB,
    nachgewiesene Native-Symbol-Abdeckung, ehrlicher Hersteller-Blocker; finaler
    Geräte- und Google-Play-Kompatibilitätstest nach separatem Go.

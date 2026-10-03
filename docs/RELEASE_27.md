@@ -1,6 +1,68 @@
 # Release 27 engineering ledger
 
-This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-02.
+This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-03.
+
+### Resume checkpoint: complete current-binary regression (2026-10-03)
+
+Read back the completed pre-pause run, without reclassifying an unfinished run:
+`artifacts/android-regression/20261002T132647Z-78f25325/manifest.json` records
+**371/371 PASS, zero skips/failures**, exit0, frozen inputs/APKs and offline,
+empty-reverse cleanup. It finished2026-10-02T13:31:20Z. Product APK is09cdad…,
+test APK1c175… (full hashes in the listener checkpoint below), matching the15/15
+SDK proof. No new run, physical-device, packaged-release or live claim follows
+from this readback. Automatic large-budget WorkManager continuation is the next
+local proof; Gate15 stays locked. No signing, deployment, Play upload or push.
+
+### Actual scanner-knowledge listener and sign-out proof (2026-10-02)
+
+The complete guarded local Auth/Firestore suite now passes **15/15**, with15 full
+independent Admin preflights/readbacks and16 unchanged nominal Google accounts.
+Whole harness139.382s; new knowledge case1.294s, unchanged final1001-binder case
+14.710s. Inputs, ports, reverses and instrumentation cleanup all pass. No product
+or Rules change was necessary: this extends tests/validators only.
+
+The unchanged `FirebaseScanKnowledge.observeRelevant` must replace a deliberately
+different fresh local record with the complete real server record. For a second
+fingerprint, a confirmed absent document must produce null AND remove its exact
+AtomicFile cache before any read could delete it. An unrelated cache remains
+byte-identical. The still-open positive observation must publish null after actual
+subject Auth sign-out; callback-time UID rejects earlier authenticated failure-null.
+Independent control Auth remains signed in. Fresh positive cache, Room snapshot,
+unique consent preferences and empty outbox/receipt directories remain unchanged.
+The test owns a marked UUID directory and unique preference file; verified exact
+cleanup never touches the default app cache/consent. Full Admin tree/timestamps
+are identical before/after this read-only case.
+
+Evidence in sibling Web: `outputs/collection-sync-session-local/`
+`2026-10-02T13-17-53-019Z-705ccc68641040b7a510cdc6d836b152/`. Root independently
+verified installed app SHA256 `09cdad1dfafd62f37f482cf2d63a7c287009b074f0dd8ba2402a531e1a864633`
+and new test APK `1c17553d33e41edd2a5c0e05b4ef0eefbf3cbfc22858fb3e2d25ecf9099a94fe`.
+Android evidence: `artifacts/release27-engineering-20261002/knowledge-listener-review/`
+`green-131159-3ce18963/` and `installed-apks.json`. Debug/test build and both lints
+pass1m17s; product APK unchanged; the JVM task reuses its recorded917PASS/1optional
+SKIP, not a fresh execution. The26 pure Web contract tests and focused lint pass.
+Independent draft review found no blocker. An operator-aborted old-test-APK run
+`d4d5f88b...` is retained as NOT PASS in `aborted-harness.json`; owned processes,
+reverses and exact APKs were independently checked before the successful restart.
+
+Fresh isolated R8/DEX verification passes3m13s:32 allowlisted task paths,
+28executed/two up-to-date actionable tasks, five DEX with valid headers/SHA1/Adler.
+Conservative rules are preserved, no APK/AAB generated or signing configured.
+Inputs/schemas/ordinary APKs/AAB/mapping and complete v26 archive remain unchanged.
+Evidence: `artifacts/release27-engineering-20261002/r8-only-price-integrity/verification.json`,
+source manifest `3f7e9810f975236d3e989310c6f770f00752dfbd26aa9230484d8381d34cb9e9`.
+Diagnostic mapping `1e539e524ea1a91a7728bd3362298ac6bc1f89345d569e3aee316dec9c2712e3`
+is NOT for upload or association with v26. Existing Kotlin lifecycle deprecations
+remain; this is not packaged-runtime/native-symbol/Play validation.
+Fresh isolated Web unit regression also passes **1295/1295**,78files,23.19s:
+`outputs/release-local/2026-10-02T13-24-39-770Z-2132.{json,log}`. Existing React-act
+and Canvas limitations remain, no real browser/live performance claim.
+
+This proves the three narrow adapter paths, not nonempty evidence/receipt
+preservation, malformed data, revoked permissions, transport failure, A→B→A,
+post-close callbacks, process death, Eventarc, real-user consent or scanner quality.
+No physical device, production project, signing, AAB, deployment or push was used.
+**Full-Sync remains active; Delta deferred; Gate15 locked.**
 
 ### Conflicting price-guide rows: reproduced and rejected before persistence (2026-10-02)
 
@@ -1442,16 +1504,16 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS, FULL retained | 14/14 actual local SDK cases include durable offline retry, separate-client stale-base convergence and 1001-binder FULL-budget/Room-reopen/idempotence; 18/18 focused Room controls. Automatic WorkManager/UI/OS/process delivery, simultaneous physical devices and broader scale remain open. Delta is deferred, not an R27 requirement; see SYNC.md |
-| 5 Pricing/catalog | IN PROGRESS | bounded Android import with 3 actual Room persistence/rollback cases, Web snapshot/identity fixes, seven verified mappings and incremental price resolution tested; full coverage and centralized delivery remain |
-| 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card decoded-body cap/cancellation proven 14/14, cache/package regression 83/83; O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
+| 4 Collection/binder sync | IN PROGRESS, FULL retained | 15/15 actual local SDK cases retain durable offline retry, separate-client stale-base convergence and explicitly continued1001-binder FULL/Room-reopen/idempotence. Separate actual WorkManager TestScheduler retry/APPEND1/1 passes;18/18 focused Room controls remain dated. Automatic large-budget continuation, UI/OS/process delivery, simultaneous physical devices and broader scale remain open. Delta is deferred; see SYNC.md |
+| 5 Pricing/catalog | IN PROGRESS | bounded Android import with4/4 real parser/Room persistence/rollback/conflicting-row cases, Web snapshot/identity fixes, seven verified mappings and incremental pricing tested. Conflicting duplicates were not found in the frozen provider download; this hardening does not close full coverage or centralized delivery |
+| 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card body cap/cancellation14/14, cache/package83/83. Missing-trend DTO resolves once instead of twice, full parity verified. O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |
 | 8 Recognition | IN PROGRESS (limited replay PASS) | Historical replays retain their scope. Latest owner-confirmed queue triple: Nidorina MEP101 read correctly3times, correct suggestions, two candidates each,4.2–4.7s active plus burst queue delay. Earlier sequential no-candidate observations have unknown ground truth and are not Nidorina failures. No automatic-printing, speedup vs26 or full hardware claim; quality checks unchanged |
-| 9 Community knowledge | IN PROGRESS (local safety/aggregation tests PASS) | Existing 61 synthetic concurrency cases plus two actual canonical callback/Admin transaction cases within35/35 private operations cover concurrent votes, redelivery, stale evidence and deletion locks. Eventarc delivery, actual retry/load contention and real-user consent remain unproved |
+| 9 Community knowledge | IN PROGRESS (narrow SDK listener/Auth PASS) | Actual adapter replaces full cache record, removes confirmed absent hint and invalidates on actual sign-out, inside15/15 local SDK cases. Prior61 synthetic concurrency and35/35 actual private operations retain dated scopes. Malformed/revoked/transport listener paths, Eventarc delivery, actual retry/load contention and real-user consent remain unproved |
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | Owner/session and deletion-consent fixes retain prior tests;35 local private-operation cases pass. Read-only metadata partly confirms provider configuration including seven-day Storage soft delete, not live-object TTL. Complete deletion/purge/operator workflow and retention decisions remain open |
 | 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Two actual Run revision resource configurations and partial retention metadata read-only verified; Hosting pinTag target, live metrics/alerts/billing and complete inventories remain unverified |
 | 12 Load/scale | PARTIAL; measured history improvement | Same unchanged annual benchmark after narrow query-order fix: previous~16.1s portfolio/private history reduced to~2.7–3.1s on latest APK,58 samples/full integrity pass. No retention/schema/delta change.1001-binder actual FULL continuation passes; O(N) sharing/fan-out, residual history cost and production load remain open |
-| 13 Full regression | IN PROGRESS | Latest exact APK6f8cee…/ac7f2e…:371/371 fixed emulator,18/18 focused Room,14/14 actual SDK,annual58 samples. Fresh isolated R8/DEX proof source-manifestc0e377… passes without packaging/signing.914 JVM PASS/one optional live-price SKIP,1287 broad Web and35 actual local private-operation cases retain separate recorded scopes. Physical/live/final release contracts remain open |
+| 13 Full regression | IN PROGRESS | Product APK09cdad… and test1c175… pass371/371 fixed matrix and15/15 actual SDK; earlier same-product test08dab… passes4/4 importRoom.917JVM PASS/one existing optional skip; fresh1295Web and isolated R8/DEX source-manifest3f7e98… pass. Older18Room/annual58-sample/35private-operation proofs retain historical hashes. Physical/live/final packaged-release contracts remain open |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
