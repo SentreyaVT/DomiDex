@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import android.security.NetworkSecurityPolicy
+import android.util.AtomicFile
 import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
@@ -45,17 +46,24 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldPath
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.MemoryCacheSettings
+import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Source
 import java.net.InetSocketAddress
 import java.io.File
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -110,6 +118,8 @@ class CollectionSyncSessionSdkInstrumentedTest {
     private var deferredInitialSeed: Map<String, Map<String, Any>>? = null
     private var knowledgeFixture: KnowledgeFixture? = null
     private var malformedKnowledgeFixture: MalformedKnowledgeFixture? = null
+    private var revokedKnowledgeFixture: RevokedKnowledgeFixture? = null
+    private var dataChangedRevokedKnowledgeFixture: DataChangedRevokedKnowledgeFixture? = null
     private val knowledgeObservations = mutableListOf<AutoCloseable>()
 
     /** Real exact-document SDK listeners and real sign-out; no enqueue/consent/worker call. */
@@ -419,6 +429,688 @@ class CollectionSyncSessionSdkInstrumentedTest {
             if (!root.exists()) return
             check(name.matches(Regex("domidex-knowledge-malformed-sdk-[0-9a-f]{32}-[0-9a-f-]{36}")))
             existingPaths() // Reject foreign paths before any deletion.
+            files.filter { it != marker }.forEach { if (it.exists()) check(it.delete()) }
+            directories.filter { it != root }.sortedByDescending { it.path.length }
+                .forEach { if (it.exists()) check(it.delete()) }
+            check(marker.delete())
+            check(root.delete() && !root.exists())
+        }
+    }
+
+    private data class KnowledgeRevocationNull(
+        val owner: String?, val authEpoch: Int,
+        val wire: PrivatePullDemoGrpcGate.KnowledgeRevocationSnapshot,
+    )
+
+    /** Actual positive adapter listener, host-only demo lock, genuine SDK denial and unchanged local state. */
+    @Test fun knowledgeListenerPermissionDeniedInvalidatesHintAndPreservesLocalState() = runBlocking(Dispatchers.IO) {
+        withTimeout(90_000) {
+            check(scenario == "knowledge-revoked" && owner == "sdk-proof-collection-knowledge-revoked")
+            requireActualEntitlement()
+            val roomBefore = localSnapshot()
+            val fingerprint = "6".repeat(64)
+            val untouched = "7".repeat(64)
+            // Independent same-rule control uses the earlier positive seed, never the audited target.
+            // Complete its temporary SERVER listener before arming the passive single-target audit.
+            val diagnosticFingerprint = "1".repeat(64)
+            val diagnosticReference = control.firestore.collection("scanKnowledge").document(diagnosticFingerprint)
+            val diagnosticBefore = diagnosticReference.get(Source.SERVER).bounded()
+            assertTrue(diagnosticBefore.exists())
+            assertFalse(diagnosticBefore.metadata.isFromCache)
+            assertFalse(diagnosticBefore.metadata.hasPendingWrites())
+            assertEquals(owner, canonicalCollectionOwnerUid(control.auth.currentUser))
+            val diagnosticStamp = checkNotNull(diagnosticBefore.getTimestamp("lastUpdatedAt"))
+            val diagnosticExpected = mapOf<String, Any>(
+                "fingerprint" to diagnosticFingerprint, "cardId" to "sdk-knowledge-$runId-server",
+                "sourceSetId" to "synthetic-server-set", "cardNumber" to "101/202",
+                "status" to "STABLE", "confidence" to 91L, "confirmations" to 7L,
+                "corrections" to 2L, "knowledgeVersion" to 1L, "lastUpdatedAt" to diagnosticStamp,
+            )
+            assertEquals(diagnosticExpected, diagnosticBefore.data)
+            val diagnosticNow = System.currentTimeMillis()
+            assertTrue(diagnosticStamp.toDate().time > 0 && diagnosticStamp.toDate().time <= diagnosticNow &&
+                diagnosticNow - diagnosticStamp.toDate().time < SCAN_KNOWLEDGE_MAX_AGE_MILLIS)
+            // Finish the independent control's temporary SERVER listener before arming the audit.
+            val remote = control.firestore.collection("scanKnowledge").document(fingerprint).get(Source.SERVER).bounded()
+            assertTrue(remote.exists())
+            assertFalse(remote.metadata.isFromCache)
+            assertFalse(remote.metadata.hasPendingWrites())
+            val stamp = checkNotNull(remote.getTimestamp("lastUpdatedAt"))
+            val expectedServer = mapOf<String, Any>(
+                "fingerprint" to fingerprint, "cardId" to "sdk-knowledge-$runId-revoked-server",
+                "sourceSetId" to "synthetic-server-set", "cardNumber" to "101/202",
+                "status" to "STABLE", "confidence" to 91L, "confirmations" to 7L,
+                "corrections" to 2L, "knowledgeVersion" to 1L, "lastUpdatedAt" to stamp,
+            )
+            assertEquals(expectedServer, remote.data)
+            val expected = ScanKnowledgeRecord(fingerprint, "sdk-knowledge-$runId-revoked-server",
+                "synthetic-server-set", "101/202", ScanKnowledgeStatus.STABLE, 91, 7, 2, 1, stamp.toDate().time)
+            val now = System.currentTimeMillis()
+            assertTrue(expected.updatedAtEpochMillis > 0 && expected.updatedAtEpochMillis <= now &&
+                now - expected.updatedAtEpochMillis < SCAN_KNOWLEDGE_MAX_AGE_MILLIS)
+
+            val fixture = RevokedKnowledgeFixture().also { revokedKnowledgeFixture = it; it.initialize() }
+            fixture.assertExistingFixtureNotAdopted()
+            val store = ScanKnowledgeStore(fixture.isolated)
+            val consent = ScanKnowledgeConsent(fixture.isolated)
+            consent.setEnabled(owner, true)
+            consent.setEnabled(OTHER_OWNER, false)
+            val ownerReceipt = ScanKnowledgeEvidence(
+                fingerprint = fingerprint, confirmedCardId = "sdk-knowledge-$runId-revoked-owner-receipt",
+                sourceSetId = "synthetic-local-set", cardNumber = "9/9", setCode = "SYNTHETIC",
+                ocrTokens = listOf("synthetic"), visualFingerprint = null,
+                candidateIds = listOf("sdk-knowledge-$runId-revoked-owner-receipt"), originalConfidence = 22,
+                corrected = false, scannerVersion = "sdk-local-fixture", observedAtClient = now - 1_000,
+            )
+            val otherReceipt = ownerReceipt.copy(confirmedCardId = "sdk-knowledge-$runId-revoked-other-receipt")
+            val ownerPending = ownerReceipt.copy(confirmedCardId = "sdk-knowledge-$runId-revoked-owner-pending", corrected = true)
+            val otherPending = otherReceipt.copy(confirmedCardId = "sdk-knowledge-$runId-revoked-other-pending", corrected = true)
+            // Local fixture creation only; no Firebase enqueue, upload, scheduler or worker.
+            for ((uid, receipt, pending) in listOf(
+                Triple(owner, ownerReceipt, ownerPending), Triple(OTHER_OWNER, otherReceipt, otherPending),
+            )) {
+                assertTrue(store.enqueue(uid, receipt))
+                store.markUploaded(uid, receipt)
+                assertTrue(store.enqueue(uid, pending))
+                assertEquals(listOf(pending), store.pending(uid))
+                assertEquals(receipt.confirmedCardId, store.lastUploadedCardId(uid, fingerprint))
+            }
+            val local = expected.copy(cardId = "sdk-knowledge-$runId-revoked-local", sourceSetId = "synthetic-local-set",
+                cardNumber = "9/9", status = ScanKnowledgeStatus.CANDIDATE, confidence = 22,
+                confirmations = 1, corrections = 0, updatedAtEpochMillis = now - 1_000)
+            val untouchedLocal = local.copy(fingerprint = untouched, cardId = "sdk-knowledge-$runId-revoked-untouched")
+            store.put(local)
+            store.put(untouchedLocal)
+            assertEquals(local, store.get(fingerprint))
+            assertEquals(untouchedLocal, store.get(untouched))
+            val preferencesBefore = fixture.preferences.all.toMap()
+            val directoriesBefore = fixture.directorySnapshot()
+            val initialFiles = fixture.fileSnapshot()
+            assertEquals(7, initialFiles.size)
+            // Drain completed setup sign-in notifications before measuring this observation's epoch.
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val authEpoch = AtomicInteger(0)
+            val authEvents = Channel<String?>(Channel.UNLIMITED)
+            val authWitness = FirebaseAuth.AuthStateListener {
+                authEpoch.incrementAndGet()
+                check(authEvents.trySend(canonicalCollectionOwnerUid(it.currentUser)).isSuccess)
+            }
+            knowledgeObservations += AutoCloseable { subject.auth.removeAuthStateListener(authWitness) }
+            subject.auth.addAuthStateListener(authWitness)
+            assertEquals(owner, withTimeout(20_000) { authEvents.receive() })
+            assertEquals(1, authEpoch.get())
+            val wire = checkNotNull(gate).observeKnowledgeRevocation()
+            val hints = Channel<ScanKnowledgeRecord?>(Channel.UNLIMITED)
+            val invalidations = Channel<KnowledgeRevocationNull>(Channel.UNLIMITED)
+            val sdkSnapshots = Channel<DocumentSnapshot>(Channel.UNLIMITED)
+            val sdkErrors = Channel<FirebaseFirestoreException>(Channel.UNLIMITED)
+            val knowledge = FirebaseScanKnowledge(fixture.isolated, subject.auth, subject.firestore)
+            try {
+                knowledgeObservations += knowledge.observeRelevant(fingerprint) { hint ->
+                    if (hint == null) check(invalidations.trySend(KnowledgeRevocationNull(
+                        canonicalCollectionOwnerUid(subject.auth.currentUser), authEpoch.get(), wire.snapshot(),
+                    )).isSuccess)
+                    check(hints.trySend(hint).isSuccess)
+                }
+                assertEquals(local, hints.receive())
+                awaitKnowledgeHint(hints, expected, local)
+                assertEquals(expected, store.get(fingerprint))
+                assertEquals(initialFiles - fixture.positiveCachePath, fixture.fileSnapshot() - fixture.positiveCachePath)
+                assertEquals(preferencesBefore, fixture.preferences.all)
+                assertEquals(directoriesBefore, fixture.directorySnapshot())
+                assertEquals(roomBefore, localSnapshot())
+
+                // An additional real SDK observer exposes the actual FirebaseFirestoreException.
+                // Registered only after the product has published a genuine SERVER record; it does
+                // not replace/inject any product callback. The SDK must coalesce the identical target.
+                val sdkWitness = subject.firestore.collection("scanKnowledge").document(fingerprint)
+                    .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                        if (error != null) check(sdkErrors.trySend(error).isSuccess)
+                        else if (snapshot != null) check(sdkSnapshots.trySend(snapshot).isSuccess)
+                    }
+                knowledgeObservations += AutoCloseable { sdkWitness.remove() }
+                val witnessed = withTimeout(20_000) {
+                    var confirmed: DocumentSnapshot? = null
+                    while (confirmed == null) {
+                        val snapshot = sdkSnapshots.receive()
+                        if (!snapshot.metadata.isFromCache && !snapshot.metadata.hasPendingWrites()) confirmed = snapshot
+                    }
+                    checkNotNull(confirmed)
+                }
+                assertTrue(witnessed.exists())
+                assertEquals(expectedServer, witnessed.data)
+                assertTrue(sdkErrors.tryReceive().isFailure)
+                while (true) {
+                    val queued = hints.tryReceive()
+                    if (queued.isFailure) break
+                    assertEquals("No earlier failure-null may supply revocation proof", expected, queued.getOrThrow())
+                }
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                assertEquals(1, authEpoch.get())
+                assertEquals(owner, canonicalCollectionOwnerUid(subject.auth.currentUser))
+                val protectedFiles = fixture.fileSnapshot()
+                assertEquals(7, protectedFiles.size)
+                assertEquals(initialFiles - fixture.positiveCachePath, protectedFiles - fixture.positiveCachePath)
+                assertEquals(preferencesBefore, fixture.preferences.all)
+                assertEquals(directoriesBefore, fixture.directorySnapshot())
+                wire.markReadyForHostRevocation()
+                // Exact run-owned AtomicFile barrier; no extra instrumentation status/code.
+                // Host creates only accountDeletionLocks/<owner> after full unchanged-tree readback.
+                val readyFile = fixture.publishReady()
+                val expectedFilesAfterReady = protectedFiles + readyFile
+                assertEquals(expectedFilesAfterReady, fixture.fileSnapshot())
+
+                val denied = try {
+                    withTimeout(30_000) { sdkErrors.receive() }
+                } catch (timeout: TimeoutCancellationException) {
+                    // An outer timeout/cancellation must not start a new diagnostic request.
+                    currentCoroutineContext().ensureActive()
+                    val wireAtTimeout = wire.snapshot()
+                    val epochAtTimeout = authEpoch.get()
+                    val subjectOwnerAtTimeout = canonicalCollectionOwnerUid(subject.auth.currentUser)
+                    val controlOwnerAtTimeout = canonicalCollectionOwnerUid(control.auth.currentUser)
+                    // Exactly one read-only CONTROL request, bounded20s inside the unchanged outer90s.
+                    // Host retains its owned lock until this Android invocation has ended. This read
+                    // uses the same appUser rule on fingerprint1, never a second ADD for fingerprint6.
+                    val controlResult = try {
+                        val snapshot = diagnosticReference.get(Source.SERVER).bounded()
+                        "SERVER_SUCCESS(exists=${snapshot.exists()}, fromCache=${snapshot.metadata.isFromCache}, " +
+                            "pendingWrites=${snapshot.metadata.hasPendingWrites()}, " +
+                            "payloadMatches=${snapshot.data == diagnosticExpected}, payload=${snapshot.data})"
+                    } catch (error: FirebaseFirestoreException) {
+                        "SDK_ERROR(code=${error.code})"
+                    } catch (error: TimeoutCancellationException) {
+                        currentCoroutineContext().ensureActive()
+                        "CONTROL_TIMEOUT_20S"
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        "CONTROL_EXCEPTION(type=${error.javaClass.name})"
+                    }
+                    // Even a genuine control PERMISSION_DENIED cannot satisfy the original target.
+                    // Never extend/restart its30s wait, inject a callback, reset subject or return PASS.
+                    throw AssertionError(
+                        "Original knowledge listener did not report SDK denial within30s; " +
+                            "atTimeout={wire=$wireAtTimeout, authEpoch=$epochAtTimeout, " +
+                            "subjectOwner=$subjectOwnerAtTimeout, controlOwner=$controlOwnerAtTimeout}; " +
+                            "controlFingerprint=$diagnosticFingerprint, controlResult=$controlResult; " +
+                            "afterControl={wire=${wire.snapshot()}, authEpoch=${authEpoch.get()}, " +
+                            "subjectOwner=${canonicalCollectionOwnerUid(subject.auth.currentUser)}, " +
+                            "controlOwner=${canonicalCollectionOwnerUid(control.auth.currentUser)}}",
+                        timeout,
+                    )
+                }
+                assertEquals("Real SDK exception must be PERMISSION_DENIED",
+                    FirebaseFirestoreException.Code.PERMISSION_DENIED, denied.code)
+                awaitKnowledgeHint(hints, null, expected)
+                val invalidation = invalidations.receive()
+                assertEquals(owner, invalidation.owner)
+                assertEquals("Same-UID Auth events must not supply invalidation", 1, invalidation.authEpoch)
+                assertKnowledgePermissionDenial(invalidation.wire)
+                assertKnowledgePermissionDenial(wire.snapshot())
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                assertEquals(1, authEpoch.get())
+                assertTrue(authEvents.tryReceive().isFailure)
+                assertEquals(owner, canonicalCollectionOwnerUid(subject.auth.currentUser))
+                assertEquals(owner, canonicalCollectionOwnerUid(control.auth.currentUser))
+                assertEquals("Revocation invalidates the active hint, preserving every local file byte",
+                    expectedFilesAfterReady, fixture.fileSnapshot())
+                assertEquals(directoriesBefore, fixture.directorySnapshot())
+                assertEquals(preferencesBefore, fixture.preferences.all)
+                assertEquals(roomBefore, localSnapshot())
+
+                val reopened = ScanKnowledgeStore(fixture.isolated)
+                assertEquals(expected, reopened.get(fingerprint))
+                assertEquals(untouchedLocal, reopened.get(untouched))
+                assertEquals(listOf(ownerPending), reopened.pending(owner))
+                assertEquals(listOf(otherPending), reopened.pending(OTHER_OWNER))
+                assertEquals(ownerReceipt.confirmedCardId, reopened.lastUploadedCardId(owner, fingerprint))
+                assertEquals(otherReceipt.confirmedCardId, reopened.lastUploadedCardId(OTHER_OWNER, fingerprint))
+                assertTrue(ScanKnowledgeConsent(fixture.isolated).isEnabled(owner))
+                assertFalse(ScanKnowledgeConsent(fixture.isolated).isEnabled(OTHER_OWNER))
+                assertEquals(expectedFilesAfterReady, fixture.fileSnapshot())
+                assertEquals(preferencesBefore, fixture.preferences.all)
+                assertEquals(directoriesBefore, fixture.directorySnapshot())
+                assertEquals(1, authEpoch.get())
+                assertTrue(sdkErrors.tryReceive().isFailure)
+                assertEquals(roomBefore, localSnapshot())
+            } finally {
+                knowledgeObservations.forEach(AutoCloseable::close)
+            }
+        }
+    }
+
+    private fun assertKnowledgePermissionDenial(value: PrivatePullDemoGrpcGate.KnowledgeRevocationSnapshot) {
+        assertEquals("${PrivatePullDemoGrpcGate.DATABASE}/documents/scanKnowledge/${"6".repeat(64)}", value.documentPath)
+        assertTrue(checkNotNull(value.targetId) > 0)
+        assertEquals(1, value.adds)
+        assertTrue(value.current)
+        assertTrue(value.ready)
+        assertEquals(1, value.denied)
+        assertTrue("Denial must already exist on the captured original target at null publication", value.deniedAfterReady)
+        assertNull(value.error)
+    }
+
+    /** Exact run-owned root known to the host; no default cache/consent or directory discovery. */
+    private inner class RevokedKnowledgeFixture {
+        private var rootCreated = false
+        private var consentOwned = false
+        private val name = "domidex-knowledge-revoked-sdk-$runId"
+        private val parent = context.filesDir.canonicalFile
+        private val root = File(parent, name)
+        private val marker = File(root, "owner.txt")
+        private val markerValue = "$owner:$runId:$name"
+        private val preferenceName = "$name-consent"
+        val preferences = context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
+        val isolated = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getFilesDir(): File = root
+            override fun getSharedPreferences(name: String, mode: Int): android.content.SharedPreferences {
+                check(name == "domidex_scan_knowledge_consent" && mode == Context.MODE_PRIVATE)
+                return preferences
+            }
+        }
+        private val knowledge = File(root, "scan_knowledge")
+        private val cache = File(knowledge, "cache")
+        private val outbox = File(knowledge, "outbox-v2")
+        private val uploaded = File(knowledge, "uploaded-v2")
+        private val ownerKeys = listOf(owner, OTHER_OWNER).map(::scanKnowledgeOwnerKey)
+        private val directories = listOf(root, knowledge, cache, outbox, uploaded) +
+            ownerKeys.flatMap { key -> listOf(File(outbox, key), File(uploaded, key)) }
+        private val positive = File(cache, "${"6".repeat(64)}.json")
+        val positiveCachePath = relativePath(positive)
+        private val ready = File(root, "ready.txt")
+        private val readyText = "v1|$runId|$owner|knowledgeListenerPermissionDeniedInvalidatesHintAndPreservesLocalState|${"6".repeat(64)}\n"
+        private val bases = listOf(positive, File(cache, "${"7".repeat(64)}.json"), ready) +
+            ownerKeys.flatMap { key -> listOf(File(outbox, "$key/${"6".repeat(64)}.json"),
+                File(uploaded, "$key/${"6".repeat(64)}.json")) }
+        private val files = listOf(marker) + bases.flatMap(::atomicFiles)
+        private val allowed = (directories + files).toSet()
+        fun initialize() {
+            check(name.matches(Regex("domidex-knowledge-revoked-sdk-[0-9a-f]{32}")))
+            check(root.canonicalFile == root && root.parentFile == parent && !root.exists())
+            check(preferences.all.isEmpty())
+            check(root.mkdir())
+            rootCreated = true
+            marker.writeText(markerValue, Charsets.UTF_8)
+            check(preferences.edit().putString("sdkFixtureOwner", markerValue).commit())
+            consentOwned = true
+            check(isolated.applicationContext === isolated && isolated.filesDir == root)
+        }
+        fun assertExistingFixtureNotAdopted() {
+            val filesBefore = fileSnapshot()
+            val directoriesBefore = directorySnapshot()
+            val preferencesBefore = preferences.all.toMap()
+            val collision = RevokedKnowledgeFixture()
+            var rejected = false
+            try { collision.initialize() }
+            catch (_: IllegalStateException) { rejected = true }
+            check(rejected) { "An existing run-owned fixture must never be adopted" }
+            collision.cleanupPreferences()
+            collision.cleanupFiles()
+            assertEquals(filesBefore, fileSnapshot())
+            assertEquals(directoriesBefore, directorySnapshot())
+            assertEquals(preferencesBefore, preferences.all)
+        }
+        fun publishReady(): Pair<String, List<Byte>> {
+            existingPaths()
+            check(atomicFiles(ready).none(File::exists))
+            val bytes = readyText.toByteArray(Charsets.UTF_8)
+            val atomic = AtomicFile(ready)
+            val output = atomic.startWrite()
+            try { output.write(bytes); atomic.finishWrite(output) }
+            catch (failure: Throwable) { atomic.failWrite(output); throw failure }
+            check(ready.readBytes().contentEquals(bytes))
+            check(atomicFiles(ready).drop(1).none(File::exists))
+            return relativePath(ready) to bytes.toList()
+        }
+        private fun atomicFiles(base: File) = listOf(base, File(base.path + ".bak"), File(base.path + ".new"))
+        private fun relativePath(file: File) = file.relativeTo(root).invariantSeparatorsPath
+        private fun existingPaths(): List<File> {
+            check(root.canonicalFile == root && root.parentFile == parent)
+            check(marker.isFile && marker.canonicalFile == marker && marker.readText(Charsets.UTF_8) == markerValue)
+            val found = mutableListOf<File>()
+            fun visit(directory: File) {
+                check(directory.canonicalFile == directory && directory in directories)
+                found += directory
+                directory.listFiles().orEmpty().forEach { child ->
+                    check(child in allowed && child.canonicalFile == child)
+                    if (child.isDirectory) visit(child) else { check(child.isFile); found += child }
+                }
+            }
+            visit(root)
+            return found
+        }
+        fun fileSnapshot(): Map<String, List<Byte>> = existingPaths().filter(File::isFile)
+            .associate { relativePath(it) to it.readBytes().toList() }
+        fun directorySnapshot(): Set<String> = existingPaths().filter(File::isDirectory).map(::relativePath).toSet()
+        fun cleanupPreferences() {
+            if (!consentOwned) return
+            check(preferences.getString("sdkFixtureOwner", null) == markerValue)
+            check(context.deleteSharedPreferences(preferenceName))
+            check(context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE).all.isEmpty())
+        }
+        fun cleanupFiles() {
+            if (!rootCreated) return
+            if (!root.exists()) return
+            check(name.matches(Regex("domidex-knowledge-revoked-sdk-[0-9a-f]{32}")))
+            existingPaths()
+            files.filter { it != marker }.forEach { if (it.exists()) check(it.delete()) }
+            directories.filter { it != root }.sortedByDescending { it.path.length }
+                .forEach { if (it.exists()) check(it.delete()) }
+            check(marker.delete())
+            check(root.delete() && !root.exists())
+        }
+    }
+
+    /** Separate lock + valid host data-change scenario; the original lock-only proof remains untouched. */
+    @Test fun knowledgeListenerPermissionDeniedAfterDataChangeInvalidatesHintAndPreservesLocalState() = runBlocking(Dispatchers.IO) {
+        withTimeout(90_000) {
+            check(scenario == "knowledge-revoked-on-data-change" && owner == "sdk-proof-collection-knowledge-revoked-on-data-change")
+            requireActualEntitlement()
+            val roomBefore = localSnapshot()
+            val fingerprint = "8".repeat(64)
+            val untouched = "9".repeat(64)
+            // Finish the independent control's temporary SERVER listener before arming the audit.
+            val remote = control.firestore.collection("scanKnowledge").document(fingerprint).get(Source.SERVER).bounded()
+            assertTrue(remote.exists())
+            assertFalse(remote.metadata.isFromCache)
+            assertFalse(remote.metadata.hasPendingWrites())
+            val stamp = checkNotNull(remote.getTimestamp("lastUpdatedAt"))
+            val expectedServer = mapOf<String, Any>(
+                "fingerprint" to fingerprint, "cardId" to "sdk-knowledge-$runId-revoked-on-data-change-server",
+                "sourceSetId" to "synthetic-server-set", "cardNumber" to "101/202",
+                "status" to "STABLE", "confidence" to 91L, "confirmations" to 7L,
+                "corrections" to 2L, "knowledgeVersion" to 1L, "lastUpdatedAt" to stamp,
+            )
+            assertEquals(expectedServer, remote.data)
+            val expected = ScanKnowledgeRecord(fingerprint, "sdk-knowledge-$runId-revoked-on-data-change-server",
+                "synthetic-server-set", "101/202", ScanKnowledgeStatus.STABLE, 91, 7, 2, 1, stamp.toDate().time)
+            val now = System.currentTimeMillis()
+            assertTrue(expected.updatedAtEpochMillis > 0 && expected.updatedAtEpochMillis <= now &&
+                now - expected.updatedAtEpochMillis < SCAN_KNOWLEDGE_MAX_AGE_MILLIS)
+
+            val fixture = DataChangedRevokedKnowledgeFixture().also { dataChangedRevokedKnowledgeFixture = it; it.initialize() }
+            fixture.assertExistingFixtureNotAdopted()
+            val store = ScanKnowledgeStore(fixture.isolated)
+            val consent = ScanKnowledgeConsent(fixture.isolated)
+            consent.setEnabled(owner, true)
+            consent.setEnabled(OTHER_OWNER, false)
+            val ownerReceipt = ScanKnowledgeEvidence(
+                fingerprint = fingerprint, confirmedCardId = "sdk-knowledge-$runId-revoked-on-data-change-owner-receipt",
+                sourceSetId = "synthetic-local-set", cardNumber = "9/9", setCode = "SYNTHETIC",
+                ocrTokens = listOf("synthetic"), visualFingerprint = null,
+                candidateIds = listOf("sdk-knowledge-$runId-revoked-on-data-change-owner-receipt"), originalConfidence = 22,
+                corrected = false, scannerVersion = "sdk-local-fixture", observedAtClient = now - 1_000,
+            )
+            val otherReceipt = ownerReceipt.copy(confirmedCardId = "sdk-knowledge-$runId-revoked-on-data-change-other-receipt")
+            val ownerPending = ownerReceipt.copy(confirmedCardId = "sdk-knowledge-$runId-revoked-on-data-change-owner-pending", corrected = true)
+            val otherPending = otherReceipt.copy(confirmedCardId = "sdk-knowledge-$runId-revoked-on-data-change-other-pending", corrected = true)
+            // Local fixture creation only; no Firebase enqueue, upload, scheduler or worker.
+            for ((uid, receipt, pending) in listOf(
+                Triple(owner, ownerReceipt, ownerPending), Triple(OTHER_OWNER, otherReceipt, otherPending),
+            )) {
+                assertTrue(store.enqueue(uid, receipt))
+                store.markUploaded(uid, receipt)
+                assertTrue(store.enqueue(uid, pending))
+                assertEquals(listOf(pending), store.pending(uid))
+                assertEquals(receipt.confirmedCardId, store.lastUploadedCardId(uid, fingerprint))
+            }
+            val local = expected.copy(cardId = "sdk-knowledge-$runId-revoked-on-data-change-local", sourceSetId = "synthetic-local-set",
+                cardNumber = "9/9", status = ScanKnowledgeStatus.CANDIDATE, confidence = 22,
+                confirmations = 1, corrections = 0, updatedAtEpochMillis = now - 1_000)
+            val untouchedLocal = local.copy(fingerprint = untouched, cardId = "sdk-knowledge-$runId-revoked-on-data-change-untouched")
+            store.put(local)
+            store.put(untouchedLocal)
+            assertEquals(local, store.get(fingerprint))
+            assertEquals(untouchedLocal, store.get(untouched))
+            val preferencesBefore = fixture.preferences.all.toMap()
+            val directoriesBefore = fixture.directorySnapshot()
+            val initialFiles = fixture.fileSnapshot()
+            assertEquals(7, initialFiles.size)
+            // Drain completed setup sign-in notifications before measuring this observation's epoch.
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val authEpoch = AtomicInteger(0)
+            val authEvents = Channel<String?>(Channel.UNLIMITED)
+            val authWitness = FirebaseAuth.AuthStateListener {
+                authEpoch.incrementAndGet()
+                check(authEvents.trySend(canonicalCollectionOwnerUid(it.currentUser)).isSuccess)
+            }
+            knowledgeObservations += AutoCloseable { subject.auth.removeAuthStateListener(authWitness) }
+            subject.auth.addAuthStateListener(authWitness)
+            assertEquals(owner, withTimeout(20_000) { authEvents.receive() })
+            assertEquals(1, authEpoch.get())
+            val wire = checkNotNull(gate).observeKnowledgeRevocationAfterDataChange()
+            val hints = Channel<ScanKnowledgeRecord?>(Channel.UNLIMITED)
+            val invalidations = Channel<KnowledgeRevocationNull>(Channel.UNLIMITED)
+            val sdkSnapshots = Channel<DocumentSnapshot>(Channel.UNLIMITED)
+            val sdkErrors = Channel<FirebaseFirestoreException>(Channel.UNLIMITED)
+            val knowledge = FirebaseScanKnowledge(fixture.isolated, subject.auth, subject.firestore)
+            try {
+                knowledgeObservations += knowledge.observeRelevant(fingerprint) { hint ->
+                    if (hint == null) check(invalidations.trySend(KnowledgeRevocationNull(
+                        canonicalCollectionOwnerUid(subject.auth.currentUser), authEpoch.get(), wire.snapshot(),
+                    )).isSuccess)
+                    check(hints.trySend(hint).isSuccess)
+                }
+                assertEquals(local, hints.receive())
+                awaitKnowledgeHint(hints, expected, local)
+                assertEquals(expected, store.get(fingerprint))
+                assertEquals(initialFiles - fixture.positiveCachePath, fixture.fileSnapshot() - fixture.positiveCachePath)
+                assertEquals(preferencesBefore, fixture.preferences.all)
+                assertEquals(directoriesBefore, fixture.directorySnapshot())
+                assertEquals(roomBefore, localSnapshot())
+
+                // An additional real SDK observer exposes the actual FirebaseFirestoreException.
+                // Registered only after the product has published a genuine SERVER record; it does
+                // not replace/inject any product callback. The SDK must coalesce the identical target.
+                val sdkWitness = subject.firestore.collection("scanKnowledge").document(fingerprint)
+                    .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                        if (error != null) check(sdkErrors.trySend(error).isSuccess)
+                        else if (snapshot != null) check(sdkSnapshots.trySend(snapshot).isSuccess)
+                    }
+                knowledgeObservations += AutoCloseable { sdkWitness.remove() }
+                val witnessed = withTimeout(20_000) {
+                    var confirmed: DocumentSnapshot? = null
+                    while (confirmed == null) {
+                        val snapshot = sdkSnapshots.receive()
+                        if (!snapshot.metadata.isFromCache && !snapshot.metadata.hasPendingWrites()) confirmed = snapshot
+                    }
+                    checkNotNull(confirmed)
+                }
+                assertTrue(witnessed.exists())
+                assertEquals(expectedServer, witnessed.data)
+                assertTrue(sdkErrors.tryReceive().isFailure)
+                while (true) {
+                    val queued = hints.tryReceive()
+                    if (queued.isFailure) break
+                    assertEquals("No earlier failure-null may supply revocation proof", expected, queued.getOrThrow())
+                }
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                assertEquals(1, authEpoch.get())
+                assertEquals(owner, canonicalCollectionOwnerUid(subject.auth.currentUser))
+                val protectedFiles = fixture.fileSnapshot()
+                assertEquals(7, protectedFiles.size)
+                assertEquals(initialFiles - fixture.positiveCachePath, protectedFiles - fixture.positiveCachePath)
+                assertEquals(preferencesBefore, fixture.preferences.all)
+                assertEquals(directoriesBefore, fixture.directorySnapshot())
+                assertTrue("No prior null may satisfy this scenario", invalidations.tryReceive().isFailure)
+                wire.markReadyForHostRevocation()
+                // Exact run-owned AtomicFile barrier; no extra instrumentation status/code.
+                // Host proves its exact lock, then changes only this seed's valid confidence91 to90 via CAS.
+                // Success still requires the original target's real REMOVE7, never a fresh read.
+                val readyFile = fixture.publishReady()
+                val expectedFilesAfterReady = protectedFiles + readyFile
+                assertEquals(expectedFilesAfterReady, fixture.fileSnapshot())
+
+                val denied = try {
+                    withTimeout(30_000) { sdkErrors.receive() }
+                } catch (timeout: TimeoutCancellationException) {
+                    currentCoroutineContext().ensureActive()
+                    // Passive diagnosis only. No CONTROL request, target restart, relisten or retry.
+                    throw AssertionError(
+                        "Original data-change knowledge listener did not report SDK denial within30s; " +
+                            "wire=${wire.snapshot()}, authEpoch=${authEpoch.get()}, " +
+                            "subjectOwner=${canonicalCollectionOwnerUid(subject.auth.currentUser)}, " +
+                            "controlOwner=${canonicalCollectionOwnerUid(control.auth.currentUser)}",
+                        timeout,
+                    )
+                }
+                assertEquals("Real SDK exception must be PERMISSION_DENIED",
+                    FirebaseFirestoreException.Code.PERMISSION_DENIED, denied.code)
+                awaitKnowledgeHint(hints, null, expected)
+                val invalidation = invalidations.receive()
+                assertEquals(owner, invalidation.owner)
+                assertEquals("Same-UID Auth events must not supply invalidation", 1, invalidation.authEpoch)
+                assertDataChangedKnowledgePermissionDenial(invalidation.wire)
+                assertDataChangedKnowledgePermissionDenial(wire.snapshot())
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                assertEquals(1, authEpoch.get())
+                assertTrue(authEvents.tryReceive().isFailure)
+                assertEquals(owner, canonicalCollectionOwnerUid(subject.auth.currentUser))
+                assertEquals(owner, canonicalCollectionOwnerUid(control.auth.currentUser))
+                assertEquals("Revocation invalidates the active hint, preserving every local file byte",
+                    expectedFilesAfterReady, fixture.fileSnapshot())
+                assertEquals(directoriesBefore, fixture.directorySnapshot())
+                assertEquals(preferencesBefore, fixture.preferences.all)
+                assertEquals(roomBefore, localSnapshot())
+
+                val reopened = ScanKnowledgeStore(fixture.isolated)
+                assertEquals(expected, reopened.get(fingerprint))
+                assertEquals(untouchedLocal, reopened.get(untouched))
+                assertEquals(listOf(ownerPending), reopened.pending(owner))
+                assertEquals(listOf(otherPending), reopened.pending(OTHER_OWNER))
+                assertEquals(ownerReceipt.confirmedCardId, reopened.lastUploadedCardId(owner, fingerprint))
+                assertEquals(otherReceipt.confirmedCardId, reopened.lastUploadedCardId(OTHER_OWNER, fingerprint))
+                assertTrue(ScanKnowledgeConsent(fixture.isolated).isEnabled(owner))
+                assertFalse(ScanKnowledgeConsent(fixture.isolated).isEnabled(OTHER_OWNER))
+                assertEquals(expectedFilesAfterReady, fixture.fileSnapshot())
+                assertEquals(preferencesBefore, fixture.preferences.all)
+                assertEquals(directoriesBefore, fixture.directorySnapshot())
+                assertEquals(1, authEpoch.get())
+                assertTrue(sdkErrors.tryReceive().isFailure)
+                assertEquals(roomBefore, localSnapshot())
+            } finally {
+                knowledgeObservations.forEach(AutoCloseable::close)
+            }
+        }
+    }
+
+    private fun assertDataChangedKnowledgePermissionDenial(value: PrivatePullDemoGrpcGate.KnowledgeRevocationSnapshot) {
+        assertEquals("${PrivatePullDemoGrpcGate.DATABASE}/documents/scanKnowledge/${"8".repeat(64)}", value.documentPath)
+        assertTrue(checkNotNull(value.targetId) > 0)
+        assertEquals(1, value.adds)
+        assertTrue(value.current)
+        assertTrue(value.ready)
+        assertEquals(1, value.denied)
+        assertTrue("Denial must already exist on the captured original target at null publication", value.deniedAfterReady)
+        assertNull(value.error)
+    }
+
+    /** Exact run-owned root known to the host; no default cache/consent or directory discovery. */
+    private inner class DataChangedRevokedKnowledgeFixture {
+        private var rootCreated = false
+        private var consentOwned = false
+        private val name = "domidex-knowledge-revoked-on-data-change-sdk-$runId"
+        private val parent = context.filesDir.canonicalFile
+        private val root = File(parent, name)
+        private val marker = File(root, "owner.txt")
+        private val markerValue = "$owner:$runId:$name"
+        private val preferenceName = "$name-consent"
+        val preferences = context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
+        val isolated = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getFilesDir(): File = root
+            override fun getSharedPreferences(name: String, mode: Int): android.content.SharedPreferences {
+                check(name == "domidex_scan_knowledge_consent" && mode == Context.MODE_PRIVATE)
+                return preferences
+            }
+        }
+        private val knowledge = File(root, "scan_knowledge")
+        private val cache = File(knowledge, "cache")
+        private val outbox = File(knowledge, "outbox-v2")
+        private val uploaded = File(knowledge, "uploaded-v2")
+        private val ownerKeys = listOf(owner, OTHER_OWNER).map(::scanKnowledgeOwnerKey)
+        private val directories = listOf(root, knowledge, cache, outbox, uploaded) +
+            ownerKeys.flatMap { key -> listOf(File(outbox, key), File(uploaded, key)) }
+        private val positive = File(cache, "${"8".repeat(64)}.json")
+        val positiveCachePath = relativePath(positive)
+        private val ready = File(root, "ready.txt")
+        private val readyText = "v1|$runId|$owner|knowledgeListenerPermissionDeniedAfterDataChangeInvalidatesHintAndPreservesLocalState|${"8".repeat(64)}\n"
+        private val bases = listOf(positive, File(cache, "${"9".repeat(64)}.json"), ready) +
+            ownerKeys.flatMap { key -> listOf(File(outbox, "$key/${"8".repeat(64)}.json"),
+                File(uploaded, "$key/${"8".repeat(64)}.json")) }
+        private val files = listOf(marker) + bases.flatMap(::atomicFiles)
+        private val allowed = (directories + files).toSet()
+        fun initialize() {
+            check(name.matches(Regex("domidex-knowledge-revoked-on-data-change-sdk-[0-9a-f]{32}")))
+            check(root.canonicalFile == root && root.parentFile == parent && !root.exists())
+            check(preferences.all.isEmpty())
+            check(root.mkdir())
+            rootCreated = true
+            marker.writeText(markerValue, Charsets.UTF_8)
+            check(preferences.edit().putString("sdkFixtureOwner", markerValue).commit())
+            consentOwned = true
+            check(isolated.applicationContext === isolated && isolated.filesDir == root)
+        }
+        fun assertExistingFixtureNotAdopted() {
+            val filesBefore = fileSnapshot()
+            val directoriesBefore = directorySnapshot()
+            val preferencesBefore = preferences.all.toMap()
+            val collision = DataChangedRevokedKnowledgeFixture()
+            var rejected = false
+            try { collision.initialize() }
+            catch (_: IllegalStateException) { rejected = true }
+            check(rejected) { "An existing run-owned fixture must never be adopted" }
+            collision.cleanupPreferences()
+            collision.cleanupFiles()
+            assertEquals(filesBefore, fileSnapshot())
+            assertEquals(directoriesBefore, directorySnapshot())
+            assertEquals(preferencesBefore, preferences.all)
+        }
+        fun publishReady(): Pair<String, List<Byte>> {
+            existingPaths()
+            check(atomicFiles(ready).none(File::exists))
+            val bytes = readyText.toByteArray(Charsets.UTF_8)
+            val atomic = AtomicFile(ready)
+            val output = atomic.startWrite()
+            try { output.write(bytes); atomic.finishWrite(output) }
+            catch (failure: Throwable) { atomic.failWrite(output); throw failure }
+            check(ready.readBytes().contentEquals(bytes))
+            check(atomicFiles(ready).drop(1).none(File::exists))
+            return relativePath(ready) to bytes.toList()
+        }
+        private fun atomicFiles(base: File) = listOf(base, File(base.path + ".bak"), File(base.path + ".new"))
+        private fun relativePath(file: File) = file.relativeTo(root).invariantSeparatorsPath
+        private fun existingPaths(): List<File> {
+            check(root.canonicalFile == root && root.parentFile == parent)
+            check(marker.isFile && marker.canonicalFile == marker && marker.readText(Charsets.UTF_8) == markerValue)
+            val found = mutableListOf<File>()
+            fun visit(directory: File) {
+                check(directory.canonicalFile == directory && directory in directories)
+                found += directory
+                directory.listFiles().orEmpty().forEach { child ->
+                    check(child in allowed && child.canonicalFile == child)
+                    if (child.isDirectory) visit(child) else { check(child.isFile); found += child }
+                }
+            }
+            visit(root)
+            return found
+        }
+        fun fileSnapshot(): Map<String, List<Byte>> = existingPaths().filter(File::isFile)
+            .associate { relativePath(it) to it.readBytes().toList() }
+        fun directorySnapshot(): Set<String> = existingPaths().filter(File::isDirectory).map(::relativePath).toSet()
+        fun cleanupPreferences() {
+            if (!consentOwned) return
+            check(preferences.getString("sdkFixtureOwner", null) == markerValue)
+            check(context.deleteSharedPreferences(preferenceName))
+            check(context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE).all.isEmpty())
+        }
+        fun cleanupFiles() {
+            if (!rootCreated) return
+            if (!root.exists()) return
+            check(name.matches(Regex("domidex-knowledge-revoked-on-data-change-sdk-[0-9a-f]{32}")))
+            existingPaths()
             files.filter { it != marker }.forEach { if (it.exists()) check(it.delete()) }
             directories.filter { it != root }.sortedByDescending { it.path.length }
                 .forEach { if (it.exists()) check(it.delete()) }
@@ -940,6 +1632,8 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "twoClientPrivateBinderStaleEditConvergesWithoutRemoteRewrite" -> "private-two-client"
             "knowledgeListenerReplacesCacheRemovesMissingAndInvalidatesOnSignOut" -> "knowledge-listener"
             "malformedKnowledgeListenerRemovesOnlyExactCacheAndPreservesLocalState" -> "knowledge-malformed"
+            "knowledgeListenerPermissionDeniedInvalidatesHintAndPreservesLocalState" -> "knowledge-revoked"
+            "knowledgeListenerPermissionDeniedAfterDataChangeInvalidatesHintAndPreservesLocalState" -> "knowledge-revoked-on-data-change"
             "largePrivateFullPullContinuesAfterBudgetAndRoomReopen" -> "private-full-budget"
             else -> error("Unreviewed collection-session proof method")
         }
@@ -964,7 +1658,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             control = client("control")
             signIn(subject.auth, owner)
             signIn(control.auth, owner)
-            if (scenario in setOf("knowledge-listener", "knowledge-malformed", "private-full-budget")) return@withTimeout
+            if (scenario in setOf("knowledge-listener", "knowledge-malformed", "knowledge-revoked", "knowledge-revoked-on-data-change", "private-full-budget")) return@withTimeout
             if (scenario == "private-two-client") {
                 assertDiagnosticServerEmpty()
                 assertPairFresh(privatePairRooms.single())
@@ -2498,6 +3192,12 @@ class CollectionSyncSessionSdkInstrumentedTest {
             attempt { malformedKnowledgeFixture?.cleanupPreferences() }
             attempt { malformedKnowledgeFixture?.cleanupFiles() }
             malformedKnowledgeFixture = null
+            attempt { revokedKnowledgeFixture?.cleanupPreferences() }
+            attempt { revokedKnowledgeFixture?.cleanupFiles() }
+            revokedKnowledgeFixture = null
+            attempt { dataChangedRevokedKnowledgeFixture?.cleanupPreferences() }
+            attempt { dataChangedRevokedKnowledgeFixture?.cleanupFiles() }
+            dataChangedRevokedKnowledgeFixture = null
         } finally {
             attempt { gate?.close() }
             attempt { check(FirebaseApp.getApps(context).none { it.name in appNames }) { "Named test app cleanup failed" } }

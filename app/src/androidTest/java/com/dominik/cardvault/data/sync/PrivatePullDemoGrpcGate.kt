@@ -5,6 +5,8 @@ import com.google.firebase.firestore.util.Supplier
 import com.google.firestore.v1.BatchGetDocumentsRequest
 import com.google.firestore.v1.CommitRequest
 import com.google.firestore.v1.ListenRequest
+import com.google.firestore.v1.ListenResponse
+import com.google.firestore.v1.TargetChange
 import com.google.firestore.v1.WriteRequest
 import io.grpc.CallOptions
 import io.grpc.Channel
@@ -19,6 +21,7 @@ import io.grpc.okhttp.OkHttpChannelBuilder
 import java.lang.reflect.Modifier
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -33,6 +36,7 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
     private var armed: Pair<Kind, String>? = null
     private var captured: GuardedCall<*, *>? = null
     private var held = CountDownLatch(1)
+    @Volatile private var knowledgeRevocationAudit: KnowledgeRevocationAudit? = null
     private val previous: Any?
     private val supplier = Supplier<ManagedChannelBuilder<*>> {
         check(!closed.get()) { "Demo gRPC gate is closed" }
@@ -65,6 +69,95 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
         checkNotNull(call) { "No controlled write to release" }.releaseMessages()
     }
 
+    /** Read-only wire observation. It never pauses, fabricates, changes or swallows an SDK message. */
+    fun observeKnowledgeRevocation(): KnowledgeRevocationAudit = synchronized(gateLock) {
+        check(!closed.get() && knowledgeRevocationAudit == null && armed == null && captured == null)
+        KnowledgeRevocationAudit("$DATABASE/documents/scanKnowledge/${"6".repeat(64)}")
+            .also { knowledgeRevocationAudit = it }
+    }
+
+    /** Independent fixed-path audit for the additive data-change scenario; still observation only. */
+    fun observeKnowledgeRevocationAfterDataChange(): KnowledgeRevocationAudit = synchronized(gateLock) {
+        check(!closed.get() && knowledgeRevocationAudit == null && armed == null && captured == null)
+        KnowledgeRevocationAudit("$DATABASE/documents/scanKnowledge/${"8".repeat(64)}")
+            .also { knowledgeRevocationAudit = it }
+    }
+
+    data class KnowledgeRevocationSnapshot(
+        val documentPath: String,
+        val targetId: Int?,
+        val adds: Int,
+        val current: Boolean,
+        val ready: Boolean,
+        val denied: Int,
+        val deniedAfterReady: Boolean,
+        val error: String?,
+    )
+
+    class KnowledgeRevocationAudit internal constructor(private val documentPath: String) {
+        private val lock = Any()
+        private var stream: Any? = null
+        private var targetId: Int? = null
+        private var adds = 0
+        private var current = false
+        private var ready = false
+        private var denied = 0
+        private var deniedAfterReady = false
+        private var error: String? = null
+
+        // Called only at the existing delegate.sendMessage boundary for actual SDK requests.
+        internal fun outbound(call: Any, request: ListenRequest) = synchronized(lock) {
+            if (request.hasAddTarget() && request.addTarget.documents.documentsList.contains(documentPath)) {
+                adds++
+                if (request.database != DATABASE || request.addTarget.documents.documentsList != listOf(documentPath) ||
+                    request.addTarget.targetId <= 0 || adds != 1) {
+                    error = "unexpected-exact-knowledge-target-registration"
+                } else {
+                    stream = call
+                    targetId = request.addTarget.targetId
+                }
+            }
+            if (stream === call && targetId != null && request.removeTarget == targetId && denied == 0) {
+                error = "client-removed-target-before-server-permission-denial"
+            }
+        }
+
+        // Called only by the forwarding listener for an actual delegate response. In particular,
+        // the local foreign-database safety self-test and gRPC onClose cannot satisfy this witness.
+        internal fun inbound(call: Any, response: ListenResponse) = synchronized(lock) {
+            if (stream !== call ||
+                response.responseTypeCase != ListenResponse.ResponseTypeCase.TARGET_CHANGE) return@synchronized
+            val observedTarget = targetId ?: return@synchronized
+            val change = response.targetChange
+            if (observedTarget !in change.targetIdsList) return@synchronized
+            if (change.targetIdsList != listOf(observedTarget)) {
+                error = "unexpected-shared-target-change"
+                return@synchronized
+            }
+            when (change.targetChangeType) {
+                TargetChange.TargetChangeType.CURRENT -> current = true
+                TargetChange.TargetChangeType.REMOVE -> {
+                    if (change.cause.code != Status.Code.PERMISSION_DENIED.value()) {
+                        error = "unexpected-target-removal-cause"
+                    } else {
+                        denied++
+                        deniedAfterReady = ready && current && error == null
+                    }
+                }
+                else -> Unit
+            }
+        }
+
+        fun markReadyForHostRevocation() = synchronized(lock) {
+            check(targetId != null && adds == 1 && current && !ready && denied == 0 && error == null)
+            ready = true
+        }
+
+        fun snapshot(): KnowledgeRevocationSnapshot = synchronized(lock) {
+            KnowledgeRevocationSnapshot(documentPath, targetId, adds, current, ready, denied, deniedAfterReady, error)
+        }
+    }
+
     /** Deterministic negative transport check: no delegate start, headers, or message for another DB. */
     fun verifyForeignDatabaseFailsBeforeStart() {
         var starts = 0
@@ -77,7 +170,7 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
             override fun halfClose() = Unit
             override fun sendMessage(message: ListenRequest) { sends++ }
         }
-        val call = GuardedCall(delegate, LISTEN)
+        val call = GuardedCall(delegate, LISTEN, Executor { it.run() })
         call.start(object : ClientCall.Listener<Any>() {
             override fun onClose(value: Status, trailers: Metadata) { status = value }
         }, Metadata())
@@ -109,7 +202,11 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
         method: MethodDescriptor<ReqT, RespT>, options: CallOptions, next: Channel,
     ): ClientCall<ReqT, RespT> {
         check(next.authority() == "$HOST:$FIRESTORE_PORT") { "Unexpected gRPC destination" }
-        return GuardedCall(next.newCall(method, options), method.fullMethodName).also { calls.add(it) }
+        // Firestore 26.5.0 supplies its own AsyncQueue executor in the original CallOptions.
+        // Early local closes bypass the delegate and must preserve that same callback contract.
+        val callbackExecutor = checkNotNull(options.executor) { "Firestore call executor is required" }
+        return GuardedCall(next.newCall(method, options), method.fullMethodName, callbackExecutor)
+            .also { calls.add(it) }
     }
 
     /**
@@ -120,6 +217,7 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
      */
     private inner class GuardedCall<ReqT, RespT>(
         private val delegate: ClientCall<ReqT, RespT>, private val method: String,
+        private val callbackExecutor: Executor,
     ) : ClientCall<ReqT, RespT>() {
         private val lock = Any()
         private var listener: Listener<RespT>? = null
@@ -127,6 +225,7 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
         private var started = false
         private var finished = false
         private var localClose: Status? = null
+        private var localCloseScheduled = false
         private var pendingRequests = 0
         private var suspended = false
         private var pendingHalfClose = false
@@ -136,7 +235,7 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
             check(listener == null)
             listener = responseListener; headers = requestHeaders
             val alreadyClosed = localClose
-            if (alreadyClosed != null) responseListener.onClose(alreadyClosed, Metadata())
+            if (alreadyClosed != null) scheduleLocalCloseLocked()
             else if (closed.get()) finishLocally(Status.CANCELLED.withDescription("Demo test cleanup"))
         }
 
@@ -164,6 +263,12 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
                 }
                 started = true
                 delegate.start(object : ForwardingClientCallListener.SimpleForwardingClientCallListener<RespT>(checkNotNull(listener)) {
+                    override fun onMessage(message: RespT) {
+                        if (method == LISTEN && message is ListenResponse) {
+                            knowledgeRevocationAudit?.inbound(this@GuardedCall, message)
+                        }
+                        super.onMessage(message)
+                    }
                     override fun onClose(status: Status, trailers: Metadata) {
                         synchronized(lock) { finished = true; messages.clear(); calls.remove(this@GuardedCall) }
                         super.onClose(status, trailers)
@@ -176,7 +281,10 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
                 check(messages.size < 8) { "Unexpected unbounded SDK write buffering" }
                 messages.add(message)
                 if (!suspended) { suspended = true; capture(this) }
-            } else delegate.sendMessage(message)
+            } else {
+                if (method == LISTEN && message is ListenRequest) knowledgeRevocationAudit?.outbound(this, message)
+                delegate.sendMessage(message)
+            }
         }
 
         override fun halfClose() = synchronized(lock) {
@@ -206,7 +314,17 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
             if (finished) return
             finished = true; messages.clear(); calls.remove(this)
             localClose = status
-            listener?.onClose(status, Metadata())
+            scheduleLocalCloseLocked()
+        }
+
+        // Called only while holding lock. A call locally closed before start is delivered once
+        // when its listener is supplied. Never fall back to the cleanup/caller thread if rejected.
+        private fun scheduleLocalCloseLocked() {
+            if (localCloseScheduled) return
+            val status = localClose ?: return
+            val responseListener = listener ?: return
+            localCloseScheduled = true
+            callbackExecutor.execute { responseListener.onClose(status, Metadata()) }
         }
     }
 
