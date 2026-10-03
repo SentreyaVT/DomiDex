@@ -24,8 +24,10 @@ class WorkManagerProofRunner : AndroidJUnitRunner() {
         check(run.matches(Regex("[0-9a-f]{32}")))
         check(arguments.getString("wmProofMode") == "demo-loopback-only")
         check(targetContext.packageName == "com.dominik.cardvault.wmproof.r$run")
-        check(arguments.getString("class") ==
-            "com.dominik.cardvault.data.sync.PrivateBinderWorkManagerInstrumentedTest#actualPrivateWorkerRetriesAndAcknowledgesWithoutBypassingScheduler")
+        check(arguments.getString("class") in setOf(
+            "com.dominik.cardvault.data.sync.PrivateBinderWorkManagerInstrumentedTest#actualPrivateWorkerRetriesAndAcknowledgesWithoutBypassingScheduler",
+            "com.dominik.cardvault.data.sync.PrivateBinderWorkManagerInstrumentedTest#actualPrivateWorkerAutomaticallyContinuesFullBudgetWithoutManualEnqueue",
+        ))
         super.onCreate(arguments)
     }
 }

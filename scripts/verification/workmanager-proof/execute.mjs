@@ -5,14 +5,16 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 const ROOT = 'C:/Users/Dominik/AndroidStudioProjects/CardVault';
-const { WEB, SERIAL, PROJECT, OWNER, OTHER, CLASS, METHOD, RUNNER, accounts, runIdentity, validateInstrumentation } =
+const { WEB, SERIAL, PROJECT, OWNER, OTHER, CLASS, RUNNER, accounts, runIdentity, validateInstrumentation,
+  proofScenario, referenceBudget, fullBudgetSeeds, validateFullBudgetSeeds, validateFullBudgetServer } =
   await import(pathToFileURL(path.join(ROOT, 'scripts/verification/workmanager-proof/contract.mjs')));
 const { assertTestEnvironment, runChild } = await import(pathToFileURL(path.join(WEB, 'tests/private-operations-local/safety.mjs')));
 const { normalize, assertNoInstrumentation } = await import(pathToFileURL(path.join(WEB, 'tests/android-web-price-local/contract.mjs')));
 const directory = process.env.DOMIDEX_WM_PROOF_DIRECTORY;
 assert.equal(typeof directory, 'string');
 const { runId, app: packageName } = runIdentity(directory);
-const runtime = path.join(directory, 'runtime'); assert.equal(process.cwd(), runtime);
+const scenario = proofScenario(process.env.DOMIDEX_WM_PROOF_SCENARIO);
+const runtime = path.join(directory, scenario.runtime); assert.equal(process.cwd(), runtime);
 assert.equal(process.env.DOMIDEX_PRIVATE_TEST_ROOT, WEB);
 assert.equal(process.env.DOMIDEX_PRIVATE_TEST_RUN, runtime);
 const adb = process.env.DOMIDEX_WM_PROOF_ADB;
@@ -22,10 +24,11 @@ assertTestEnvironment(env);
 const require = createRequire(path.join(WEB, 'package.json'));
 const { initializeApp, applicationDefault, deleteApp } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
-const { getFirestore } = require('firebase-admin/firestore');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const app = initializeApp({ projectId: PROJECT, credential: applicationDefault() }, 'wm-proof-admin-' + runId);
 const db = getFirestore(app); const auth = getAuth(app);
-const proof = { project: PROJECT, runId, verified: false, before: null, after: null, accountsUnchanged: false, errors: [] };
+const proof = { project: PROJECT, runId, scenario: scenario.name, verified: false, before: null, after: null,
+  accountsUnchanged: false, errors: [] };
 const save = () => writeFileSync(path.join(runtime, 'server-proof.json'), JSON.stringify(proof, null, 2));
 async function authRows() {
   const all = await auth.listUsers(3); assert.equal(all.pageToken, undefined);
@@ -35,11 +38,11 @@ async function authRows() {
   })).sort((left, right) => left.uid.localeCompare(right.uid));
 }
 async function databaseRows() {
-  const rows = []; let refs = 0; let groups = 0;
+  const rows = []; let groups = 0; const countReference = referenceBudget(scenario.name);
   async function visit(collection, depth) {
     assert.ok(depth <= 3 && ++groups <= 12, 'Unexpected emulator collection tree');
     for (const reference of await collection.listDocuments()) {
-      assert.ok(++refs <= 16, 'Unexpected emulator reference count');
+      countReference(reference.path);
       const document = await reference.get();
       if (document.exists) rows.push({ path: reference.path, data: normalize(document.data()) });
       for (const child of await reference.listCollections()) await visit(child, depth + 1);
@@ -65,18 +68,43 @@ try {
     await auth.setCustomUserClaims(identity.uid, customClaims);
   }
   assert.deepEqual(await authRows(), accounts);
-  proof.before = await databaseRows(); assert.deepEqual(proof.before, []); save();
+  assert.deepEqual(await databaseRows(), []);
+  if (scenario.name === 'full-budget-continuation') {
+    const seeds = fullBudgetSeeds(runId);
+    proof.seedStartedAt = new Date().toISOString();
+    // Only this synthetic demo owner and the 1001 exact reviewed paging IDs are seeded.
+    // Each transform is produced by the emulator server, never a fabricated Timestamp.
+    for (let start = 0; start < seeds.length; start += 400) {
+      const batch = db.batch();
+      for (const row of seeds.slice(start, start + 400)) batch.create(db.doc(row.path), {
+        ...row.data, updatedAt: FieldValue.serverTimestamp(),
+      });
+      await batch.commit();
+    }
+    proof.seedFinishedAt = new Date().toISOString();
+    proof.before = await databaseRows(); validateFullBudgetSeeds(proof.before, runId);
+    const earliest = Date.parse(proof.seedStartedAt) - 2000;
+    const latest = Date.parse(proof.seedFinishedAt) + 2000;
+    for (const row of proof.before) {
+      const stamp = row.data.updatedAt;
+      const milliseconds = stamp.seconds * 1000 + Math.floor(stamp.nanoseconds / 1e6);
+      assert.ok(milliseconds >= earliest && milliseconds <= latest, 'Seed must retain a fresh server timestamp');
+    }
+  } else { proof.before = await databaseRows(); assert.deepEqual(proof.before, []); }
+  save();
   let output = '';
   const result = await runChild(adb, ['-s', SERIAL, 'shell', 'am', 'instrument', '-w', '-r',
-    '-e', 'class', `${CLASS}#${METHOD}`, '-e', 'wmProofMode', 'demo-loopback-only', '-e', 'wmProofRun', runId,
+    '-e', 'class', `${CLASS}#${scenario.method}`, '-e', 'wmProofMode', 'demo-loopback-only', '-e', 'wmProofRun', runId,
     `${packageName}.test/${RUNNER}`], {
-    cwd: runtime, env, timeoutMs: 200_000, onOutput: chunk => {
+    cwd: runtime, env, timeoutMs: scenario.instrumentationTimeoutMs, onOutput: chunk => {
       output += String(chunk); appendFileSync(path.join(runtime, 'instrumentation.log'), chunk); process.stdout.write(chunk);
     } });
   proof.androidResult = result;
   // Always independently retain the actual remote state even if the instrumentation fails.
   proof.after = await databaseRows(); save();
-  assert.equal(result.code, 0); proof.android = validateInstrumentation(output);
+  assert.equal(result.code, 0); proof.android = validateInstrumentation(output, scenario.name);
+  if (scenario.name === 'full-budget-continuation') validateFullBudgetServer(proof.before, proof.after, runId);
+  else {
   assert.equal(proof.after.length, 1);
   const row = proof.after[0]; assert.equal(row.path, `users/${OWNER}/privateBinders/wm-proof-binder`);
   const stamp = row.data.updatedAt;
@@ -87,6 +115,7 @@ try {
     description: null, coverStyle: 'DOMIDEX', minimumPageCount: 1, createdAtClient: 1700000000000,
     updatedAtClient: 1700000000000, lastOpenedAtClient: null, deleted: false, revision: 1,
     lastMutationId: `wm-proof-${runId}-binder`, updatedAt: stamp });
+  }
   assert.deepEqual(await authRows(), accounts); proof.accountsUnchanged = true;
   await noInstrumentation(); proof.verified = true;
 } catch (error) {

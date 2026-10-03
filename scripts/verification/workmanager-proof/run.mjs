@@ -3,13 +3,17 @@ import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync } 
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { ROOT, WEB, SERIAL, AVD, PROJECT, RUNNER, runIdentity, validateApk, validateInstrumentation, sourceSnapshot } from './contract.mjs';
+import { ROOT, WEB, SERIAL, AVD, PROJECT, RUNNER, runIdentity, validateApk, validateInstrumentation,
+  sourceSnapshot, proofScenario, validateFullBudgetDeviceProof } from './contract.mjs';
 const { PORTS, requireFile, readJson, validateMetadata, verifyCache, sha256, assertPortsFree,
   isolatedEnvironment, assertTestEnvironment, firebaseConfiguration, runChild } = await import(
     pathToFileURL(path.join(WEB, 'tests/private-operations-local/safety.mjs')));
 const { assertNoInstrumentation } = await import(pathToFileURL(path.join(WEB, 'tests/android-web-price-local/contract.mjs')));
 assert.equal(process.platform, 'win32');
-assert.equal(process.argv.length, 3, 'Pass only the successful isolated build directory');
+assert.ok(process.argv.length === 3 || process.argv.length === 4,
+  'Pass the successful isolated build directory and optionally full-budget-continuation');
+if (process.argv.length === 4) assert.equal(process.argv[3], 'full-budget-continuation');
+const scenario = proofScenario(process.argv[3] ?? 'retry');
 const directory = path.resolve(process.argv[2]);
 const { runId, app } = runIdentity(directory);
 const build = readJson(path.join(directory, 'build-result.json'));
@@ -42,12 +46,13 @@ const harnessInputs = Object.fromEntries(await Promise.all([
 for (const file of ['firestore.rules', 'storage.rules']) {
   assert.equal(await sha256(path.join(ROOT, file)), harnessInputs[file], 'Identical rules required');
 }
-const runtime = path.join(directory, 'runtime'); mkdirSync(runtime); // Never overwrite a previous run.
+const runtime = path.join(directory, scenario.runtime); mkdirSync(runtime); // Never overwrite a previous run.
 for (const name of ['temp', 'home', 'appdata', 'localappdata', 'xdg', 'cloudsdk']) mkdirSync(path.join(runtime, name));
 const env = isolatedEnvironment(process.env, { directory: runtime, root: WEB, java, cache,
   preload: path.join(WEB, 'tests/private-operations-local/network-preload.cjs') });
 env.DOMIDEX_WM_PROOF_DIRECTORY = directory;
 env.DOMIDEX_WM_PROOF_ADB = adb;
+env.DOMIDEX_WM_PROOF_SCENARIO = scenario.name;
 assertTestEnvironment(env);
 function command(executable, args, accepted = [0], timeout = 20_000) {
   const result = spawnSync(executable, args, { cwd: ROOT, env, windowsHide: true, shell: false,
@@ -95,7 +100,7 @@ for (const file of ['firestore.rules', 'storage.rules']) copyFileSync(path.join(
 copyFileSync(path.join(here, 'execute.mjs'), path.join(runtime, 'execute.mjs'));
 const config = firebaseConfiguration(); delete config.emulators.storage;
 writeFileSync(path.join(runtime, 'firebase.json'), JSON.stringify(config, null, 2), { flag: 'wx' });
-const receipt = { project: PROJECT, runId, package: app, serial: SERIAL, avd: AVD,
+const receipt = { project: PROJECT, runId, package: app, serial: SERIAL, avd: AVD, scenario: scenario.name,
   startedAt: new Date().toISOString(), build, jars, harnessInputs, installed: [], ownedReverse: [],
   ordinaryBefore, ordinaryAfter: null, result: null, serverVerified: false, cleanupPackages: [], errors: [] };
 const receiptPath = path.join(runtime, 'manifest.json');
@@ -117,11 +122,13 @@ try {
     cwd: runtime, env, timeoutMs: 360_000, onOutput: chunk => {
       appendFileSync(path.join(runtime, 'emulator.log'), chunk); process.stdout.write(chunk);
     } });
-  const deviceProof = JSON.parse(device(['shell', 'run-as', app, 'cat', `cache/wm-proof-${runId}.json`]));
+  const deviceProof = JSON.parse(device(['shell', 'run-as', app, 'cat', `cache/${scenario.receiptPrefix}${runId}.json`]));
   writeFileSync(path.join(runtime, 'device-proof.json'), JSON.stringify(deviceProof, null, 2), { flag: 'wx' });
   assert.equal(receipt.result.code, 0);
   assert.equal(deviceProof.status, 'PASS'); assert.equal(deviceProof.runId, runId);
   assert.equal(deviceProof.packageName, app);
+  if (scenario.name === 'full-budget-continuation') validateFullBudgetDeviceProof(deviceProof, runId, app);
+  else {
   for (const key of ['bodyPassed', 'cleanupPassed', 'constraintsBlockedWithoutInvocation', 'retryObserved',
     'backoffUsedRealClock', 'secondEnqueueIdempotent', 'unchangedForeignOwner', 'workManagerClosed',
     'ownedRoomClosedAndFilesAbsent', 'offlineAfter']) assert.equal(deviceProof[key], true, key);
@@ -131,9 +138,11 @@ try {
   assert.notEqual(deviceProof.attempts[0].id, deviceProof.attempts[2].id);
   assert.equal(deviceProof.retryEligibleEpochMillis - deviceProof.retryLastEnqueueEpochMillis, 30_000);
   assert.ok(deviceProof.secondAttemptEpochMillis >= deviceProof.retryEligibleEpochMillis);
-  receipt.android = validateInstrumentation(readFileSync(path.join(runtime, 'instrumentation.log'), 'utf8'));
+  }
+  receipt.android = validateInstrumentation(readFileSync(path.join(runtime, 'instrumentation.log'), 'utf8'), scenario.name);
   const server = readJson(path.join(runtime, 'server-proof.json'));
   assert.equal(server.verified, true); assert.equal(server.runId, runId);
+  assert.equal(server.scenario, scenario.name);
   receipt.serverVerified = true;
 } catch (error) { receipt.errors.push(error.message); }
 finally {

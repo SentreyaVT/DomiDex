@@ -2,6 +2,38 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-03.
 
+### Automatic large FULL continuation through actual WorkManager (2026-10-03)
+
+The unchanged production worker now proves both budget continuations through
+actual WorkManager2.11.2 TestScheduler, not directly invoked helper passes.
+Root isolated run `580b60a79e984c4abb522894b885b1e0` passes **1/1,30.058s**:
+1001 immutable seeded binders plus one genuinely ACKed pending binder; four
+distinct WorkSpecs/attempts `[0,0,0,0]`; two explicit cycle starts, two worker-created
+tails, exact linear prerequisites. First partial state has997 paging rows,
+cursor`paging-0996`/phase`rr1|1|14`; both completed cycles have1001 paging rows plus
+the ACKed binder, phase`rr1|1|0`/empty cursors. Second cycle is fully idempotent.
+All14 domain Room tables, foreign pending binder/outbox, complete remote payloads
+and seed server timestamps are checked. Independent Admin inventory1001→1002 and
+nominal account claims pass. Held constraints and one-second terminal windows
+exclude extra work only within those stated bounded observations.
+
+The same isolated APKs rerun the original retry proof **1/1,36.865s**,2 WorkSpecs,
+attempts`[0,1,0]`; actual retry27ms after unchanged30s eligibility. Both manifests
+verify frozen inputs/protected outputs, exact owned cleanup and the unchanged
+ordinary owner-installed emulator APK7f003…b105. It is not the tested isolated
+APK and inherits no test claim. Build2m5s/72tasks passes;7/7 pure validators and
+independent Android/host reviews pass. Existing warning scopes remain explicit.
+Evidence: `artifacts/release27-engineering-20261002/workmanager-proof/`
+`580b60a79e984c4abb522894b885b1e0/{runtime,runtime-full-budget-continuation}/`.
+Build/receipts use fresh2026-10-03 timestamps despite the historical output root.
+Full APK hashes and reproducible commands: `scripts/verification/workmanager-proof/README.md`.
+
+Only test harnesses changed. This binder-heavy controlled TestScheduler proof
+does not close OS delivery/process death/physical reconnect, mixed-group arbitrary
+scale, simultaneous physical devices or production behavior. FULL remains active,
+Delta stays deferred. **Gate4 remains partial; Gate15 locked. No signing with
+release keys, AAB, production write, deployment, push or Play action.**
+
 ### Resume checkpoint: complete current-binary regression (2026-10-03)
 
 Read back the completed pre-pause run, without reclassifying an unfinished run:
@@ -12,6 +44,18 @@ test APK1c175… (full hashes in the listener checkpoint below), matching the15/
 SDK proof. No new run, physical-device, packaged-release or live claim follows
 from this readback. Automatic large-budget WorkManager continuation is the next
 local proof; Gate15 stays locked. No signing, deployment, Play upload or push.
+
+Resume inventory: all source files recorded by that regression still match. The
+ordinary local `app/build/outputs/apk/debug/` directory is now absent; its removal
+was not observed or attributed. The retained test APK still hashes1c175…, but the
+installed ordinary emulator APK now hashes
+`7f00308b45958b15eb5ffcf2a95c88b4f13e2c0c922d2dda411184fe8626b105`, not09cdad….
+The owner subsequently confirmed opening Android Studio caused this replacement;
+previous regression receipts apply only to
+their recorded09cdad… APK, not this different installation. The signed v26 AAB remains
+079608…b14b. Do not describe the missing local APK as a preserved present file;
+subsequent isolated proofs snapshot the actual current output tree and never
+replace the ordinary installed application.
 
 ### Actual scanner-knowledge listener and sign-out proof (2026-10-02)
 
@@ -1504,7 +1548,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS, FULL retained | 15/15 actual local SDK cases retain durable offline retry, separate-client stale-base convergence and explicitly continued1001-binder FULL/Room-reopen/idempotence. Separate actual WorkManager TestScheduler retry/APPEND1/1 passes;18/18 focused Room controls remain dated. Automatic large-budget continuation, UI/OS/process delivery, simultaneous physical devices and broader scale remain open. Delta is deferred; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS, FULL retained | 15/15 actual local SDK cases retain durable offline retry, separate-client stale-base convergence and explicitly continued1001-binder FULL/Room-reopen/idempotence. Fresh actual WorkManager retry1/1 and automatic large-budget continuation1/1 pass in isolated packages; exact4WorkSpecs/two cycles/complete local-remote integrity.18/18 focused Room controls remain dated. UI/OS/process delivery, simultaneous physical devices and broader mixed scale remain open. Delta is deferred; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded Android import with4/4 real parser/Room persistence/rollback/conflicting-row cases, Web snapshot/identity fixes, seven verified mappings and incremental pricing tested. Conflicting duplicates were not found in the frozen provider download; this hardening does not close full coverage or centralized delivery |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card body cap/cancellation14/14, cache/package83/83. Missing-trend DTO resolves once instead of twice, full parity verified. O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator regression PASS) | 25 focused lifecycle/OCR-session/cache/status/virtual-camera cases pass; four display rotations preserve portrait and Activity identity; physical camera, permission-revocation and background-capture matrix remain untested |

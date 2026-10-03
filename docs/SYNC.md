@@ -26,6 +26,33 @@ R27 full-sync lifecycle, offline/conflict, multi-client and scale checks still
 apply; this decision does not claim instantaneous sync, zero remaining bugs,
 completed hardware validation or authorization to deploy/sign.
 
+## Active FULL worker: automatic WorkManager budget continuation (2026-10-03)
+
+Fresh isolated proof `580b60a79e984c4abb522894b885b1e0` passes **1/1 in30.058s**.
+The actual production scheduler starts two independent cycles; the actual worker
+automatically appends each tail. TestDriver only releases the real WorkSpecs'
+CONNECTED constraint, after inspecting their IDs, prerequisites and durable
+Room checkpoints. Four unique WorkSpecs, attempts`[0,0,0,0]`, form the expected
+linear chain. Exactly997 of1001 seeded binders are present at the first budget
+checkpoint; both completed cycles retain all1001 plus a genuinely ACKed pending
+owner binder. The second cycle leaves complete Room/server contents unchanged.
+
+All14 domain tables, foreign owner's pending binder/outbox, seed payloads and
+server timestamps, nominal claims and full Admin inventory1001→1002 are checked.
+Ordinary app hash7f003…b105 and all protected files remain unchanged; owned test
+packages/databases/reverses are cleaned up. The original retry scenario also
+passes1/1 in36.865s on these same isolated APKs, with actual retry27ms after its
+unchanged30-second eligibility. Seven pure validators and two source reviews pass.
+Evidence under the dated engineering `workmanager-proof/` run above, in separate
+`runtime/` and `runtime-full-budget-continuation/` directories. Exact APK hashes,
+commands and limits: `scripts/verification/workmanager-proof/README.md`.
+
+This closes the narrow **automatic binder-heavy continuation via TestScheduler**
+gap. It does not establish OS delivery/process death, real network transitions,
+simultaneous devices, arbitrary mixed-group scale or production performance. The
+no-extra-work observation is bounded to one second after each cycle. FULL stays
+active, Delta deferred; Gate4 remains partial and Gate15 remains locked.
+
 ## Active private worker: actual WorkManager retry and APPEND (2026-10-02)
 
 The isolated debug proof passes **1/1 with no skips in 36.744 s**. The unchanged

@@ -1,6 +1,6 @@
 # Roadmap – nächste Prüfziele, keine Release-Zusage
 
-Stand: 2026-10-02. Ausgangspunkt ist der ursprüngliche Audit in
+Stand: 2026-10-03. Ausgangspunkt ist der ursprüngliche Audit in
 [PROJECT_STATUS](PROJECT_STATUS.md). Die folgenden Prüfziele sind keine Liste
 vollständig unerledigter Implementierungen: anschließende lokale Teilkorrekturen,
 Tests und offene Gates stehen im [Release-27-Ledger](RELEASE_27.md).
@@ -27,8 +27,10 @@ Tests und offene Gates stehen im [Release-27-Ledger](RELEASE_27.md).
    Für R27 bleibt auf ausdrücklichen Nutzerwunsch der abgesicherte vollständige
    Abgleich aktiv. Kein Delta-Rollout und kein unnötiger Lesepfad-Umbau.
    Der lokale Offline-/Datei-Reopen-Nachweis sowie eine eng begrenzte echte
-   WorkManager-TestScheduler-Wiederholung sind bestanden; OS-/Prozessabbruch und
-   automatische Fortsetzung großer FULL-Zyklen bleiben offen. Der belegte
+   WorkManager-TestScheduler-Wiederholung sind bestanden. Auch zwei große
+   binderlastige FULL-Zyklen setzen sich im isolierten WorkManager-Test automatisch
+   fort; Daten, fremder Owner und wiederholter Gesamtzustand bleiben nachweislich
+   korrekt. OS-/Prozessabbruch, gemischte Last und physische Mehrgeräte bleiben offen. Der belegte
    Jahresverlaufs-Engpass bei 346.750 relevanten Preiszeilen wurde gezielt verbessert:
    Portfolio/Binderdetails etwa16,1s vorher, zuletzt etwa2,7–3,1s unter der unveränderten
    vollständigen Integritätsprüfung. Diese Restkosten bleiben zu prüfen; keine
