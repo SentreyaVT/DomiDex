@@ -355,6 +355,88 @@ interface CardVaultDao {
     fun observeOwnedFirstPositivePrices(ownerUid: String, source: String): Flow<List<OwnedFirstPositivePriceProjection>>
 
     /**
+     * Conservative read-only chart fast path. Guard and arithmetic share this one SELECT snapshot.
+     * At most 20,000 rows * abs(quantity)<=1,000,000 * positive price<=100,000,000
+     * bounds every quantity sum, weighted timestamp delta and running total by 2e18 (< Long.MAX).
+     * No value is clamped to these limits: an unsupported snapshot returns only isSafe=0.
+     * The caller then retains the original chronological history flow and wrapping Kotlin math.
+     * Correlated indexed predecessors work without window functions on the API26 SQLite floor.
+     */
+    @Transaction
+    @Query("""
+        WITH owner_rows AS (
+            SELECT COALESCE(linked.id, c.id) AS cardId,
+                   COALESCE(e.finishOverride, c.finish) AS finish,
+                   e.quantity, e.externalProductId,
+                   CASE WHEN """ + SAFE_COLLECTION_PRICE_LINK_SQL + """ THEN 1 ELSE 0 END AS safeLink
+            FROM collection_entries e
+            JOIN catalog_cards c ON c.id = e.cardId
+            LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource
+                 AND linked.externalProductId = e.externalProductId
+            WHERE e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
+        ), owned AS (
+            SELECT DISTINCT cardId FROM owner_rows WHERE safeLink = 1
+        ), safety AS (
+            SELECT CASE WHEN
+              (SELECT COUNT(*) FROM owner_rows) <= 20000
+              AND NOT EXISTS (
+                SELECT 1 FROM owner_rows
+                WHERE typeof(quantity) != 'integer' OR quantity NOT BETWEEN -1000000 AND 1000000
+                   OR safeLink != 1 OR cardId = ''
+                   OR typeof(finish) != 'text' OR finish GLOB '*[^ -~]*' OR instr(finish, char(0)) != 0
+                   OR typeof(externalProductId) NOT IN ('integer', 'null')
+                   OR externalProductId IN (670816, 781858)
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM raw_price_snapshots p
+                WHERE p.source = :source AND p.cardId IN (SELECT cardId FROM owned)
+                  AND (typeof(p.effectiveAtEpochMillis) != 'integer'
+                       OR typeof(p.trendValueMinor) NOT IN ('integer', 'null')
+                       OR typeof(p.holoTrendValueMinor) NOT IN ('integer', 'null')
+                       OR p.trendValueMinor > 100000000 OR p.holoTrendValueMinor > 100000000)
+              )
+            THEN 1 ELSE 0 END AS isSafe
+        ), holdings AS (
+            SELECT r.cardId,
+              SUM(CASE WHEN s.isSafe = 1 AND instr(lower(r.finish), 'reverse') = 0
+                       THEN r.quantity ELSE 0 END) AS normalQuantity,
+              SUM(CASE WHEN s.isSafe = 1 AND instr(lower(r.finish), 'reverse') > 0
+                       THEN r.quantity ELSE 0 END) AS reverseQuantity
+            FROM owner_rows r CROSS JOIN safety s
+            GROUP BY r.cardId
+        ), events AS (
+            SELECT p.effectiveAtEpochMillis, h.normalQuantity, h.reverseQuantity,
+              CASE WHEN p.trendValueMinor > 0 THEN p.trendValueMinor ELSE 0 END AS normalNow,
+              CASE WHEN previous.trendValueMinor > 0 THEN previous.trendValueMinor ELSE 0 END AS normalBefore,
+              CASE WHEN p.holoTrendValueMinor > 0 THEN p.holoTrendValueMinor ELSE 0 END AS reverseNow,
+              CASE WHEN previous.holoTrendValueMinor > 0 THEN previous.holoTrendValueMinor ELSE 0 END AS reverseBefore
+            FROM holdings h
+            JOIN raw_price_snapshots p ON p.cardId = h.cardId AND p.source = :source
+            CROSS JOIN safety s
+            LEFT JOIN raw_price_snapshots previous ON previous.id = (
+                SELECT prior.id FROM raw_price_snapshots prior
+                WHERE prior.cardId = p.cardId AND prior.source = :source
+                  AND prior.effectiveAtEpochMillis < p.effectiveAtEpochMillis
+                ORDER BY prior.effectiveAtEpochMillis DESC LIMIT 1
+            )
+            WHERE s.isSafe = 1
+        )
+        SELECT 0 AS rowKind, s.isSafe, CAST(NULL AS INTEGER) AS effectiveAtEpochMillis,
+               0 AS deltaValueMinor FROM safety s
+        UNION ALL
+        SELECT 1 AS rowKind, 1 AS isSafe, event.effectiveAtEpochMillis,
+               SUM(CASE WHEN s.isSafe = 1 THEN
+                 (event.normalNow - event.normalBefore) * event.normalQuantity
+                 + (event.reverseNow - event.reverseBefore) * event.reverseQuantity
+                 ELSE 0 END) AS deltaValueMinor
+        FROM events event CROSS JOIN safety s
+        WHERE s.isSafe = 1
+        GROUP BY event.effectiveAtEpochMillis
+        ORDER BY rowKind, effectiveAtEpochMillis
+    """)
+    fun observeOwnedPortfolioDeltas(ownerUid: String, source: String): Flow<List<OwnedPortfolioDeltaProjection>>
+
+    /**
      * History stays tied to the exact Cardmarket product linked to this entry.
      * A catalog reference has entryId 0, where its catalog id is the safe fallback.
      * useHoloPrice selects the download's Reverse Holo field, not regular Holo.

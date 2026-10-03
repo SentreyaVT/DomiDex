@@ -364,6 +364,14 @@ data class OwnedFirstPositivePriceProjection(
     val firstReverseTrendValueMinor: Long?,
 )
 
+/** One guard record, followed only when safe by one delta per original timestamp. */
+data class OwnedPortfolioDeltaProjection(
+    val rowKind: Int,
+    val isSafe: Int,
+    val effectiveAtEpochMillis: Long?,
+    val deltaValueMinor: Long,
+)
+
 @Entity(
     tableName = "graded_market_records",
     foreignKeys = [ForeignKey(entity = CatalogCardEntity::class, parentColumns = ["id"], childColumns = ["cardId"], onDelete = ForeignKey.CASCADE)],

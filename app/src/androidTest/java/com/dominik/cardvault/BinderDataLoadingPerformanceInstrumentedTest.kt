@@ -53,11 +53,15 @@ class BinderDataLoadingPerformanceInstrumentedTest {
     @Test fun summariesDoNotLoad1920HistoricalRowsAndKeepIdenticalValuations() = runBlocking<Unit> {
         val privateBinder = seed()
         historyQueries.set(0)
+        assertEquals(SET_COUNT * CARDS_PER_SET * HISTORY_POINTS,
+            database.cardVaultDao().observeOwnedRawPriceHistory(owner.value, source).first().size)
+        assertTrue("Counter positive control is the explicit unchanged legacy DAO", historyQueries.get() > 0)
+        historyQueries.set(0)
         val portfolioStart = System.nanoTime()
         val portfolio = repository.portfolio.first()
         val portfolioMillis = (System.nanoTime() - portfolioStart) / 1_000_000.0
         val portfolioHistoryQueries = historyQueries.get()
-        assertTrue("The counter must detect the real portfolio history query", portfolioHistoryQueries > 0)
+        // Retain the observed count, but assert transport only after every model check below.
         assertEquals(HISTORY_POINTS, portfolio.history.size)
 
         historyQueries.set(0)
@@ -85,6 +89,7 @@ class BinderDataLoadingPerformanceInstrumentedTest {
         // Binder details retain every card field, including its historical change percentage.
         val details = repository.privateBinderContents(privateBinder).first().map { it.card }.associateBy { it.entryId }
         assertEquals(portfolio.cards.associateBy { it.entryId }, details)
+        assertEquals("Safe full portfolio must not transport all retained historical rows", 0, portfolioHistoryQueries)
         Log.i("DomiDexDataPerf", "cards=${SET_COUNT * CARDS_PER_SET}, historyRows=${SET_COUNT * CARDS_PER_SET * HISTORY_POINTS}, " +
             "portfolioHistoryQueries=$portfolioHistoryQueries, summaryHistoryQueries=0, " +
             "portfolioMs=$portfolioMillis, twoSummaryFlowsMs=$summaryMillis")
@@ -135,9 +140,16 @@ class BinderDataLoadingPerformanceInstrumentedTest {
         ))
         database.cardVaultDao().insertRawPrices(listOf(price(5, 365, DAY_MILLIS).copy(cardId = "cm-pokemon-99999")))
 
+        historyQueries.set(0)
+        assertEquals(SET_COUNT * CARDS_PER_SET * 365,
+            database.cardVaultDao().observeOwnedRawPriceHistory(owner.value, source).first().size)
+        assertTrue("Explicit unchanged legacy query is a positive counter control", historyQueries.get() > 0)
+        val legacySql = requireNotNull(historySql.get())
+        historyQueries.set(0)
         val started = System.nanoTime()
         val portfolio = repository.portfolio.first()
         val elapsedMillis = (System.nanoTime() - started) / 1_000_000.0
+        val annualPortfolioHistoryQueries = historyQueries.get()
         assertEquals(365, portfolio.history.size)
         fun value(index: Int, row: RawPriceSnapshotEntity): Long? =
             (if (index % 7 == 1) row.holoTrendValueMinor else row.trendValueMinor)?.takeIf { it > 0L }
@@ -156,23 +168,30 @@ class BinderDataLoadingPerformanceInstrumentedTest {
         }
         assertEquals(portfolio.cards.associateBy { it.entryId },
             repository.privateBinderContents(privateBinder).first().associate { it.card.entryId to it.card })
-        val sql = historySql.get()
-        assertNotNull("The actual history SELECT must be observed", sql)
-        Log.i("DomiDexDataPerf", "annualHistoryRows=${48 * 365}, dates=365, portfolioMs=$elapsedMillis, historySql=$sql")
+        Log.i("DomiDexDataPerf", "annualHistoryRows=${48 * 365}, dates=365, portfolioMs=$elapsedMillis, legacyControlSql=$legacySql")
         owner.value = "other-owner"
         val other = repository.portfolio.first()
         assertTrue(other.cards.isEmpty())
         assertTrue(other.history.isEmpty())
         owner.value = "binder-load-owner"
         assertEquals(portfolio, repository.portfolio.first())
+        assertEquals("Annual safe portfolio must not transport complete owner history", 0, annualPortfolioHistoryQueries)
     }
 
     @Test fun portfolioSelectsOnlyTheFourHistoryFieldsItConsumes() = runBlocking {
         seed()
-        repository.portfolio.first()
+        // Keep this existing test identity and its four-field legacy/fallback contract.
+        // Its query is requested explicitly now that safe portfolios use a compact result.
+        historyQueries.set(0)
+        val history = database.cardVaultDao().observeOwnedRawPriceHistory(owner.value, source).first()
+        assertEquals(SET_COUNT * CARDS_PER_SET * HISTORY_POINTS, history.size)
+        assertTrue(historyQueries.get() > 0)
         val sql = requireNotNull(historySql.get()) { "Actual history query not observed" }
         val columns = sql.substringAfter("SELECT ").substringBefore(" FROM ").split(',').map(String::trim)
         assertEquals(listOf("p.cardId", "p.effectiveAtEpochMillis", "p.trendValueMinor", "p.holoTrendValueMinor"), columns)
+        historyQueries.set(0)
+        assertEquals(HISTORY_POINTS, repository.portfolio.first().history.size)
+        assertEquals("Safe portfolio retains all dates without the legacy transport", 0, historyQueries.get())
     }
 
     private suspend fun seed(historyPoints: Int = HISTORY_POINTS, intervalMillis: Long = 1_000L): String = database.withTransaction {

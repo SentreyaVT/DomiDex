@@ -750,6 +750,286 @@ class Release27RoomScaleInstrumentedTest {
         } finally { save(report, config) }
     }
 
+    @Test fun localRoomGuardedPortfolioAggregate() = runBlocking<Unit> {
+        val config = config()
+        assumeTrue("Guarded portfolio proof not requested", InstrumentationRegistry.getArguments()
+            .getString("release27RoomPortfolioAggregate") == "guarded-delta")
+        require(config.sizes == listOf(1_000) && config.repeats == 3)
+        val report = report(config, "localRoomGuardedPortfolioAggregate")
+            .put("fixtureVersion", 2).put("historyDays", JSONArray(listOf(365)))
+            .put("fixture", "Unmodified annual365: 1003 products, 950 active owner-A products, 346750 eligible observations")
+            .put("measurementOrder", "Seed/hash; four actual public-portfolio subscriptions; then four paired legacy DAO+sweep and aggregate DAO+adapter diagnostics")
+            .put("readSampling", "Public sample0 is first subscription after seed/hash, not cold disk/process. Samples1..3 are warm; later diagnostic samples are already warm")
+            .put("comparisonScope", "Same annual fixture as existing annual2-vs365 test; diagnostic order is explicitly different. Existing unchanged annual method remains the exact baseline/postfix benchmark identity")
+            .put("memoryScope", "Whole-process snapshots, no peak/forced GC. Legacy raw lists are scoped to a completed helper before aggregate reads")
+            .put("queryCounterScope", "Room total callbacks include WITH queries; existing SELECT-only subcounter excludes WITH. Dedicated real legacy/aggregate/base counters are also recorded")
+            .put("remaining", "No API26 execution or multi-CursorWindow concurrent guard stress proved here")
+            .put("cleanup", JSONArray()).put("transport", JSONArray())
+        val name = freshName("guarded-annual-365")
+        val files = checkedPostFixFiles(name)
+        val counter = SqlCounter()
+        val legacyCalls = AtomicLong()
+        val aggregateCalls = AtomicLong()
+        val baseCalls = AtomicLong()
+        val legacySql = java.util.concurrent.atomic.AtomicReference<HistoryProbeSql?>()
+        val aggregateSql = java.util.concurrent.atomic.AtomicReference<HistoryProbeSql?>()
+        val captureError = java.util.concurrent.atomic.AtomicReference<String?>()
+        val db = Room.databaseBuilder(context, CardVaultDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+            .setQueryCallback(RoomDatabase.QueryCallback { statement, bindings ->
+                counter.record(statement)
+                val normalized = statement.replace(Regex("\\s+"), " ").trim()
+                fun capture(target: java.util.concurrent.atomic.AtomicReference<HistoryProbeSql?>,
+                    expected: List<String>) {
+                    if (bindings != expected) {
+                        captureError.compareAndSet(null, "Unexpected generated query bindings")
+                    } else synchronized(target) {
+                        // Preserve actual statement text and actual typed binding values.
+                        val next = HistoryProbeSql(statement, bindings.map { it as String })
+                        val old = target.get()
+                        if (old == null) target.set(next)
+                        else if (old != next) captureError.compareAndSet(null, "Generated SQL changed during proof")
+                    }
+                }
+                if (normalized.startsWith("SELECT p.cardId, p.effectiveAtEpochMillis, p.trendValueMinor, p.holoTrendValueMinor FROM raw_price_snapshots p WHERE p.source = ?")) {
+                    legacyCalls.incrementAndGet()
+                    if (bindings.lastOrNull() == OWNER) capture(legacySql, listOf(SOURCE, OWNER))
+                }
+                if (normalized.startsWith("WITH owner_rows AS (")) {
+                    aggregateCalls.incrementAndGet()
+                    if (bindings.firstOrNull() == OWNER) capture(aggregateSql, listOf(OWNER, SOURCE, SOURCE, SOURCE))
+                }
+                if (normalized.startsWith("WITH owned(cardId) AS (") &&
+                    normalized.contains("AS firstNormalTrendValueMinor")) baseCalls.incrementAndGet()
+            }, Executor { it.run() }).build()
+        try {
+            try {
+                val sql = db.openHelper.writableDatabase
+                annualMeasured(report, "seed", 365, -1, name, counter) { seedAnnualHistory(sql, 365) }
+                assertSeed(sql, 1_000)
+                assertEquals(366_095L, scalar(sql, "SELECT COUNT(*) FROM raw_price_snapshots"))
+                assertEquals(365L, scalar(sql, "SELECT COUNT(DISTINCT effectiveAtEpochMillis) FROM raw_price_snapshots"))
+                assertEquals(AT + ANNUAL_DAY_MILLIS, scalar(sql, "SELECT MIN(effectiveAtEpochMillis) FROM raw_price_snapshots"))
+                assertEquals(AT + 365 * ANNUAL_DAY_MILLIS, scalar(sql, "SELECT MAX(effectiveAtEpochMillis) FROM raw_price_snapshots"))
+                val before = hashes(sql); assertEquals(15, before.size)
+                report.getJSONArray("integrity").put(JSONObject().put("before", hashJson(before)))
+                sql.query("SELECT sqlite_version()").use { c ->
+                    assertTrue(c.moveToFirst()); report.put("sqliteVersion", c.getString(0))
+                }
+                val dao = db.cardVaultDao()
+                var syncRequests = 0
+                val repository = RoomCollectionRepository(db, MutableStateFlow(OWNER), onSyncNeeded = { syncRequests++ })
+                val expected = guardedAnnualExpected(OWNER)
+                // No unmeasured DAO/repository read precedes these real public subscriptions.
+                for (sample in 0..config.repeats) {
+                    val legacyBefore = legacyCalls.get()
+                    val aggregateBefore = aggregateCalls.get()
+                    val basesBefore = baseCalls.get()
+                    val actual = annualMeasured(report, "guarded.actualPortfolio.first", 365, sample, name, counter) {
+                        repository.portfolio.first()
+                    }
+                    val oldReads = legacyCalls.get() - legacyBefore
+                    val newReads = aggregateCalls.get() - aggregateBefore
+                    val baseReads = baseCalls.get() - basesBefore
+                    assertEquals("Every field, uniquely ordered fixture card and original chart point", expected, actual)
+                    postFixAssertAnnualPortfolio(actual)
+                    assertEquals(0L, oldReads)
+                    assertTrue("Actual public path must execute the real aggregate query", newReads > 0L)
+                    assertTrue("Actual public card changes use genuine first-positive reads", baseReads > 0L)
+                    report.getJSONArray("transport").put(JSONObject().put("sample", sample)
+                        .put("operation", "actualPortfolio").put("legacyQueryCalls", oldReads)
+                        .put("aggregateQueryCalls", newReads).put("baseQueryCalls", baseReads)
+                        .put("completeModelsEqual", true))
+                }
+                val rows = dao.observeCollection(OWNER).first()
+                // Return only the small chart and transfer count. The full raw list is not
+                // captured by the parent coroutine or retained during aggregate/public reads.
+                suspend fun legacyChart(): Pair<List<com.dominik.cardvault.model.PortfolioPoint>, Int> {
+                    val history = dao.observeOwnedRawPriceHistory(OWNER, SOURCE).first()
+                    val chart = withContext(Dispatchers.Default) {
+                        com.dominik.cardvault.data.buildChronologicalPortfolioHistory(rows, history)
+                    }
+                    return chart to history.size
+                }
+                suspend fun aggregateChart(): Pair<List<com.dominik.cardvault.model.PortfolioPoint>, List<com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection>> {
+                    val deltas = dao.observeOwnedPortfolioDeltas(OWNER, SOURCE).first()
+                    val chart = withContext(Dispatchers.Default) {
+                        checkNotNull(com.dominik.cardvault.data.buildGuardedPortfolioHistory(deltas))
+                    }
+                    return chart to deltas
+                }
+                for (sample in 0..config.repeats) {
+                    val legacyBefore = legacyCalls.get()
+                    val old = annualMeasured(report, "guarded.legacyDaoAndSweep", 365, sample, name, counter) { legacyChart() }
+                    assertEquals(346_750, old.second)
+                    assertEquals(expected.history, old.first)
+                    assertTrue("Positive control sees the real legacy transport", legacyCalls.get() > legacyBefore)
+                    val compact = annualMeasured(report, "guarded.aggregateDaoAndMap", 365, sample, name, counter) { aggregateChart() }
+                    assertEquals(366, compact.second.size)
+                    assertEquals(com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection(0, 1, null, 0L), compact.second.first())
+                    compact.second.drop(1).forEachIndexed { index, row ->
+                        assertEquals(1, row.rowKind); assertEquals(1, row.isSafe)
+                        assertEquals(AT + (index + 1) * ANNUAL_DAY_MILLIS, row.effectiveAtEpochMillis)
+                    }
+                    assertEquals(expected.history, compact.first)
+                    assertEquals(old.first, compact.first)
+                    report.getJSONArray("transport").put(JSONObject().put("sample", sample)
+                        .put("operation", "chartDiagnostics").put("legacyRows", old.second)
+                        .put("aggregateRowsIncludingGuard", compact.second.size).put("exactChartEqual", true))
+                }
+                assertEquals(950, dao.observeOwnedFirstPositivePrices(OWNER, SOURCE).first().size)
+                val privateCards = repository.privateBinderContents(BINDER).first()
+                assertEquals(expected.cards.associateBy { it.entryId }, privateCards.associate { it.card.entryId to it.card })
+                assertEquals(950, privateCards.size)
+                privateCards.forEach { placed ->
+                    val index = (placed.card.entryId - 1L).toInt()
+                    assertEquals("placement-$index", placed.placementId)
+                    assertEquals(BINDER, placed.binderId)
+                    assertEquals(index.toLong(), placed.position)
+                    assertEquals(if (index % 2 == 0) "rainbow" else null, placed.holoEffectId)
+                    assertEquals(if (index % 2 == 0) .35f else 0f, placed.holoIntensity, 0f)
+                }
+                for (owner in listOf(OTHER_OWNER, "fixture-owner-with-no-data")) {
+                    val isolated = RoomCollectionRepository(db, MutableStateFlow(owner), onSyncNeeded = { syncRequests++ })
+                    assertEquals(guardedAnnualExpected(owner), isolated.portfolio.first())
+                }
+                check(captureError.get() == null) { captureError.get().orEmpty() }
+                val oldQuery = checkNotNull(legacySql.get()) { "Missing actual legacy query" }
+                val newQuery = checkNotNull(aggregateSql.get()) { "Missing actual aggregate query" }
+                assertEquals(listOf(SOURCE, OWNER), oldQuery.bindings)
+                assertEquals(listOf(OWNER, SOURCE, SOURCE, SOURCE), newQuery.bindings)
+                assertEquals(4, newQuery.sql.count { it == '?' })
+                report.put("actualLegacySql", oldQuery.sql).put("actualLegacyBindings", JSONArray(oldQuery.bindings))
+                    .put("actualAggregateSql", newQuery.sql).put("actualAggregateBindings", JSONArray(newQuery.bindings))
+                    .put("legacyPlan", postFixExplain(sql, oldQuery)).put("aggregatePlan", postFixExplain(sql, newQuery))
+                    .put("ownedHistoryRows", 346_750).put("aggregateRowsIncludingGuard", 366).put("firstPositiveRows", 950)
+                assertEquals(0, syncRequests)
+                assertEquals(before, hashes(sql)); assertNoForeignKeyErrors(sql)
+                assertEquals(13, report.getJSONArray("samples").length())
+                assertEquals(8, report.getJSONArray("transport").length())
+                report.getJSONArray("integrity").put(JSONObject().put("afterReadHashMatch", true))
+            } finally {
+                db.close(); check(!db.isOpen)
+                if (files.any(File::exists)) check(context.deleteDatabase(name))
+                check(files.none(File::exists))
+                report.getJSONArray("cleanup").put(JSONObject().put("databaseName", name)
+                    .put("closed", true).put("filesAbsent", true))
+            }
+            report.put("status", "PASS")
+        } catch (failure: Throwable) {
+            report.put("status", "FAIL").put("failureType", failure.javaClass.simpleName)
+            throw failure
+        } finally { save(report, config) }
+    }
+
+    /** Independent full constructor from the unchanged synthetic annual fixture, not DAO models. */
+    private fun guardedAnnualExpected(owner: String): com.dominik.cardvault.model.PortfolioSummary {
+        val indices = when (owner) {
+            OWNER -> (0 until 1_000).filterNot(::deleted)
+            OTHER_OWNER -> (1_000 until 1_000 + OTHER_ROWS).toList()
+            else -> emptyList()
+        }
+        val cards = indices.asReversed().map { index ->
+            val set = index / SET_SIZE
+            val reverse = index % 7 == 0
+            val first = annualValueMinor(index, 0)
+            val last = annualValueMinor(index, 364)
+            com.dominik.cardvault.model.CollectionCard(
+                entryId = index + 1L, id = "fixture-card-$index", name = "Synthetic card $index",
+                set = "Synthetic set $set", number = "" + (index % SET_SIZE + 1) + "/" + SET_SIZE,
+                language = com.dominik.cardvault.model.CardLanguage.GERMAN,
+                finish = if (reverse) "Reverse Holo" else "Normal",
+                variant = if (reverse) "Reverse Holo" else "Standard", condition = "Near Mint",
+                quantity = quantity(index), currentValueEur = last / 100.0,
+                changePercent = (last - first) * 100.0 / first,
+                priceUpdatedAtEpochMillis = AT + 365 * ANNUAL_DAY_MILLIS,
+                notes = "Synthetic $index; \u00e4|\u03bb", acquisitionPriceEur = (50L + index) / 100.0,
+                acquisitionDateEpochDay = 20_000L + index, accent = 0xFF6C78A8,
+                binderId = "set-$set", externalProductId = 90_000_000L + index,
+                imageUrl = null, rarity = "UNKNOWN", effectOverride = null,
+                marketSearchName = null, marketExpansionId = null,
+                sourceSetId = "fixture-$set", sourceCardId = "fixture-$set-" + (index % SET_SIZE + 1),
+                priceSelection = null,
+            )
+        }
+        val history = if (indices.isEmpty()) emptyList() else (0 until 365).map { point ->
+            val value = indices.sumOf { annualValueMinor(it, point) * quantity(it) }
+            val label = java.time.Instant.ofEpochMilli(AT + (point + 1) * ANNUAL_DAY_MILLIS)
+                .atZone(java.time.ZoneOffset.UTC).toLocalDate().format(java.time.format.DateTimeFormatter.ofPattern("MMM"))
+            com.dominik.cardvault.model.PortfolioPoint(label, value / 100.0)
+        }
+        return com.dominik.cardvault.model.PortfolioSummary(cards, history)
+    }
+
+    @Test fun localRoomGuardedPortfolioCountBoundary() = runBlocking<Unit> {
+        val config = config()
+        assumeTrue("Guarded count proof not requested", InstrumentationRegistry.getArguments()
+            .getString("release27RoomPortfolioAggregate") == "guarded-delta-count")
+        require(config.sizes == listOf(20_000) && config.repeats == 3)
+        val report = report(config, "localRoomGuardedPortfolioCountBoundary")
+            .put("scope", "Fresh existing20000 synthetic fixture; restore only its owner-A tombstones, then add/tombstone one zero-quantity entry. No annual timing claim")
+            .put("cleanup", JSONArray()).put("states", JSONArray())
+        val name = freshName("guarded-count-boundary")
+        val files = checkedPostFixFiles(name)
+        val db = Room.databaseBuilder(context, CardVaultDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING).build()
+        try {
+            try {
+                val sql = db.openHelper.writableDatabase
+                seed(sql, 20_000); assertSeed(sql, 20_000)
+                val dao = db.cardVaultDao()
+                var syncRequests = 0
+                val repository = RoomCollectionRepository(db, MutableStateFlow(OWNER), onSyncNeeded = { syncRequests++ })
+                // Keep all original records; the existing1000 owner-A tombstones are restored
+                // only in this fresh UUID fixture. Foreign owner's3 rows never consume the bound.
+                sql.execSQL("UPDATE collection_entries SET deletedAtEpochMillis=NULL WHERE ownerUid=?",
+                    arrayOf<Any>(OWNER))
+                suspend fun state(label: String, count: Int, safe: Boolean) {
+                    val before = hashes(sql); assertEquals(15, before.size)
+                    val rows = dao.observeCollection(OWNER).first()
+                    assertEquals(count, rows.size)
+                    val old = dao.observeOwnedRawPriceHistory(OWNER, SOURCE).first()
+                    assertEquals(40_000, old.size)
+                    val expectedHistory = com.dominik.cardvault.data.buildChronologicalPortfolioHistory(rows, old)
+                    val delta = dao.observeOwnedPortfolioDeltas(OWNER, SOURCE).first()
+                    assertEquals(com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection(0, if (safe) 1 else 0, null, 0L), delta.first())
+                    assertEquals(if (safe) 3 else 1, delta.size)
+                    val compact = com.dominik.cardvault.data.buildGuardedPortfolioHistory(delta)
+                    if (safe) assertEquals(expectedHistory, compact) else assertNull(compact)
+                    val actual = repository.portfolio.first()
+                    assertEquals(count, actual.cards.size)
+                    assertEquals(rows.map { it.entryId }.toSet(), actual.cards.map { it.entryId }.toSet())
+                    assertEquals(expectedHistory, actual.history)
+                    assertEquals(0, syncRequests)
+                    assertEquals(before, hashes(sql)); assertNoForeignKeyErrors(sql)
+                    report.getJSONArray("states").put(JSONObject().put("label", label)
+                        .put("activeJoinedOwnerRows", count).put("isSafe", safe)
+                        .put("projectionRows", delta.size).put("legacyRows", old.size)
+                        .put("historyEqual", true).put("before", hashJson(before)).put("afterReadHashMatch", true))
+                }
+                state("inclusive-20000", 20_000, true)
+                val template = checkNotNull(dao.getCollectionEntry(2L, OWNER))
+                val extra = template.copy(id = 0L, quantity = 0, syncId = "guarded-count-extra")
+                val extraId = dao.insertCollectionEntry(extra)
+                assertTrue(extraId > 20_003L)
+                state("exclusive-20001", 20_001, false)
+                dao.updateCollectionEntry(extra.copy(id = extraId, deletedAtEpochMillis = AT + 999L))
+                state("tombstone-extra-restores-safe", 20_000, true)
+                assertEquals(3, report.getJSONArray("states").length())
+            } finally {
+                db.close(); check(!db.isOpen)
+                if (files.any(File::exists)) check(context.deleteDatabase(name))
+                check(files.none(File::exists))
+                report.getJSONArray("cleanup").put(JSONObject().put("databaseName", name)
+                    .put("closed", true).put("filesAbsent", true))
+            }
+            report.put("status", "PASS")
+        } catch (failure: Throwable) {
+            report.put("status", "FAIL").put("failureType", failure.javaClass.simpleName)
+            throw failure
+        } finally { save(report, config) }
+    }
+
     @Test fun localRoomFirstPositiveCounterfactualEdgeParity() = runBlocking<Unit> {
         val config = config()
         assumeTrue("First-positive edge proof not requested", InstrumentationRegistry.getArguments()
@@ -786,8 +1066,17 @@ class Release27RoomScaleInstrumentedTest {
                         val history = dao.observeOwnedRawPriceHistory(owner, SOURCE).first()
                         val candidate = readPostFixBases(sql, postFixFirstPositiveQuery(originalQuery, owner))
                         assertEquals(postFixBasesOracle(rows.map { it.priceCardId }, history), candidate)
+                        val legacyChart = com.dominik.cardvault.data.buildChronologicalPortfolioHistory(rows, history)
+                        val deltas = dao.observeOwnedPortfolioDeltas(owner, SOURCE).first()
+                        val safe = !(label == "explicit-quarantined-identity" && owner == OWNER)
+                        assertEquals(com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection(0, if (safe) 1 else 0, null, 0L), deltas.first())
+                        val compactChart = com.dominik.cardvault.data.buildGuardedPortfolioHistory(deltas)
+                        if (safe) assertEquals(legacyChart, compactChart) else {
+                            assertEquals(1, deltas.size); assertNull(compactChart)
+                        }
                         val repository = RoomCollectionRepository(db, MutableStateFlow(owner))
                         val portfolio = repository.portfolio.first()
+                        assertEquals("Every owner and original edge state keeps every chart point", legacyChart, portfolio.history)
                         postFixAssertReconstructedCards(rows, portfolio.cards, candidate)
                         val privateCards = repository.privateBinderContents(BINDER).first()
                         // This fixture retains one placement for every active entry of either owner.
@@ -811,7 +1100,8 @@ class Release27RoomScaleInstrumentedTest {
                             }
                         }
                         perOwner.put(JSONObject().put("owner", owner).put("historyRows", history.size)
-                            .put("bases", candidate.size).put("fullCardsEqual", true).put("privatePlacementsEqual", true))
+                            .put("bases", candidate.size).put("fullCardsEqual", true).put("privatePlacementsEqual", true)
+                            .put("aggregateSafe", safe).put("aggregateRows", deltas.size).put("historyEqual", true))
                     }
                     assertEquals(before, hashes(sql)); assertNoForeignKeyErrors(sql)
                     report.getJSONArray("states").put(JSONObject().put("label", label)
@@ -1255,6 +1545,501 @@ class Release27RoomScaleInstrumentedTest {
             report.put("status", "FAIL").put("failureType", failure.javaClass.simpleName)
             throw failure
         } finally { save(report, config) }
+    }
+
+    @Test fun localRoomPortfolioAggregateCrossesRealWindowsWithAtomicCorrections() = runBlocking<Unit> {
+        val config = config()
+        assumeTrue("Explicit multi-window proof not requested", InstrumentationRegistry.getArguments()
+            .getString("release27RoomPortfolioWindows") == "atomic-corrections")
+        require(config.sizes == listOf(1_000) && config.repeats == 3)
+        val report = report(config, "localRoomPortfolioAggregateWindows")
+            .put("fixtureVersion", 1).put("fixture", "One product, two finishes, 100000 distinct timestamps; other-owner/deleted/source sentinels")
+            .put("scope", "Fresh owned local DB only; unchanged real Room SQL/cursors; no network, product singleton or engine/window-size switch")
+            .put("passCriteria", "Exact types/tuples, actual window crossings, complete atomic-state oracle, unchanged unrelated fields and verified cleanup")
+            .put("deadlineScope", "Finite cursor barriers and writer joins; enclosing 180s timeout is cooperative, not a hard native-SQL deadline")
+            .put("remaining", "No API26 result without an actual API26 run; writer serialization is not overlapping-commit proof")
+            .put("phases", JSONArray()).put("cleanup", JSONArray())
+        val name = freshName("portfolio-windows")
+        val files = checkedPostFixFiles(name)
+        val audit = PortfolioWindowAudit()
+        val writers = mutableListOf<PortfolioWindowWriter>()
+        val db = Room.databaseBuilder(context, CardVaultDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+            .openHelperFactory(PortfolioWindowFactory(audit))
+            .setQueryCallback(RoomDatabase.QueryCallback(audit::callback), Executor { it.run() }).build()
+        var failure: Throwable? = null
+        try {
+            withTimeout(180_000L) {
+                val sql = db.openHelper.writableDatabase
+                assertEquals("wal", sql.query("PRAGMA journal_mode").use { c ->
+                    assertTrue(c.moveToFirst()); c.getString(0).lowercase(java.util.Locale.ROOT)
+                })
+                report.put("sqliteVersion", sql.query("SELECT sqlite_version()").use { c ->
+                    assertTrue(c.moveToFirst()); c.getString(0)
+                })
+                seedPortfolioWindows(sql, name)
+                assertPortfolioWindowFixture(sql, name, generationB = false, unsafe = false)
+                val before = hashes(sql); assertEquals(15, before.size)
+                val nonempty = setOf("catalog_cards", "collection_entries", "raw_price_snapshots", "app_metadata", "sqlite_sequence")
+                before.filterKeys { it !in nonempty }.forEach { (table, value) -> assertEquals("Initially empty $table", 0L, value.rows) }
+                assertEquals(nonempty, before.filterValues { it.rows > 0 }.keys)
+                report.getJSONArray("integrity").put(JSONObject().put("before", hashJson(before)))
+                val dao = db.cardVaultDao()
+                val initial = PortfolioWindowRead("initial-safe", pause = false)
+                audit.arm(initial)
+                val initialRows = try { dao.observeOwnedPortfolioDeltas(OWNER, SOURCE).first() }
+                    finally { audit.disarm(initial) }
+                assertPortfolioWindowDeltas(initialRows, generationB = false)
+                initial.assertComplete(); report.getJSONArray("phases").put(initial.json())
+                assertEquals("Read-only initial proof preserves all fields", before, hashes(sql))
+                assertEquals(listOf(com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection(0, 1, null, 0L)),
+                    dao.observeOwnedPortfolioDeltas("window-owner-empty", SOURCE).first())
+                assertEquals(listOf(com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection(0, 0, null, 0L)),
+                    dao.observeOwnedPortfolioDeltas(OTHER_OWNER, SOURCE).first())
+                var overlapping = 0
+                for (unsafe in listOf(false, true)) {
+                    // Restore A using an explicit fixture transaction, never product writes.
+                    resetPortfolioWindows(sql)
+                    assertPortfolioWindowFixture(sql, name, generationB = false, unsafe = false)
+                    assertEquals(before, hashes(sql))
+                    val probe = PortfolioWindowRead(if (unsafe) "safe-to-unsafe" else "safe-to-safe", pause = true)
+                    val writer = PortfolioWindowWriter(files.first(), name, unsafe)
+                    writers += writer
+                    audit.arm(probe)
+                    val rows = coroutineScope {
+                        val read = async(Dispatchers.IO) {
+                            try { dao.observeOwnedPortfolioDeltas(OWNER, SOURCE).first() }
+                            catch (t: Throwable) { probe.cancellation.cancel(); throw t }
+                        }
+                        try {
+                            check(withContext(Dispatchers.IO) { probe.ready.await(60, java.util.concurrent.TimeUnit.SECONDS) }) {
+                                "No real cursor-window boundary was reached"
+                            }
+                            writer.start()
+                            check(withContext(Dispatchers.IO) { writer.attempt.await(5, java.util.concurrent.TimeUnit.SECONDS) }) {
+                                "Writer did not reach its transaction attempt"
+                            }
+                            // An exclusive fallback may serialize the writer. Never wait for its
+                            // commit while indefinitely holding the paused read transaction.
+                            withContext(Dispatchers.IO) { writer.done.await(500, java.util.concurrent.TimeUnit.MILLISECONDS) }
+                            probe.release.countDown()
+                            val result = read.await()
+                            check(withContext(Dispatchers.IO) { writer.done.await(15, java.util.concurrent.TimeUnit.SECONDS) }) {
+                                "Writer did not complete after the reader released its transaction"
+                            }
+                            writer.rethrow()
+                            result
+                        } finally {
+                            writer.cancelled.set(true)
+                            probe.release.countDown()
+                            probe.cancellation.cancel()
+                            read.cancel()
+                            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { writer.joinBounded() }
+                            audit.disarm(probe)
+                        }
+                    }
+                    assertPortfolioWindowDeltas(rows, generationB = false)
+                    probe.assertComplete()
+                    assertTrue(writer.committedAt.get() > 0L)
+                    val committedBeforeRefill = writer.committedAt.get() in
+                        (probe.pausedAt.get() + 1) until probe.refillStartedAt.get()
+                    if (committedBeforeRefill) overlapping++
+                    report.getJSONArray("phases").put(probe.json().put("writer", writer.json())
+                        .put("fullOriginalGenerationA", true)
+                        .put("commitBeforeRefill", committedBeforeRefill)
+                        .put("scheduleCoverage", if (committedBeforeRefill) "OVERLAPPING_COMMIT_PROVED"
+                            else "COHERENT_READ_PROVED_OVERLAPPING_COMMIT_NOT_PROVED"))
+                    assertPortfolioWindowFixture(sql, name, generationB = true, unsafe = unsafe)
+                    assertPortfolioWindowUnchangedColumns(before, hashes(sql), unsafe)
+                    val after = dao.observeOwnedPortfolioDeltas(OWNER, SOURCE).first()
+                    if (unsafe) {
+                        assertEquals(listOf(com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection(0, 0, null, 0L)), after)
+                        val legacyBefore = audit.legacyCalls.get()
+                        var syncRequests = 0
+                        val portfolio = RoomCollectionRepository(db, MutableStateFlow(OWNER),
+                            onSyncNeeded = { syncRequests++ }).portfolio.first()
+                        assertTrue("Actual unsafe public path must use the unchanged raw-history fallback",
+                            audit.legacyCalls.get() > legacyBefore)
+                        val lastIndex = PortfolioWindowFixture.COUNT - 1L
+                        val expectedCards = listOf(1, 0).map { entry ->
+                            val reverse = entry == 1
+                            val firstMinor = if (reverse) 2_000L else 1_000L
+                            val lastMinor = if (reverse) 2_000L + 5L * lastIndex else 1_000L + 3L * lastIndex
+                            com.dominik.cardvault.model.CollectionCard(
+                                entryId = entry + 1L, id = PortfolioWindowFixture.CARD, name = "Synthetic 0",
+                                set = "Window fixture", number = "0/3", language = com.dominik.cardvault.model.CardLanguage.GERMAN,
+                                finish = if (reverse) "Reverse Holo" else "Normal", variant = "Standard", condition = "Near Mint",
+                                quantity = if (reverse) 3 else 1_000_001, currentValueEur = lastMinor / 100.0,
+                                changePercent = (lastMinor - firstMinor) * 100.0 / firstMinor,
+                                priceUpdatedAtEpochMillis = AT + lastIndex * 60_000L, notes = "Window fixture $entry",
+                                acquisitionPriceEur = null, acquisitionDateEpochDay = null, accent = 0xFF6C78A8,
+                                binderId = "inbox", externalProductId = null, imageUrl = null, rarity = "UNKNOWN",
+                                effectOverride = null, marketSearchName = null, marketExpansionId = null,
+                                sourceSetId = null, sourceCardId = null, priceSelection = null)
+                        }
+                        // Distinct updatedAt values make the complete reverse-then-normal order unambiguous.
+                        assertEquals(expectedCards, portfolio.cards)
+                        assertEquals(1_000_004, portfolio.totalCards)
+                        assertEquals(PortfolioWindowFixture.COUNT, portfolio.history.size)
+                        portfolio.history.forEachIndexed { i, point ->
+                            val normal = java.math.BigInteger.valueOf(1_000L + 3L * i)
+                            val reverse = java.math.BigInteger.valueOf(2_000L + 5L * i)
+                            val expected = normal.multiply(java.math.BigInteger.valueOf(1_000_001L))
+                                .add(reverse.multiply(java.math.BigInteger.valueOf(3L)))
+                            assertEquals(expected.toDouble() / 100.0, point.value, 0.0)
+                            val label = java.time.Instant.ofEpochMilli(AT + i * 60_000L)
+                                .atZone(java.time.ZoneOffset.UTC).toLocalDate()
+                                .format(java.time.format.DateTimeFormatter.ofPattern("MMM"))
+                            assertEquals(label, point.label)
+                        }
+                        // Current total is deliberately Euro-Double per card, unlike minor-unit history.
+                        val expectedTotal = ((2_000L + 5L * lastIndex) / 100.0) * 3 +
+                            ((1_000L + 3L * lastIndex) / 100.0) * 1_000_001
+                        assertEquals(expectedTotal, portfolio.totalValue, 0.0)
+                        assertEquals(0, syncRequests)
+                        sql.execSQL("UPDATE collection_entries SET quantity=2 WHERE id=1 AND ownerUid=? AND quantity=1000001", arrayOf(OWNER))
+                        assertPortfolioWindowFixture(sql, name, generationB = true, unsafe = false)
+                        assertPortfolioWindowDeltas(dao.observeOwnedPortfolioDeltas(OWNER, SOURCE).first(), generationB = true)
+                    } else assertPortfolioWindowDeltas(after, generationB = true)
+                    assertNoForeignKeyErrors(sql)
+                }
+                audit.checkHealthy()
+                val captured = checkNotNull(audit.actualSql.get())
+                report.put("actualAggregateSql", captured)
+                    .put("actualAggregateSqlSha256", MessageDigest.getInstance("SHA-256")
+                        .digest(captured.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) })
+                    .put("actualAggregateBindings", JSONArray(listOf(OWNER, SOURCE, SOURCE, SOURCE)))
+                    .put("callbackCount", audit.callbackCount.get()).put("cursorCount", audit.cursorCount.get())
+                    .put("overlappingCommitPhases", overlapping).put("requiredOverlappingCommitPhases", 2)
+                    .put("multiWindowCoherence", "PASS")
+                    .put("overlappingCommitCoverage", if (overlapping == 2) "PASS" else "INCOMPLETE")
+                resetPortfolioWindows(sql)
+                assertPortfolioWindowFixture(sql, name, generationB = false, unsafe = false)
+                assertEquals("Exact original 15-table fixture restored", before, hashes(sql))
+                report.getJSONArray("integrity").put(JSONObject().put("restoredAll15Hashes", true))
+                // A serialized schedule is a useful subproof, not a full concurrency PASS.
+                report.put("status", if (overlapping == 2) "PASS" else "PARTIAL_SERIALIZED_OR_UNPROVED_OVERLAP")
+            }
+        } catch (t: Throwable) {
+            failure = t
+            report.put("status", "FAIL").put("failureType", t.javaClass.name).put("failure", t.message)
+            throw t
+        } finally {
+            audit.active.get()?.let { it.release.countDown(); it.cancellation.cancel() }
+            writers.forEach { it.cancelled.set(true) }
+            var cleanupError: Throwable? = null
+            try {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                    writers.forEach { it.joinBounded() }
+                }
+                writers.forEach { it.rethrow() }
+            } catch (t: Throwable) { cleanupError = t }
+            // Never close/delete a database underneath a still-running native writer.
+            if (writers.none { it.isAlive }) {
+                try {
+                    db.close()
+                    context.deleteDatabase(name)
+                    check(files.none(File::exists)) { "Owned fixture or sidecars remain" }
+                } catch (t: Throwable) {
+                    if (cleanupError == null) cleanupError = t else cleanupError!!.addSuppressed(t)
+                }
+            } else if (cleanupError == null) cleanupError = AssertionError("Writer still alive; owned fixture retained")
+            report.getJSONArray("cleanup").put(JSONObject().put("name", name)
+                .put("workersTerminated", writers.none { it.isAlive }).put("filesAbsent", files.none(File::exists))
+                .put("error", cleanupError?.toString() ?: JSONObject.NULL))
+            report.put("writers", JSONArray().apply { writers.forEach { put(it.json()) } })
+            if (cleanupError != null) {
+                report.put("status", "FAIL")
+                failure?.addSuppressed(cleanupError!!)
+            }
+            save(report, config)
+            if (failure == null && cleanupError != null) throw cleanupError!!
+        }
+    }
+
+    private object PortfolioWindowFixture {
+        const val COUNT = 100_000
+        const val CARD = "window-card"
+        const val OTHER_CARD = "window-other-card"
+        const val DELETED_CARD = "window-deleted-card"
+        const val OTHER_SOURCE = "WINDOW_OTHER_SOURCE"
+        const val CARD_COLUMNS = "id,tcg,setId,setName,name,collectorNumber,language,finish,variant,createdAtEpochMillis,externalSource,externalProductId,imageUrl,rarity,effectOverride"
+        const val ENTRY_COLUMNS = "id,cardId,quantity,condition,acquisitionPriceMinor,acquisitionCurrency,acquisitionDateEpochDay,notes,frontPhotoUri,backPhotoUri,createdAtEpochMillis,updatedAtEpochMillis,externalProductSource,externalProductId,binderId,ownerUid,syncId,syncState,remoteRevision,deletedAtEpochMillis,finishOverride,variantOverride,effectOverride,sourceSetId,sourceCardId"
+        const val PRICE_COLUMNS = "id,cardId,source,currency,lowValueMinor,averageValueMinor,trendValueMinor,marketValueMinor,average1DayValueMinor,average7DayValueMinor,average30DayValueMinor,holoAverageValueMinor,holoLowValueMinor,holoTrendValueMinor,fetchedAtEpochMillis,effectiveAtEpochMillis"
+        fun card(i: Int): List<Any?> = listOf(listOf(CARD, OTHER_CARD, DELETED_CARD)[i], "POKEMON", "window-set", "Window fixture", "Synthetic $i", "$i/3", "GERMAN", "Normal", "Standard", AT, null, null, null, "UNKNOWN", null)
+        fun entry(i: Int, unsafe: Boolean): List<Any?> = listOf(i + 1L,
+            when (i) { 0, 1 -> CARD; 2 -> OTHER_CARD; else -> DELETED_CARD },
+            when (i) { 0 -> if (unsafe) 1_000_001L else 2L; 1 -> 3L; else -> 1_000_001L },
+            "Near Mint", null, null, null, "Window fixture $i", null, null, AT, AT + i,
+            null, null, "inbox", if (i == 2) OTHER_OWNER else OWNER, "window-entry-$i", "LOCAL_ONLY", 0L,
+            if (i == 3) AT else null, if (i == 1) "Reverse Holo" else null, null, null, null, null)
+        fun price(i: Int, generationB: Boolean): List<Any?> {
+            val owned = i < COUNT
+            val card = when (i) { COUNT -> OTHER_CARD; COUNT + 1 -> DELETED_CARD; else -> CARD }
+            val source = if (i == COUNT + 2) OTHER_SOURCE else SOURCE
+            val normal = if (!owned) Long.MAX_VALUE else if (generationB) 1_000L + 3L * i else 100L + i
+            val reverse = if (!owned) Long.MAX_VALUE else if (generationB) 2_000L + 5L * i else 200L + 2L * i
+            return listOf(i + 1L, card, source, "EUR", null, null, normal, null, null, null, null,
+                null, null, reverse, AT, if (owned) AT + i * 60_000L else AT - 60_000L)
+        }
+    }
+
+    private fun seedPortfolioWindows(sql: SupportSQLiteDatabase, name: String) {
+        sql.beginTransaction()
+        try {
+            FixtureWriter(sql).use { out ->
+                repeat(3) { out.insert("catalog_cards", PortfolioWindowFixture.CARD_COLUMNS, *PortfolioWindowFixture.card(it).toTypedArray()) }
+                repeat(4) { out.insert("collection_entries", PortfolioWindowFixture.ENTRY_COLUMNS, *PortfolioWindowFixture.entry(it, false).toTypedArray()) }
+                repeat(PortfolioWindowFixture.COUNT + 3) { out.insert("raw_price_snapshots", PortfolioWindowFixture.PRICE_COLUMNS,
+                    *PortfolioWindowFixture.price(it, false).toTypedArray()) }
+                out.insert("app_metadata", "key,value", "portfolio-window-owned-fixture", name)
+            }
+            sql.setTransactionSuccessful()
+        } finally { sql.endTransaction() }
+    }
+
+    private fun resetPortfolioWindows(sql: SupportSQLiteDatabase) {
+        sql.beginTransaction()
+        try {
+            sql.execSQL("UPDATE raw_price_snapshots SET trendValueMinor=100+(effectiveAtEpochMillis-?)/60000, holoTrendValueMinor=200+2*((effectiveAtEpochMillis-?)/60000) WHERE cardId=? AND source=?",
+                arrayOf(AT, AT, PortfolioWindowFixture.CARD, SOURCE))
+            sql.execSQL("UPDATE collection_entries SET quantity=2 WHERE id=1 AND ownerUid=?", arrayOf(OWNER))
+            sql.setTransactionSuccessful()
+        } finally { sql.endTransaction() }
+    }
+
+    private fun assertPortfolioWindowFixture(sql: SupportSQLiteDatabase, name: String, generationB: Boolean, unsafe: Boolean) {
+        fun table(table: String, columns: String, count: Int, expected: (Int) -> List<Any?>) {
+            val names = columns.split(',')
+            val actualNames = sql.query("PRAGMA table_info($table)").use { c -> buildSet { while (c.moveToNext()) add(c.getString(1)) } }
+            assertEquals("Every fixture column is accounted for", actualNames, names.toSet())
+            sql.query("SELECT $columns FROM $table ORDER BY id").use { c ->
+                var row = 0
+                while (c.moveToNext()) {
+                    check(row < count)
+                    val values = expected(row)
+                    assertEquals(names.size, values.size)
+                    values.forEachIndexed { column, value ->
+                        val label = "$table row=$row column=${names[column]}"
+                        when (value) {
+                            null -> assertEquals(label, Cursor.FIELD_TYPE_NULL, c.getType(column))
+                            is Number -> { assertEquals(label, Cursor.FIELD_TYPE_INTEGER, c.getType(column)); assertEquals(label, value.toLong(), c.getLong(column)) }
+                            else -> { assertEquals(label, Cursor.FIELD_TYPE_STRING, c.getType(column)); assertEquals(label, value, c.getString(column)) }
+                        }
+                    }
+                    row++
+                }
+                assertEquals(count, row)
+            }
+        }
+        // Catalog IDs have lexical order CARD, DELETED_CARD, OTHER_CARD.
+        table("catalog_cards", PortfolioWindowFixture.CARD_COLUMNS, 3) { PortfolioWindowFixture.card(listOf(0, 2, 1)[it]) }
+        table("collection_entries", PortfolioWindowFixture.ENTRY_COLUMNS, 4) { PortfolioWindowFixture.entry(it, unsafe) }
+        table("raw_price_snapshots", PortfolioWindowFixture.PRICE_COLUMNS, PortfolioWindowFixture.COUNT + 3) { PortfolioWindowFixture.price(it, generationB) }
+        sql.query("SELECT key,value FROM app_metadata").use { c ->
+            assertTrue(c.moveToFirst()); assertEquals("portfolio-window-owned-fixture", c.getString(0)); assertEquals(name, c.getString(1)); assertFalse(c.moveToNext())
+        }
+        assertNoForeignKeyErrors(sql)
+    }
+
+    private fun assertPortfolioWindowUnchangedColumns(before: Map<String, TableHash>, after: Map<String, TableHash>, unsafe: Boolean) {
+        assertEquals(before.keys, after.keys)
+        before.forEach { (table, old) ->
+            val next = after.getValue(table)
+            assertEquals(old.rows, next.rows); assertEquals(old.columns.keys, next.columns.keys)
+            val changed = when (table) {
+                "raw_price_snapshots" -> setOf("trendValueMinor", "holoTrendValueMinor")
+                "collection_entries" -> if (unsafe) setOf("quantity") else emptySet()
+                else -> emptySet()
+            }
+            old.columns.forEach { (column, hash) -> if (column !in changed) assertEquals("$table.$column", hash, next.columns.getValue(column)) }
+        }
+    }
+
+    private fun assertPortfolioWindowDeltas(rows: List<com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection>, generationB: Boolean) {
+        assertEquals(PortfolioWindowFixture.COUNT + 1, rows.size)
+        assertEquals(com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection(0, 1, null, 0L), rows.first())
+        var previous = java.math.BigInteger.ZERO
+        repeat(PortfolioWindowFixture.COUNT) { i ->
+            val current = java.math.BigInteger.valueOf(if (generationB) 8_000L + 21L * i else 800L + 8L * i)
+            val delta = current.subtract(previous)
+            check(delta >= java.math.BigInteger.valueOf(Long.MIN_VALUE) && delta <= java.math.BigInteger.valueOf(Long.MAX_VALUE))
+            assertEquals(com.dominik.cardvault.data.local.OwnedPortfolioDeltaProjection(1, 1, AT + i * 60_000L,
+                delta.toLong()), rows[i + 1]) // BigInteger.longValueExact is API31; retain API26 compatibility.
+            previous = current
+        }
+    }
+
+    private class PortfolioWindowRead(val label: String, private val pause: Boolean) {
+        val cancellation = android.os.CancellationSignal()
+        val ready = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val claimed = java.util.concurrent.atomic.AtomicBoolean()
+        val pausedAt = AtomicLong()
+        val refillStartedAt = AtomicLong()
+        private val boundaryClaimed = java.util.concurrent.atomic.AtomicBoolean()
+        private var rows = 0
+        private val windows = mutableListOf<Triple<Int, Int, Int>>()
+        fun beforeMove(cursor: android.database.AbstractWindowedCursor) {
+            if (!pause || cursor.position < 0 || !cursor.hasWindow()) return
+            val next = cursor.position + 1
+            val window = cursor.window
+            if (next < cursor.count && next >= window.startPosition + window.numRows && boundaryClaimed.compareAndSet(false, true)) {
+                pausedAt.set(System.nanoTime()); ready.countDown()
+                check(release.await(10, java.util.concurrent.TimeUnit.SECONDS)) { "Finite cursor barrier expired" }
+                refillStartedAt.set(System.nanoTime())
+            }
+        }
+        fun afterMove(cursor: android.database.AbstractWindowedCursor, db: SupportSQLiteDatabase) {
+            check(db.inTransaction()) { "Aggregate cursor escaped the generated Room transaction" }
+            check(cursor.columnNames.toList() == listOf("rowKind", "isSafe", "effectiveAtEpochMillis", "deltaValueMinor"))
+            repeat(4) { column -> check(cursor.getType(column) == if (column == 2 && rows == 0) Cursor.FIELD_TYPE_NULL else Cursor.FIELD_TYPE_INTEGER) }
+            check(cursor.position == rows)
+            val w = cursor.window
+            if (windows.lastOrNull()?.first != w.startPosition) {
+                check(windows.size < 64) { "Unexpectedly many real cursor windows" }
+                windows += Triple(w.startPosition, w.numRows, cursor.position)
+            }
+            rows++
+        }
+        fun assertComplete() {
+            check(claimed.get()); assertEquals(PortfolioWindowFixture.COUNT + 1, rows)
+            check(windows.size >= 2 && windows.any { it.first > 0 }) { "Actual multi-window coverage was not reached" }
+            if (pause) check(pausedAt.get() > 0L && refillStartedAt.get() > pausedAt.get())
+        }
+        fun json() = JSONObject().put("label", label).put("rows", rows).put("pausedAtNanos", pausedAt.get())
+            .put("refillStartedAtNanos", refillStartedAt.get()).put("windows", JSONArray().apply {
+                windows.forEach { put(JSONObject().put("start", it.first).put("rows", it.second).put("observedAtPosition", it.third)) }
+            })
+    }
+
+    private class PortfolioWindowAudit {
+        val active = java.util.concurrent.atomic.AtomicReference<PortfolioWindowRead?>()
+        val actualSql = java.util.concurrent.atomic.AtomicReference<String?>()
+        val callbackCount = AtomicLong()
+        val cursorCount = AtomicLong()
+        val legacyCalls = AtomicLong()
+        private val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        fun arm(probe: PortfolioWindowRead) { check(active.compareAndSet(null, probe)) }
+        fun disarm(probe: PortfolioWindowRead) { check(active.compareAndSet(probe, null)) }
+        fun isAggregate(sql: String) = sql.replace(Regex("\\s+"), " ").trim().startsWith("WITH owner_rows AS (")
+        private fun capture(sql: String, bindings: List<Any?>) {
+            check(bindings.size == 4 && bindings[0] in setOf(OWNER, OTHER_OWNER, "window-owner-empty") &&
+                bindings.drop(1) == listOf(SOURCE, SOURCE, SOURCE)) { "Aggregate bindings differ" }
+            check(sql.count { it == '?' } == 4)
+            synchronized(actualSql) { if (actualSql.get() == null) actualSql.set(sql) else check(actualSql.get() == sql) }
+        }
+        fun callback(sql: String, bindings: List<Any?>) {
+            try {
+                if (isAggregate(sql)) { capture(sql, bindings); callbackCount.incrementAndGet() }
+                if (sql.replace(Regex("\\s+"), " ").trim().startsWith("SELECT p.cardId, p.effectiveAtEpochMillis, p.trendValueMinor, p.holoTrendValueMinor FROM raw_price_snapshots p WHERE p.source = ?")) {
+                    check(bindings == listOf(SOURCE, OWNER)); legacyCalls.incrementAndGet()
+                }
+            } catch (t: Throwable) { failure.compareAndSet(null, t) }
+        }
+        fun inspect(query: androidx.sqlite.db.SupportSQLiteQuery): PortfolioWindowRead? {
+            val bindings = sortedMapOf<Int, Any?>()
+            query.bindTo(object : androidx.sqlite.db.SupportSQLiteProgram {
+                override fun bindNull(index: Int) { check(!bindings.containsKey(index)); bindings[index] = null }
+                override fun bindLong(index: Int, value: Long) { check(!bindings.containsKey(index)); bindings[index] = value }
+                override fun bindDouble(index: Int, value: Double) { check(!bindings.containsKey(index)); bindings[index] = value }
+                override fun bindString(index: Int, value: String) { check(!bindings.containsKey(index)); bindings[index] = value }
+                override fun bindBlob(index: Int, value: ByteArray) { check(!bindings.containsKey(index)); bindings[index] = value.copyOf() }
+                override fun clearBindings() { bindings.clear() }
+                override fun close() = Unit
+            })
+            check(bindings.keys == setOf(1, 2, 3, 4)); capture(query.sql, bindings.values.toList())
+            cursorCount.incrementAndGet()
+            return active.get()?.also { check(bindings[1] == OWNER); check(it.claimed.compareAndSet(false, true)) }
+        }
+        fun checkHealthy() {
+            failure.get()?.let { throw AssertionError("SQL callback audit failed", it) }
+            check(callbackCount.get() == cursorCount.get() && callbackCount.get() > 0L)
+        }
+    }
+
+    private class PortfolioWindowFactory(private val audit: PortfolioWindowAudit) : androidx.sqlite.db.SupportSQLiteOpenHelper.Factory {
+        override fun create(configuration: androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration): androidx.sqlite.db.SupportSQLiteOpenHelper {
+            val helper = FrameworkSQLiteOpenHelperFactory().create(configuration)
+            fun wrap(db: SupportSQLiteDatabase): SupportSQLiteDatabase = object : SupportSQLiteDatabase by db {
+                override fun query(query: androidx.sqlite.db.SupportSQLiteQuery): Cursor {
+                    if (!audit.isAggregate(query.sql)) return db.query(query)
+                    val probe = audit.inspect(query)
+                    // Same query/bindings/engine. A never-cancelled token changes no successful
+                    // result; it only lets failure cleanup cancel a real native reader.
+                    val cursor = if (probe == null) db.query(query) else db.query(query, probe.cancellation)
+                    if (probe == null) return cursor
+                    try {
+                        var unwrapped = cursor
+                        repeat(8) { if (unwrapped is android.database.CursorWrapper) unwrapped = (unwrapped as android.database.CursorWrapper).wrappedCursor }
+                        val windowed = unwrapped as? android.database.AbstractWindowedCursor
+                            ?: error("Not a real framework windowed cursor")
+                        return object : android.database.CursorWrapper(cursor) {
+                            override fun moveToNext(): Boolean {
+                                probe.beforeMove(windowed)
+                                return super.moveToNext().also { if (it) probe.afterMove(windowed, db) }
+                            }
+                        }
+                    } catch (t: Throwable) { cursor.close(); throw t }
+                }
+            }
+            return object : androidx.sqlite.db.SupportSQLiteOpenHelper by helper {
+                override val writableDatabase: SupportSQLiteDatabase get() = wrap(helper.writableDatabase)
+                override val readableDatabase: SupportSQLiteDatabase get() = wrap(helper.readableDatabase)
+            }
+        }
+    }
+
+    private class PortfolioWindowWriter(private val file: File, private val name: String, private val unsafe: Boolean) {
+        val attempt = java.util.concurrent.CountDownLatch(1)
+        val done = java.util.concurrent.CountDownLatch(1)
+        val cancelled = java.util.concurrent.atomic.AtomicBoolean()
+        val committedAt = AtomicLong()
+        private val afterBeginAt = AtomicLong()
+        private val attemptAt = AtomicLong()
+        private val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        private val started = java.util.concurrent.atomic.AtomicBoolean()
+        private val thread = Thread({
+            try {
+                check(file.name == name && file.isFile)
+                android.database.sqlite.SQLiteDatabase.openDatabase(file.path, null,
+                    android.database.sqlite.SQLiteDatabase.OPEN_READWRITE or android.database.sqlite.SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING).use { db ->
+                    db.rawQuery("SELECT value FROM app_metadata WHERE key=?", arrayOf("portfolio-window-owned-fixture")).use { c ->
+                        check(c.moveToFirst() && c.getString(0) == name && !c.moveToNext())
+                    }
+                    check(!cancelled.get())
+                    attemptAt.set(System.nanoTime()); attempt.countDown()
+                    db.beginTransactionNonExclusive()
+                    afterBeginAt.set(System.nanoTime())
+                    try {
+                        check(!cancelled.get())
+                        db.compileStatement("UPDATE raw_price_snapshots SET trendValueMinor=1000+3*((effectiveAtEpochMillis-?)/60000), holoTrendValueMinor=2000+5*((effectiveAtEpochMillis-?)/60000) WHERE cardId=? AND source=?").use { statement ->
+                            statement.bindLong(1, AT); statement.bindLong(2, AT)
+                            statement.bindString(3, PortfolioWindowFixture.CARD); statement.bindString(4, SOURCE)
+                            check(statement.executeUpdateDelete() == PortfolioWindowFixture.COUNT)
+                        }
+                        if (unsafe) db.compileStatement("UPDATE collection_entries SET quantity=1000001 WHERE id=1 AND ownerUid=? AND syncId='window-entry-0' AND cardId=? AND quantity=2").use { statement ->
+                            statement.bindString(1, OWNER); statement.bindString(2, PortfolioWindowFixture.CARD)
+                            check(statement.executeUpdateDelete() == 1)
+                        }
+                        check(!cancelled.get())
+                        db.setTransactionSuccessful()
+                    } finally { db.endTransaction() }
+                    committedAt.set(System.nanoTime())
+                }
+            } catch (t: Throwable) { failure.compareAndSet(null, t) }
+            finally { done.countDown() }
+        }, "portfolio-window-owned-writer").apply { isDaemon = true }
+        val isAlive: Boolean get() = started.get() && thread.isAlive
+        fun start() { check(started.compareAndSet(false, true)); thread.start() }
+        fun joinBounded() {
+            if (!started.get()) return
+            thread.join(15_000L)
+            check(!thread.isAlive) { "Native writer did not terminate; retain its isolated fixture" }
+        }
+        fun rethrow() { failure.get()?.let { throw AssertionError("Independent fixture writer failed", it) } }
+        fun json() = JSONObject().put("attemptAtNanos", attemptAt.get()).put("afterBeginAtNanos", afterBeginAt.get())
+            .put("committedAtNanos", committedAt.get()).put("terminated", !isAlive).put("error", failure.get()?.toString() ?: JSONObject.NULL)
     }
 
     private fun config(): Config {
