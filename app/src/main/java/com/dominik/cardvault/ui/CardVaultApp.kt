@@ -1747,7 +1747,7 @@ private fun isOnline(context: Context): Boolean {
                         val thumbnailEffect = CardEffectResolver.resolve(card)
                         val slotPresence by animateFloatAsState(if (card != null) 1f else .94f, tween(DomiMotion.Normal), label = "binder-slot-$row-$column")
                         Box(Modifier.weight(1f).fillMaxHeight().graphicsLayer { alpha = slotPresence; scaleX = .96f + slotPresence * .04f; scaleY = .96f + slotPresence * .04f }.background(if (owned) Color(card!!.accent) else Color(0xFF111218), RoundedCornerShape(7.dp)).border(1.dp, if (owned) Color.Transparent else MewPlum.copy(alpha = .16f), RoundedCornerShape(7.dp)).then(card?.let { Modifier.clickable { onCardSelected(it) } } ?: Modifier), contentAlignment = Alignment.Center) {
-                            if (card?.imageUrl != null) AsyncImage(card.imageUrl, card.name, Modifier.fillMaxSize().graphicsLayer(alpha = if (owned) 1f else .24f), contentScale = ContentScale.Fit) else if (card != null) Text(card.name.take(1), color = Color.White.copy(alpha = if (owned) 1f else .25f), fontSize = 34.sp, fontWeight = FontWeight.Black)
+                            if (card?.displayImageUrl != null) AsyncImage(card.displayImageUrl, card.name, Modifier.fillMaxSize().graphicsLayer(alpha = if (owned) 1f else .24f), contentScale = ContentScale.Fit) else if (card != null) Text(card.name.take(1), color = Color.White.copy(alpha = if (owned) 1f else .25f), fontSize = 34.sp, fontWeight = FontWeight.Black)
                             if (!owned) Column(horizontalAlignment = Alignment.CenterHorizontally) { if (card != null) Text(card.number.substringBefore('/'), color = Color.White.copy(alpha = .65f), fontSize = 11.sp, fontWeight = FontWeight.Bold); Text("NICHT IM\nBESITZ", color = Color.White.copy(alpha = .48f), fontSize = 7.sp, fontWeight = FontWeight.Black, textAlign = TextAlign.Center, lineHeight = 8.sp) }
                             StaticCardEffectLayer(thumbnailEffect, Modifier.matchParentSize().clearAndSetSemantics { })
                             Text("DM", modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp), color = Color.White.copy(alpha = .45f), fontSize = 8.sp, fontWeight = FontWeight.Black)
@@ -2158,7 +2158,7 @@ private fun physicalBinderSpreads(cards: List<CollectionCard>): List<BinderSprea
             repeat(3) { column ->
                 val card = cards.getOrNull(row * 3 + column)
                 Box(Modifier.weight(1f).aspectRatio(.72f).background(if (card == null) Color(0xFF111218) else Color(card.accent), RoundedCornerShape(3.dp)).border(1.dp, Color.White.copy(alpha = .12f), RoundedCornerShape(3.dp)), contentAlignment = Alignment.Center) {
-                    if (card?.imageUrl != null) AsyncImage(card.imageUrl, card.name, Modifier.fillMaxSize()) else if (card != null) Text(card.name.take(1), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Black) else Text("+", color = Color.White.copy(alpha = .28f), fontSize = 16.sp)
+                    if (card?.displayImageUrl != null) AsyncImage(card.displayImageUrl, card.name, Modifier.fillMaxSize()) else if (card != null) Text(card.name.take(1), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Black) else Text("+", color = Color.White.copy(alpha = .28f), fontSize = 16.sp)
                     Canvas(Modifier.matchParentSize()) { drawRect(Brush.linearGradient(listOf(Color.White.copy(alpha = .11f), Color.Transparent, Color.White.copy(alpha = .03f)))) }
                     Text("DM", modifier = Modifier.align(Alignment.BottomEnd).padding(2.dp), color = Color.White.copy(alpha = .42f), fontSize = 6.sp, fontWeight = FontWeight.Black)
                 }
@@ -2545,7 +2545,7 @@ internal fun portfolioValuationDescription(portfolio: PortfolioSummary): String 
         onDismissRequest = { choosingFocus = false }, title = { Text(stringResource(R.string.focus_choose_title)) },
         text = { LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { OutlinedCard(onClick = { onFocusChoice("auto"); choosingFocus = false }, modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text(stringResource(R.string.focus_automatic), fontWeight = FontWeight.Bold); Text(stringResource(R.string.focus_automatic_hint), color = VaultTextMuted, fontSize = 11.sp) } } }
-            items(portfolio.cards, key = { it.entryId }) { card -> OutlinedCard(onClick = { onFocusChoice("entry:${card.entryId}"); choosingFocus = false }, modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { if (card.imageUrl != null) AsyncImage(card.imageUrl, null, Modifier.size(36.dp, 50.dp)) else NeutralCardFace(Modifier.size(36.dp, 50.dp)); Column { Text(card.name, fontWeight = FontWeight.Bold); Text("${card.set} · ${card.number}", color = VaultTextMuted, fontSize = 11.sp) } } } }
+            items(portfolio.cards, key = { it.entryId }) { card -> OutlinedCard(onClick = { onFocusChoice("entry:${card.entryId}"); choosingFocus = false }, modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { if (card.displayImageUrl != null) AsyncImage(card.displayImageUrl, null, Modifier.size(36.dp, 50.dp)) else NeutralCardFace(Modifier.size(36.dp, 50.dp)); Column { Text(card.name, fontWeight = FontWeight.Bold); Text("${card.set} · ${card.number}", color = VaultTextMuted, fontSize = 11.sp) } } } }
         } }, confirmButton = {}, dismissButton = { TextButton(onClick = { choosingFocus = false }) { Text(stringResource(R.string.action_cancel)) } }
     )
 }
@@ -2600,7 +2600,7 @@ internal fun portfolioValuationDescription(portfolio: PortfolioSummary): String 
         }
         .clip(CardVaultShapes.card)
         .background(VaultNightRaised, CardVaultShapes.card)) {
-        if (card?.imageUrl != null) AsyncImage(card.imageUrl, stringResource(R.string.focus_card_description, card.name), Modifier.fillMaxSize()) else NeutralCardFace(Modifier.fillMaxSize())
+        if (card?.displayImageUrl != null) AsyncImage(card.displayImageUrl, stringResource(R.string.focus_card_description, card.name), Modifier.fillMaxSize()) else NeutralCardFace(Modifier.fillMaxSize())
         if (interactive) HoloEffectLayer(effect, tiltX, tiltY, interactive, Modifier.matchParentSize().clearAndSetSemantics { })
         else StaticCardEffectLayer(effect, Modifier.matchParentSize().clearAndSetSemantics { })
     }
@@ -3103,7 +3103,7 @@ private fun openOfficialPage(context: Context, url: String) {
     }
     DomiGlassCard(Modifier.fillMaxWidth(), onClick = onClick) { Row(Modifier.padding(CardVaultSpacing.card), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CardVaultSpacing.card)) {
     Box(Modifier.size(54.dp, 75.dp).background(Color(card.accent), CardVaultShapes.thumbnail), contentAlignment = Alignment.Center) {
-        if (card.imageUrl != null) AsyncImage(model = card.imageUrl, contentDescription = stringResource(R.string.collection_card_image_description, card.name, card.number), modifier = Modifier.fillMaxSize())
+        if (card.displayImageUrl != null) AsyncImage(model = card.displayImageUrl, contentDescription = stringResource(R.string.collection_card_image_description, card.name, card.number), modifier = Modifier.fillMaxSize())
         else Text(card.name.take(1), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black)
         StaticCardEffectLayer(effect, Modifier.matchParentSize().clearAndSetSemantics { })
     }
@@ -3137,8 +3137,12 @@ private fun openOfficialPage(context: Context, url: String) {
     var resolvedCardmarketExpansionId by remember { mutableStateOf<String?>(null) }
     var searchByPokemon by rememberSaveable { mutableStateOf(false) }
     var showAllSets by rememberSaveable { mutableStateOf(false) }
-    var setConfirmationHint by rememberSaveable { mutableStateOf(false) }
-    var pokemonResults by remember { mutableStateOf<List<CatalogSearchResult>>(emptyList()) }
+    var pokemonResults by remember(query, searchByPokemon) { mutableStateOf<List<PokemonVisualCard>>(emptyList()) }
+    var pokemonPage by remember(query, searchByPokemon) { mutableStateOf(1) }
+    var pokemonHasMore by remember(query, searchByPokemon) { mutableStateOf(false) }
+    var pokemonSearching by remember(query, searchByPokemon) { mutableStateOf(false) }
+    var pokemonSearchError by remember(query, searchByPokemon) { mutableStateOf(false) }
+    var pokemonSearchRetry by remember { mutableStateOf(0) }
     var loading by remember { mutableStateOf(true) }; var error by remember { mutableStateOf(false) }
     val catalogSync by repository.catalogSyncStatus.collectAsState(initial = CatalogSyncStatus("IDLE", null, null, 0, 0, null))
     // The initial Cardmarket import runs in the background. Repeat the active
@@ -3157,7 +3161,7 @@ private fun openOfficialPage(context: Context, url: String) {
         loading = true; error = false; products = emptyList()
         // The set index has no declared foil data. Load the selected card's existing
         // detail record before handing its physical printing to the add dialog.
-        val detailed = try { visualCatalog.withDeclaredPrintVariants(card) }
+        val detailed = try { visualCatalog.withDeclaredPrintVariants(card, loadMissingArtwork = true) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { card }
         if (selectedCard?.id != card.id) return@LaunchedEffect
@@ -3190,14 +3194,24 @@ private fun openOfficialPage(context: Context, url: String) {
         resolvedCardmarketExpansionId = resolved.first
         setCardPrices = resolved.second
     }
-    LaunchedEffect(query, searchByPokemon, selectedSet, catalogRevision) {
-        if (selectedSet == null) {
-            pokemonResults = emptyList()
-            if (searchByPokemon && query.trim().length >= 2) {
-                delay(250)
-                pokemonResults = repository.searchCatalog(query, 20)
-            }
+    LaunchedEffect(query, searchByPokemon, selectedSet, selectedCard?.id, pokemonPage, pokemonSearchRetry) {
+        if (!searchByPokemon || selectedSet != null || selectedCard != null || query.trim().length < 2) return@LaunchedEffect
+        pokemonSearching = true
+        pokemonSearchError = false
+        try {
+            if (pokemonPage == 1) delay(250)
+            // Search visual German card identities, never the English price-product catalogue.
+            // The existing exact-printing resolver runs only after a card is selected.
+            val result = visualCatalog.searchCards(query, pokemonPage)
+            pokemonResults = (if (pokemonPage == 1) result.cards else pokemonResults + result.cards)
+                .distinctBy(PokemonVisualCard::id)
+            pokemonHasMore = result.hasMore
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            pokemonSearchError = true
         }
+        pokemonSearching = false
     }
     val matchingSets = remember(sets, query) {
         sets.filter { query.isBlank() || it.name.contains(query, true) || it.series.contains(query, true) }
@@ -3206,15 +3220,15 @@ private fun openOfficialPage(context: Context, url: String) {
         if (query.isBlank() && !showAllSets) matchingSets.take(36) else matchingSets
     }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(when { selectedCard != null -> "Druck auswählen"; selectedSet != null -> selectedSet!!.name; else -> "Karte suchen" }) }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (selectedSet == null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(selected = !searchByPokemon, onClick = { searchByPokemon = false; query = ""; setConfirmationHint = false }, label = { Text("Set auswählen") }); FilterChip(selected = searchByPokemon, onClick = { searchByPokemon = true; query = ""; setConfirmationHint = false }, label = { Text("Pokémon suchen") }) }
+        if (selectedSet == null && selectedCard == null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(selected = !searchByPokemon, onClick = { searchByPokemon = false; query = "" }, label = { Text("Set auswählen") }); FilterChip(selected = searchByPokemon, onClick = { searchByPokemon = true; query = "" }, label = { Text("Pokémon suchen") }) }
         if (selectedSet == null && !searchByPokemon) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = !showAllSets, onClick = { showAllSets = false }, label = { Text("Aktuelle Sets") })
             FilterChip(selected = showAllSets, onClick = { showAllSets = true }, label = { Text("Alle Sets") })
         }
-        if (setConfirmationHint) Text("Pokémon gefunden – bitte jetzt das Set wählen. So landet die Karte sicher im richtigen Binder.", color = MewIce, fontSize = 12.sp)
-        if (selectedCard == null) OutlinedTextField(query, { query = it }, label = { Text(if (selectedSet == null && searchByPokemon) "Pokémonname" else if (selectedSet == null) "Set suchen" else "Kartenname oder Nummer") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CardVaultShapes.field)
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (error) Text(stringResource(R.string.catalog_visual_error), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        if (selectedCard == null) OutlinedTextField(query, { query = if (selectedSet == null && searchByPokemon) it.take(100) else it }, label = { Text(if (selectedSet == null && searchByPokemon) "Deutscher Pokémonname" else if (selectedSet == null) "Set suchen" else "Kartenname oder Nummer") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("pokemon-search-input"), shape = CardVaultShapes.field)
+        val showingPokemonSearch = searchByPokemon && selectedSet == null && selectedCard == null
+        if (if (showingPokemonSearch) pokemonSearching else loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (!showingPokemonSearch && error) Text(stringResource(R.string.catalog_visual_error), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when {
                 selectedCard != null -> {
@@ -3274,13 +3288,23 @@ private fun openOfficialPage(context: Context, url: String) {
                     }
                 }
                 selectedSet != null -> items(cards.filter { matchesCardInSelectedSet(it.name, it.number, query) }, key = { it.id }) { card -> VisualCardRow(card, setCardPrices[card.id]) { selectedCard = card } }
-                searchByPokemon -> items(pokemonResults, key = { it.productId }) { result -> CatalogResultRow(result) {
-                    // The compact market catalogue has no printed number/source card ID.
-                    // Confirm the actual set/card before assigning an official Binder slot.
-                    searchByPokemon = false
-                    query = ""
-                    setConfirmationHint = true
-                } }
+                searchByPokemon -> {
+                    item { Text("Deutsche Karten mit Bild · wähle die passende Karte und das Set.", color = VaultTextMuted, fontSize = 12.sp) }
+                    if (query.trim().length < 2) item { Text("Mindestens zwei Zeichen eingeben, z. B. Glurak oder Bisaflor.", color = VaultTextMuted, fontSize = 12.sp) }
+                    else if (!pokemonSearching && !pokemonSearchError && pokemonResults.isEmpty()) item {
+                        Text("Keine passende deutsche Karte gefunden.", color = VaultTextMuted, fontSize = 12.sp)
+                    }
+                    items(pokemonResults, key = { it.id }) { card ->
+                        VisualCardRow(card, showPrice = false, modifier = Modifier.testTag("pokemon-search-result-${card.id}")) { loading = true; selectedCard = card }
+                    }
+                    if (pokemonSearchError) item {
+                        Text("Suche konnte nicht geladen werden. Bitte erneut versuchen.", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                        TextButton(onClick = { pokemonSearchRetry++ }, enabled = !pokemonSearching) { Text("Erneut versuchen") }
+                    }
+                    else if (pokemonHasMore) item {
+                        OutlinedButton(onClick = { pokemonPage++ }, enabled = !pokemonSearching, modifier = Modifier.fillMaxWidth()) { Text("Mehr Karten laden") }
+                    }
+                }
                 else -> {
                     if (query.isBlank() && !showAllSets) item {
                         Text("Aktuelle Erweiterungen zuerst · über „Alle Sets“ oder die Suche erreichst du den vollständigen deutschen Katalog.", color = VaultTextMuted, fontSize = 11.sp)
@@ -3366,13 +3390,16 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
     }
 }
 
-@Composable private fun VisualCardRow(card: PokemonVisualCard, marketPrice: VisualCardMarketPrice? = null, onClick: () -> Unit) = OutlinedCard(onClick = onClick, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), modifier = Modifier.fillMaxWidth()) {
+@Composable private fun VisualCardRow(card: PokemonVisualCard, marketPrice: VisualCardMarketPrice? = null, showPrice: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) = OutlinedCard(onClick = onClick, colors = CardDefaults.outlinedCardColors(containerColor = VaultPlumSurface), modifier = modifier.fillMaxWidth()) {
     Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        AsyncImage(model = card.smallImageUrl, contentDescription = stringResource(R.string.catalog_card_image_description, card.name, card.number), modifier = Modifier.size(72.dp, 101.dp))
+        CatalogCardArtwork(card, modifier = Modifier.size(72.dp, 101.dp))
         Column(Modifier.weight(1f)) {
             Text(card.name, fontWeight = FontWeight.Bold)
             Text("#${card.number} · ${card.rarity ?: stringResource(R.string.unknown)}", color = VaultTextMuted, fontSize = 12.sp)
             Text(card.set.name, color = MewIce, fontSize = 11.sp)
+            cardArtworkLanguageNotice(card.smallImageUrl)?.let { notice ->
+                Text(notice, color = VaultTextMuted, fontSize = 11.sp)
+            }
             val priceLabel = when {
                 marketPrice == null -> "Cardmarket-Preis wird geladen …"
                 marketPrice.trendPriceEur != null && marketPrice.exact -> "Cardmarket-Trendpreis: ${euro(marketPrice.trendPriceEur)}"
@@ -3380,7 +3407,7 @@ internal fun fallbackCardImageUrl(imageUrl: String?, fallback: String?): String?
                 marketPrice.hasCardmarketProduct -> "Kein Cardmarket-Trendpreis verfügbar"
                 else -> "Kein passender Cardmarket-Preis verfügbar"
             }
-            Text(priceLabel, color = if (marketPrice?.trendPriceEur != null) MewIce else VaultTextMuted, fontSize = 11.sp, fontWeight = if (marketPrice?.trendPriceEur != null) FontWeight.SemiBold else FontWeight.Normal)
+            if (showPrice) Text(priceLabel, color = if (marketPrice?.trendPriceEur != null) MewIce else VaultTextMuted, fontSize = 11.sp, fontWeight = if (marketPrice?.trendPriceEur != null) FontWeight.SemiBold else FontWeight.Normal)
         }
     }
 }

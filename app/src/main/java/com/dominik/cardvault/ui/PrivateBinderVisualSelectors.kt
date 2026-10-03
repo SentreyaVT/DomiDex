@@ -308,8 +308,8 @@ internal fun PrivateBinderHoloSelectorDialog(
                                                     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                                                     .clip(RoundedCornerShape(7.dp)),
                                             ) {
-                                                if (!card.imageUrl.isNullOrBlank()) {
-                                                    AsyncImage(card.imageUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                                                if (!card.displayImageUrl.isNullOrBlank()) {
+                                                    AsyncImage(card.displayImageUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                                                 } else {
                                                     Box(Modifier.fillMaxSize().background(MewPlumDeep))
                                                 }
@@ -367,8 +367,8 @@ private fun PrivateBinderHoloSelectorPreview(
             .background(VaultNightRaised)
             .semantics { contentDescription = "Interaktive Holo-Vorschau" },
     ) {
-        if (!card.imageUrl.isNullOrBlank()) {
-            AsyncImage(card.imageUrl, card.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        if (!card.displayImageUrl.isNullOrBlank()) {
+            AsyncImage(card.displayImageUrl, card.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         } else {
             Box(Modifier.fillMaxSize().background(MewPlumDeep), contentAlignment = Alignment.Center) {
                 Text(card.name.take(1), color = VaultText, fontSize = 36.sp, fontWeight = FontWeight.Black)
@@ -405,7 +405,7 @@ internal fun PrivateBinderInteractiveCardVisual(
             .clip(RoundedCornerShape(12.dp))
             .background(VaultNightRaised),
     ) {
-        if (!card.imageUrl.isNullOrBlank()) AsyncImage(card.imageUrl, card.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        if (!card.displayImageUrl.isNullOrBlank()) AsyncImage(card.displayImageUrl, card.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         else Box(Modifier.fillMaxSize().background(MewPlumDeep), contentAlignment = Alignment.Center) {
             Text(card.name.take(1), color = VaultText, fontSize = 54.sp, fontWeight = FontWeight.Black)
         }

@@ -79,6 +79,7 @@ internal data class CatalogCardDetail(
     val image: String? = null,
     /** Explicit printing conflicts must survive cache reuse and registry attachment. */
     val blockedCardmarketVariantIds: Set<String> = emptySet(),
+    val fromEnglishSource: Boolean = false,
 )
 
 /** Metadata only: no bitmaps, prices, or collection state. */
@@ -86,11 +87,17 @@ internal class PokemonCatalogMetadataCache {
     private val ttlMillis = 15 * 60 * 1_000L
     val sets = CatalogMemoryCache<String, List<PokemonSet>>(1, ttlMillis)
     val cards = CatalogMemoryCache<String, CatalogSetCards>(24, ttlMillis)
+    val searches = CatalogMemoryCache<Pair<String, Int>, PokemonCardSearchPage>(24, ttlMillis)
+    val searchPocketSets = CatalogMemoryCache<String, Set<String>>(1, ttlMillis)
     val details = CatalogMemoryCache<String, CatalogCardDetail>(512, ttlMillis)
+    val detailArtwork = CatalogMemoryCache<String, PokemonCardArtworkCandidate>(512, ttlMillis)
 
     fun invalidate() {
         sets.invalidate()
         cards.invalidate()
+        searches.invalidate()
+        searchPocketSets.invalidate()
         details.invalidate()
+        detailArtwork.invalidate()
     }
 }

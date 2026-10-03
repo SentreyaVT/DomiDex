@@ -7,6 +7,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -226,6 +228,9 @@ data class PokemonVisualCard(
     val sourceLocalId: String? = null,
 )
 
+/** A German-name page; continuation follows the raw source page, not filtered cards. */
+data class PokemonCardSearchPage(val cards: List<PokemonVisualCard>, val hasMore: Boolean)
+
 /** Every source set with the printed denominator remains eligible; none is cut off by list order. */
 internal fun setsMatchingPrintedTotal(sets: List<PokemonSet>, printedTotal: Int): List<PokemonSet> =
     sets.filter { it.printedTotal == printedTotal }
@@ -241,30 +246,13 @@ internal fun mergeLocalizedSetCards(
         .distinctBy(PokemonVisualCard::id)
         .map { card ->
             val english = englishById[card.id]
-            val officialFallback = officialPokemonCardImageUrl(card.set.id, card.sourceLocalId ?: card.number).orEmpty()
+            val artwork = resolvePokemonCardArtwork(card.set.id, card.id, card.sourceLocalId, card.artwork(), english?.artworkCandidate())
             card.copy(
                 marketSearchName = english?.name,
-                smallImageUrl = availableLocalizedImage(card.smallImageUrl, english?.smallImageUrl, officialFallback),
-                largeImageUrl = availableLocalizedImage(card.largeImageUrl, english?.largeImageUrl, officialFallback),
+                smallImageUrl = artwork.smallImageUrl,
+                largeImageUrl = artwork.largeImageUrl,
             )
         }
-}
-
-/** Exact broken source URLs, confirmed by the dated full-catalog audit (2026-09-22).
- * The fallback comes from the same source card ID, never another card or a guessed number.
- * Do not replace a subsequently corrected upstream URL.
- */
-private val unavailableGermanImageBases = setOf(
-    "https://assets.tcgdex.net/de/bw/bw2/9",
-    "https://assets.tcgdex.net/de/swsh/swsh12/047",
-    "https://assets.tcgdex.net/de/sm/sm1/94",
-    "https://assets.tcgdex.net/de/swsh/swsh10/162",
-    "https://assets.tcgdex.net/de/sv/sv02/269",
-)
-
-private fun availableLocalizedImage(primary: String, english: String?, official: String): String {
-    val unavailable = primary.substringBeforeLast('/') in unavailableGermanImageBases
-    return if (primary.isBlank() || unavailable) english.orEmpty().ifBlank { official.ifBlank { primary } } else primary
 }
 
 /** Never add English-only sets or replace the German display name/count/identity. */
@@ -423,6 +411,127 @@ class PokemonVisualCatalog private constructor(
         else result.filter { it.name.contains(query, true) || it.number.contains(query, true) }
     }
 
+    /**
+     * Searches German briefs, never market-product names. A card is associated only
+     * with an indexed set whose exact source ID and local ID agree. Detail/printing
+     * data remains demand-loaded by withDeclaredPrintVariants after selection.
+     */
+    suspend fun searchCards(query: String, page: Int = 1): PokemonCardSearchPage {
+        currentCoroutineContext().ensureActive()
+        val term = query.trim()
+        require(term.length <= 100) { "Card search is limited to 100 characters" }
+        require(page > 0) { "Card search page must be positive" }
+        if (term.length < 2) return PokemonCardSearchPage(emptyList(), false)
+        return metadataCache.searches.getOrLoad(term to page) {
+            withContext(Dispatchers.IO) {
+                val indexedSets = sets().sortedByDescending { it.id.length }
+                // /sets briefs commonly omit serie; use its small authoritative
+                // membership index rather than guessing Pocket from set spelling.
+                val pocketSetIds = searchPocketSetIds()
+                val briefs = read(
+                    "$germanBaseUrl/cards?name=${encodeCatalogPathSegment("like:$term")}" +
+                        "&pagination:page=$page&pagination:itemsPerPage=40",
+                ) { reader ->
+                    buildList {
+                        readArray(reader) {
+                            check(size < 40) { "Card search source exceeded its requested page size" }
+                            add(readCardBrief(it))
+                        }
+                    }
+                }
+                val cards = briefs.mapNotNull { brief ->
+                    // Resolve the longest prefix BEFORE checking localId: a malformed
+                    // 30th-c card must never fall back to the shorter 30th identity.
+                    val set = indexedSets.firstOrNull { brief.id.startsWith("${it.id}-") }
+                        ?: return@mapNotNull null
+                    if (set.isPokemonPocketSet() || set.id in pocketSetIds || brief.number.isBlank() ||
+                        brief.id != "${set.id}-${brief.number}"
+                    ) return@mapNotNull null
+                    mapCardBrief(brief, set, hasGermanLocalizedName = true)
+                }.distinctBy(PokemonVisualCard::id)
+                val supplemental = if (page == 1) indexedSets.filterNot { it.isPokemonPocketSet() || it.id in pocketSetIds }
+                    .flatMap(::supplementalThirtyYearsCards)
+                    .filter { it.name.contains(term, ignoreCase = true) } else emptyList()
+                val supplementalById = supplemental.associateBy(PokemonVisualCard::id)
+                val localized = (cards.map { card ->
+                    val maintained = supplementalById[card.id]
+                    card.copy(
+                        smallImageUrl = card.smallImageUrl.ifBlank { maintained?.smallImageUrl.orEmpty() },
+                        largeImageUrl = card.largeImageUrl.ifBlank { maintained?.largeImageUrl.orEmpty() },
+                    )
+                } + supplemental).distinctBy(PokemonVisualCard::id)
+                PokemonCardSearchPage(fillSearchImages(localized), hasMore = briefs.size == 40)
+            }
+        }
+    }
+
+    private suspend fun searchPocketSetIds(): Set<String> = metadataCache.searchPocketSets.getOrLoad("tcgp") {
+        read("$germanBaseUrl/series/tcgp") { reader ->
+            var seriesId: String? = null
+            var foundSets = false
+            val ids = mutableSetOf<String>()
+            reader.beginObject()
+            while (reader.hasNext()) when (reader.nextName()) {
+                "id" -> seriesId = reader.nextString()
+                "sets" -> {
+                    check(!foundSets) { "Duplicate Pocket set index" }
+                    foundSets = true
+                    readArray(reader) { setReader ->
+                        var id: String? = null
+                        setReader.beginObject()
+                        while (setReader.hasNext()) when (setReader.nextName()) {
+                            "id" -> id = setReader.nextString()
+                            else -> setReader.skipValue()
+                        }
+                        setReader.endObject()
+                        check(!id.isNullOrBlank() && ids.add(id!!)) { "Invalid Pocket set identity" }
+                    }
+                }
+                else -> reader.skipValue()
+            }
+            reader.endObject()
+            check(seriesId == "tcgp" && foundSets && ids.isNotEmpty()) { "Pocket set index unavailable" }
+            ids.toSet()
+        }
+    }
+
+    /** One bounded same-ID brief request, not a detail request per result. */
+    private suspend fun fillSearchImages(cards: List<PokemonVisualCard>): List<PokemonVisualCard> {
+        val resolved = cards.map { card ->
+            val artwork = resolvePokemonCardArtwork(card.set.id, card.id, card.sourceLocalId, card.artwork())
+            card.copy(smallImageUrl = artwork.smallImageUrl, largeImageUrl = artwork.largeImageUrl)
+        }
+        val missing = resolved.filter { needsPokemonCardArtwork(it.set.id, it.id, it.sourceLocalId, it.artwork()) }
+            .associateBy(PokemonVisualCard::id)
+        if (missing.isEmpty()) return resolved
+        val images = catalogOrDefault<Map<String, CardBrief>>(emptyMap()) {
+            val filter = encodeCatalogPathSegment("eq:${missing.keys.joinToString("|")}")
+            read("$englishBaseUrl/cards?id=$filter&pagination:page=1&pagination:itemsPerPage=40") { reader ->
+                buildMap {
+                    var count = 0
+                    readArray(reader) {
+                        check(++count <= 40) { "Image source exceeded its requested page size" }
+                        val brief = readCardBrief(it)
+                        val german = missing[brief.id]
+                        if (german != null && brief.number == german.sourceLocalId && brief.image.isNotBlank()) {
+                            put(brief.id, brief)
+                        }
+                    }
+                }
+            }
+        }
+        return resolved.map { card ->
+            val brief = images[card.id]
+            val candidate = brief?.let { PokemonCardArtworkCandidate(card.set.id, it.id, it.number,
+                PokemonCardArtwork(cardImageUrl(it.image, "low"), cardImageUrl(it.image, "high"))) }
+            val artwork = resolvePokemonCardArtwork(card.set.id, card.id, card.sourceLocalId, card.artwork(), candidate)
+            card.copy(
+                smallImageUrl = artwork.smallImageUrl,
+                largeImageUrl = artwork.largeImageUrl,
+            )
+        }
+    }
+
     private suspend fun setCards(set: PokemonSet): CatalogSetCards =
         metadataCache.cards.getOrLoad(set.id) {
             withContext(Dispatchers.IO) {
@@ -457,7 +566,7 @@ class PokemonVisualCatalog private constructor(
      * The set index deliberately stays small.  A card detail supplies the
      * source-declared Normal/Holo/Reverse printings for master-set slots.
      */
-    suspend fun withDeclaredPrintVariants(card: PokemonVisualCard): PokemonVisualCard {
+    suspend fun withDeclaredPrintVariants(card: PokemonVisualCard, loadMissingArtwork: Boolean = false): PokemonVisualCard {
         // Maintained supplemental identities have no upstream detail endpoint yet.
         // Do not make every binder card wait for a pair of known 404 responses.
         supplementalThirtyYearsCardDetail(card)?.let { return it }
@@ -465,15 +574,34 @@ class PokemonVisualCatalog private constructor(
             withContext(Dispatchers.IO) {
                 val encodedId = encodeCatalogPathSegment(card.id)
                 catalogOrDefault<CatalogCardDetail?>(null) {
-                    read("$germanBaseUrl/cards/$encodedId") { reader -> parseCardDetail(reader) }
+                    read("$germanBaseUrl/cards/$encodedId") { reader -> parseCardDetail(reader, card) }
                 } ?: read("$englishBaseUrl/cards/$encodedId") { reader ->
                     // English detail data may fill a missing source payload, but
                     // it must not replace an already localized German rarity.
-                    parseCardDetail(reader).let { fallback ->
-                        fallback.copy(rarity = card.rarity ?: fallback.rarity)
+                    parseCardDetail(reader, card).let { fallback ->
+                        fallback.copy(rarity = card.rarity ?: fallback.rarity, fromEnglishSource = true)
                     }
                 }
             }
+        }
+        var artwork = resolvePokemonCardArtwork(card.set.id, card.id, card.sourceLocalId, card.artwork(),
+            PokemonCardArtworkCandidate(card.set.id, card.id, card.sourceLocalId,
+                PokemonCardArtwork(cardImageUrl(detail.image.orEmpty(), "low"), cardImageUrl(detail.image.orEmpty(), "high"))))
+        if (loadMissingArtwork && !detail.fromEnglishSource && needsPokemonCardArtwork(card.set.id, card.id, card.sourceLocalId, artwork)) {
+            // Only a selected unresolved card needs this additional detail. Cache
+            // metadata separately so a prior caller's good image cannot suppress repair.
+            val englishArtwork = catalogOrDefault<PokemonCardArtworkCandidate?>(null) {
+                metadataCache.detailArtwork.getOrLoad(card.id) {
+                    withContext(Dispatchers.IO) {
+                        read("$englishBaseUrl/cards/${encodeCatalogPathSegment(card.id)}") { reader ->
+                            val english = parseCardDetail(reader, card)
+                            PokemonCardArtworkCandidate(card.set.id, card.id, card.sourceLocalId,
+                                PokemonCardArtwork(cardImageUrl(english.image.orEmpty(), "low"), cardImageUrl(english.image.orEmpty(), "high")))
+                        }
+                    }
+                }
+            }
+            artwork = resolvePokemonCardArtwork(card.set.id, card.id, card.sourceLocalId, artwork, englishArtwork)
         }
         return card.copy(
             rarity = detail.rarity ?: card.rarity,
@@ -482,8 +610,8 @@ class PokemonVisualCatalog private constructor(
                 detail.printVariants.ifEmpty { card.printVariants },
                 detail.blockedCardmarketVariantIds,
             ),
-            smallImageUrl = card.smallImageUrl.ifBlank { cardImageUrl(detail.image.orEmpty(), "low") },
-            largeImageUrl = card.largeImageUrl.ifBlank { cardImageUrl(detail.image.orEmpty(), "high") },
+            smallImageUrl = artwork.smallImageUrl,
+            largeImageUrl = artwork.largeImageUrl,
         )
     }
 
@@ -662,7 +790,13 @@ class PokemonVisualCatalog private constructor(
         reader: JsonReader,
         set: PokemonSet,
         hasGermanLocalizedName: Boolean,
-    ): PokemonVisualCard? {
+    ): PokemonVisualCard? = mapCardBrief(readCardBrief(reader), set, hasGermanLocalizedName)
+
+    private data class CardBrief(
+        val id: String, val name: String, val number: String, val rarity: String?, val image: String,
+    )
+
+    private fun readCardBrief(reader: JsonReader): CardBrief {
         var id = ""; var name = ""; var number = ""; var rarity: String? = null; var image = ""
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
             "id" -> id = reader.nextString(); "name" -> name = reader.nextString(); "localId" -> number = reader.nextString()
@@ -671,9 +805,14 @@ class PokemonVisualCatalog private constructor(
             else -> reader.skipValue()
         }
         reader.endObject()
+        return CardBrief(id, name, number, rarity, image)
+    }
+
+    private fun mapCardBrief(brief: CardBrief, set: PokemonSet, hasGermanLocalizedName: Boolean): PokemonVisualCard? {
+        val (id, name, number, rarity, image) = brief
         val lowImage = cardImageUrl(image, "low")
         val highImage = cardImageUrl(image, "high")
-        val fallbackImage = officialPokemonCardImageUrl(set.id, number).orEmpty()
+        val artwork = resolvePokemonCardArtwork(set.id, id, number, PokemonCardArtwork(lowImage, highImage))
         val printedCollector = if (set.id.equals("30th-c", ignoreCase = true)) {
             classic30thPrintedCollectorForLocalId(number) ?: number
         } else number
@@ -682,20 +821,34 @@ class PokemonVisualCatalog private constructor(
             listOf(PokemonPrintVariant("normal", "Normal", "Standard")),
         )
         return if (id.isBlank() || name.isBlank()) null else PokemonVisualCard(
-            id, name, printedCollector, rarity, lowImage.ifBlank { fallbackImage }, highImage.ifBlank { fallbackImage }, set,
+            id, name, printedCollector, rarity, artwork.smallImageUrl, artwork.largeImageUrl, set,
             defaultVariants,
             hasGermanLocalizedName = hasGermanLocalizedName,
             sourceLocalId = number,
         )
     }
 
-    private fun parseCardDetail(reader: JsonReader): CatalogCardDetail {
+    private fun parseCardDetail(reader: JsonReader, expected: PokemonVisualCard): CatalogCardDetail {
         val result = mutableListOf<PokemonPrintVariant>()
         val conflictingPrintings = mutableSetOf<Triple<String, String, String>>()
         val declaredProductsByPrinting = mutableMapOf<Triple<String, String, String>, MutableSet<Long>>()
         var rarity: String? = null
         var image: String? = null
         reader.beginObject(); while (reader.hasNext()) when (reader.nextName()) {
+            // The request path binds legacy/minimal payloads; any supplied source
+            // identity must agree before its artwork (or printing data) is accepted.
+            "id" -> check(reader.nextString() == expected.id) { "Detail card identity mismatch" }
+            "localId" -> check(reader.nextString() == (expected.sourceLocalId ?: expected.id.removePrefix("${expected.set.id}-"))) {
+                "Detail local identity mismatch"
+            }
+            "set" -> {
+                reader.beginObject()
+                while (reader.hasNext()) when (reader.nextName()) {
+                    "id" -> check(reader.nextString() == expected.set.id) { "Detail set identity mismatch" }
+                    else -> reader.skipValue()
+                }
+                reader.endObject()
+            }
             "image" -> image = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
             "rarity" -> rarity = if (reader.peek() == JsonReader.Token.NULL) { reader.nextNull<Unit>(); null } else reader.nextString()
             "variants_detailed" -> readArray(reader) { variantReader ->

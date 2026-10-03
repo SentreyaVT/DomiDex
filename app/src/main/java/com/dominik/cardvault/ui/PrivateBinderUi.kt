@@ -1091,8 +1091,8 @@ private fun PrivateBinderSlot(
                         .clip(RoundedCornerShape(6.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (!card.imageUrl.isNullOrBlank()) {
-                        AsyncImage(card.imageUrl, card.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    if (!card.displayImageUrl.isNullOrBlank()) {
+                        AsyncImage(card.displayImageUrl, card.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                     } else {
                         Text(card.name.take(1), color = VaultText, fontSize = 32.sp, fontWeight = FontWeight.Black)
                     }
@@ -1168,7 +1168,7 @@ private fun PrivateBinderCollectionPicker(
                             border = BorderStroke(1.dp, VaultOutline),
                         ) {
                             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                                if (!card.imageUrl.isNullOrBlank()) AsyncImage(card.imageUrl, card.name, Modifier.size(44.dp, 61.dp), contentScale = ContentScale.Fit)
+                                if (!card.displayImageUrl.isNullOrBlank()) AsyncImage(card.displayImageUrl, card.name, Modifier.size(44.dp, 61.dp), contentScale = ContentScale.Fit)
                                 else Box(Modifier.size(44.dp, 61.dp).background(MewPlumDeep, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) { Text(card.name.take(1), fontWeight = FontWeight.Black) }
                                 Column(Modifier.weight(1f)) {
                                     Text(card.name, color = VaultText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

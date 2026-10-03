@@ -9,19 +9,35 @@ import org.junit.Test
 class CatalogAuditRegressionTest {
     private val set = PokemonSet("bw2", "Aufstreben der Mächtigen", "SW", 98, 98, "", null, null)
 
-    @Test fun exactUnavailableGermanAssetsUseOnlySameCardEnglishSource() {
+    @Test fun auditedGermanPngRepairsPreserveValidThumbnailsAndGermanMetadata() {
         listOf(
             "bw2-9" to "bw/bw2/9", "swsh12-047" to "swsh/swsh12/047",
             "sm1-94" to "sm/sm1/94", "swsh10-162" to "swsh/swsh10/162",
             "sv02-269" to "sv/sv02/269",
+            "swsh4.5sv-SV110" to "swsh/swsh4.5/SV110",
         ).forEach { (id, asset) ->
-            val de = visual(id, "https://assets.tcgdex.net/de/$asset/high.webp")
-            val en = de.copy(name = "English", largeImageUrl = "https://assets.tcgdex.net/en/$asset/high.webp")
+            val base = "https://assets.tcgdex.net/de/$asset"
+            val de = visual(id, "$base/high.webp").copy(smallImageUrl = "$base/low.webp")
+            val en = de.copy(name = "English", smallImageUrl = "https://assets.tcgdex.net/en/$asset/low.webp",
+                largeImageUrl = "https://assets.tcgdex.net/en/$asset/high.webp")
             val merged = mergeLocalizedSetCards(listOf(de), listOf(en)).single()
             assertEquals(de.id, merged.id)
             assertEquals(de.name, merged.name)
-            assertEquals(en.largeImageUrl, merged.largeImageUrl)
-            assertEquals(de.largeImageUrl, mergeLocalizedSetCards(listOf(de), emptyList()).single().largeImageUrl)
+            assertEquals(de.number, merged.number)
+            assertEquals(de.sourceLocalId, merged.sourceLocalId)
+            assertEquals(de.printVariants, merged.printVariants)
+            val expectedLow = if (id == "swsh4.5sv-SV110") "$base/low.webp" else "$base/low.png"
+            assertEquals(id, expectedLow, merged.smallImageUrl)
+            assertEquals(id, "$base/high.png", merged.largeImageUrl)
+            val withoutEnglish = mergeLocalizedSetCards(listOf(de), emptyList()).single()
+            assertEquals(id, expectedLow, withoutEnglish.smallImageUrl)
+            assertEquals(id, "$base/high.png", withoutEnglish.largeImageUrl)
+            val blank = de.copy(smallImageUrl = "", largeImageUrl = "")
+            for (fallback in listOf(emptyList(), listOf(en))) {
+                val repaired = mergeLocalizedSetCards(listOf(blank), fallback).single()
+                assertEquals(id, "$base/low.png", repaired.smallImageUrl)
+                assertEquals(id, "$base/high.png", repaired.largeImageUrl)
+            }
         }
     }
 
@@ -58,6 +74,7 @@ class CatalogAuditRegressionTest {
     }
 
     private fun visual(id: String, image: String) = PokemonVisualCard(
-        id, "Deutscher Kartenname", id.substringAfterLast('-'), null, image, image, set,
+        id, "Deutscher Kartenname", id.substringAfterLast('-'), null, image, image,
+        set.copy(id = id.substringBeforeLast('-')), sourceLocalId = id.substringAfterLast('-'),
     )
 }

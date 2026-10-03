@@ -313,8 +313,8 @@ internal fun BinderInsertionOverlay(card: CollectionCard, modifier: Modifier = M
                 contentAlignment = Alignment.Center,
             ) {
                 Box(Modifier.fillMaxSize().background(Color(0xFF171821), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
-                    if (card.imageUrl != null) AsyncImage(
-                        card.imageUrl,
+                    if (card.displayImageUrl != null) AsyncImage(
+                        card.displayImageUrl,
                         card.name,
                         Modifier.fillMaxSize().graphicsLayer { translationY = travel; scaleX = scale; scaleY = scale },
                     ) else DomiDexBrandMark(size = 58.dp)
