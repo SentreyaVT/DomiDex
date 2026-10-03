@@ -2,6 +2,50 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-03.
 
+### Current-binary sixteen-case SDK and malformed knowledge proof (2026-10-03)
+
+The additive real-listener negative case passes without a product change. Admin
+creates one complete fresh synthetic aggregate whose only schema violation is
+knowledgeVersion string `"1"`. An independent control SDK confirms the exact
+SERVER payload; the actual adapter rejects it while its owner stays authenticated.
+Only that fingerprint's base/.bak/.new cache files disappear, before any subsequent
+cache get could delete them. Both owners' nonempty pending evidence and upload
+receipts, another cache, directory inventory and isolated consent remain byte-exact.
+The existing Room snapshot covers eight tables as strings, not all15 typed tables.
+The full independent Admin tree/accounts remain unchanged. No upload is triggered.
+
+Root current-standard build passes3m30s:104 tasks,10 executed/94 up-to-date,
+debug/test APKs, release Kotlin and both lints. JVM task was UP-TO-DATE; retained
+reports contain917 PASS/1 existing opt-in SKIP/0 failures/errors, not a new execution
+of those917 cases. Product APK is unchanged; test APK is newly compiled:
+
+- app: `5158a6556bfea004ff81f6599b18f70674ba74bec73718da65de6420a1fe7ab3`
+- test: `b5f919749f06a380a16cedaadb896faf8692f7558e662e1622bfd011cad74b22`
+
+Both are installed/independently hash-verified only on owned5556. Current371-case
+regression passes371/371,0 skips/failures,315.878s; sources/APKs unchanged. The
+complete real SDK suite passes16/16,162.627s total harness, malformed case1.550s,
+large FULL case18.941s. All16 complete Admin preflights/readbacks,17 nominal accounts,
+16 collections/1027 references/1017 existing documents, unchanged earlier owners,
+fixture teardown, exact AVD/offline identity, free local ports, empty reverses and
+inactive instrumentation pass. Inputs are frozen throughout; installed hashes and
+historical signed-v26 SHA256 are independently rechecked afterward.32 pure host
+validators and focused lint also pass. CLI deprecation/blocked metadata-lookup
+warnings remain; the Node guard is not OS/Java/native no-egress proof.
+
+Evidence: Android `artifacts/release27-engineering-20261002/pricing-duplicate-review/`
+`green-135502-bd1c88b6/`; `artifacts/android-regression/20261003T135933Z-35fd1743/`;
+installed receipt `artifacts/release27-engineering-20261003/g9-current-sdk-review/`.
+Web `outputs/collection-sync-session-local/`
+`2026-10-03T14-07-04-463Z-f38f2ef6eda446699f9b9ba8104ce096/`.
+An initial read-only installed-path check rejected package-name dots in its overly
+strict regex; it performed no install/runtime and was corrected before the receipts.
+
+Actual permission revocation/transport-failure listener paths remain separate
+unproved cases, as do Eventarc, production load/consent, physical lifecycle and
+multi-device delivery. Full-Sync stays active, Delta deferred. Gate15 remains locked.
+No release signing/AAB, production write, deployment, push, Play or phone action.
+
 ### Private Binder detail: integrated first-positive read, RED/GREEN and regression (2026-10-03)
 
 The previously measured private-detail bottleneck is now fixed in three product
@@ -1698,16 +1742,16 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 1 Firebase security | PASS (local rules) | see RELEASE_27_SECURITY.md; full Android outbox multi-device test remains Gate 4 |
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
-| 4 Collection/binder sync | IN PROGRESS, FULL retained | 15/15 actual local SDK cases retain durable offline retry, separate-client stale-base convergence and explicitly continued1001-binder FULL/Room-reopen/idempotence. Fresh actual WorkManager retry1/1 and automatic large-budget continuation1/1 pass in isolated packages; exact4WorkSpecs/two cycles/complete local-remote integrity.18/18 focused Room controls remain dated. UI/OS/process delivery, simultaneous physical devices and broader mixed scale remain open. Delta is deferred; see SYNC.md |
+| 4 Collection/binder sync | IN PROGRESS, FULL retained | Current16/16 actual local SDK cases retain durable offline retry, separate-client stale-base convergence and explicitly continued1001-binder FULL/Room-reopen/idempotence. Actual WorkManager retry1/1 and automatic large-budget continuation1/1 retain isolated-package scopes; exact4WorkSpecs/two cycles/complete local-remote integrity.18/18 focused Room controls remain dated. UI/OS/process delivery, simultaneous physical devices and broader mixed scale remain open. Delta is deferred; see SYNC.md |
 | 5 Pricing/catalog | IN PROGRESS | bounded Android import with4/4 real parser/Room persistence/rollback/conflicting-row cases, Web snapshot/identity fixes, seven verified mappings and incremental pricing tested. Conflicting duplicates were not found in the frozen provider download; this hardening does not close full coverage or centralized delivery |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card body cap/cancellation14/14, cache/package83/83. Missing-trend DTO resolves once instead of twice, full parity verified. O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator functional evidence) | Current standard debug pair passes four virtual display rotations and one actual CREATED->RESUMED CameraX cycle, fresh frames/JPEG, no rebind. Overall camera wrapper exit1 is retained for cached test-process idle failure; separately verified owned cleanup, not retroactive whole-run PASS. Physical camera, MainActivity transitions, permission revocation and OS/background matrix remain open |
 | 8 Recognition | IN PROGRESS (limited replay PASS) | Historical replays retain their scope. Latest owner-confirmed queue triple: Nidorina MEP101 read correctly3times, correct suggestions, two candidates each,4.2–4.7s active plus burst queue delay. Earlier sequential no-candidate observations have unknown ground truth and are not Nidorina failures. No automatic-printing, speedup vs26 or full hardware claim; quality checks unchanged |
-| 9 Community knowledge | IN PROGRESS (narrow SDK listener/Auth PASS) | Actual adapter replaces full cache record, removes confirmed absent hint and invalidates on actual sign-out, inside15/15 local SDK cases. Prior61 synthetic concurrency and35/35 actual private operations retain dated scopes. Malformed/revoked/transport listener paths, Eventarc delivery, actual retry/load contention and real-user consent remain unproved |
+| 9 Community knowledge | IN PROGRESS (narrow SDK listener/Auth/malformed PASS) | Current16/16 actual local SDK cases include full cache replacement, confirmed absence, real sign-out and malformed string-version rejection with exact file/consent preservation. Prior61 synthetic concurrency and35/35 private operations retain dated scopes. Revoked/transport listener paths, Eventarc delivery, actual retry/load contention and real-user consent remain unproved |
 | 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | Owner/session and deletion-consent fixes retain prior tests;35 local private-operation cases pass. Read-only metadata partly confirms provider configuration including seven-day Storage soft delete, not live-object TTL. Complete deletion/purge/operator workflow and retention decisions remain open |
 | 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Two actual Run revision resource configurations and partial retention metadata read-only verified; Hosting pinTag target, live metrics/alerts/billing and complete inventories remain unverified |
 | 12 Load/scale | PARTIAL; private-history bottleneck fixed | Current private-detail projection has genuine RED/GREEN, complete-model sustained invalidation and preservation proofs. Annual58-sample benchmark: private45.39ms, fullportfolio2950.91ms (365dates); unchanged1k/5k/20k87-sample test passes, private20k1092.80ms. New owned AVD/local warm flows only, no matched cross-environment ratio/SLA. No retention/schema/delta change. Residual full-history cost, O(N) sharing/fan-out and production load remain open |
-| 13 Full regression | IN PROGRESS | Current app5158a6…/test52fcb3… pass371/371 fixed matrix and29/29 focusedRoom,917JVM PASS/one existing optional live skip, both lints and releaseKotlin. Isolated R8/fiveDEX source-manifest42567f… passes. Dated15/15 SDK uses09cdad…/1c175…;1295Web and35private-operation scopes remain historical. Current camera2tests PASS but final wrapper idle cleanup FAIL is retained. Physical/live/final packaged-release contracts remain open |
+| 13 Full regression | IN PROGRESS | Current app5158a6…/testb5f919… pass371/371 fixed matrix and16/16 real local SDK. Prior29/29 focusedRoom and917JVM PASS/one optional live skip retain dated scope; latest JVM task UP-TO-DATE. Both lints/releaseKotlin pass. R8/fiveDEX manifest42567f… covers unchanged product source;1295Web/35private-operation scopes remain historical. Camera2tests PASS but final wrapper idle cleanup FAIL is retained. Physical/live/final packaged-release contracts remain open |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
 | 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
