@@ -18,6 +18,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.dominik.cardvault.data.RoomCollectionRepository
 import com.dominik.cardvault.data.local.CardVaultDatabase
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -576,6 +581,422 @@ class Release27RoomScaleInstrumentedTest {
         val chronological: List<com.dominik.cardvault.data.local.OwnedPriceHistoryProjection>,
         val stableSortMs: Double,
     )
+
+    @Test fun localRoomPostFixHistoryPhasesAndFirstPositiveCounterfactual() = runBlocking<Unit> {
+        val config = config()
+        assumeTrue("Post-fix history diagnostic not requested", InstrumentationRegistry.getArguments()
+            .getString("release27RoomHistoryPostFix") == "phase-first-positive")
+        require(config.sizes == listOf(1_000) && config.repeats == 3)
+        val report = report(config, "localRoomPostFixHistoryPhases")
+            .put("fixtureVersion", 2).put("historyDays", JSONArray(listOf(365)))
+            .put("fixture", "Unmodified annual365 seed: 1003 products; 950 active owner-A products; 346750 eligible observations")
+            .put("phaseScope", "Separate sequential timings are not additive wall-clock attribution: real product-major DAO; same stable Default sort; groupBy; actual production sweep; raw counterfactual bases")
+            .put("concurrencyScope", "Two genuine independent .first subscriptions start behind one barrier; not UI, sustained invalidation, hardware or latency SLA")
+            .put("candidateScope", "Test-only raw SQL, no product DAO/repository integration or invalidation proof")
+            .put("memoryScope", "Whole-process snapshots; full baseline retained only inside completed sequential helper; concurrent subscriptions retain compact expected portfolio only; no peak, no cold-disk, no forced GC or heap increase")
+            .put("readSampling", "Sample 0 is the first measured repetition after unmeasured baseline reads, NOT first DAO subscription or cold disk; 1..3 are subsequent warm repetitions")
+            .put("measurementOrder", "Seed, all four sequential five-phase repetitions, then four concurrent subscription repetitions; no full-history fixture lists retained across these scopes")
+            .put("cleanup", JSONArray()).put("concurrentReadings", JSONArray())
+            .put("transferCounts", JSONArray())
+        val name = freshName("postfix-history-365")
+        val files = checkedPostFixFiles(name)
+        val counter = SqlCounter()
+        val captured = java.util.concurrent.atomic.AtomicReference<HistoryProbeSql?>()
+        val captureError = java.util.concurrent.atomic.AtomicReference<String?>()
+        val db = Room.databaseBuilder(context, CardVaultDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+            .setQueryCallback(RoomDatabase.QueryCallback { statement, bindings ->
+                counter.record(statement)
+                val normalized = statement.replace(Regex("\\s+"), " ").trim()
+                if (normalized.startsWith("SELECT p.cardId, p.effectiveAtEpochMillis, p.trendValueMinor, p.holoTrendValueMinor FROM raw_price_snapshots p WHERE p.source = ?") &&
+                    bindings == listOf(SOURCE, OWNER)) {
+                    val next = HistoryProbeSql(normalized, listOf(SOURCE, OWNER))
+                    synchronized(captured) {
+                        val old = captured.get()
+                        if (old == null) captured.set(next)
+                        else if (old != next) captureError.compareAndSet(null, "Actual history SQL changed during proof")
+                    }
+                }
+            }, Executor { it.run() }).build()
+        try {
+            try {
+                val sql = db.openHelper.writableDatabase
+                annualMeasured(report, "seed", 365, -1, name, counter) { seedAnnualHistory(sql, 365) }
+                assertSeed(sql, 1_000)
+                assertEquals(366_095L, scalar(sql, "SELECT COUNT(*) FROM raw_price_snapshots"))
+                val before = hashes(sql)
+                assertEquals(15, before.size)
+                report.getJSONArray("integrity").put(JSONObject().put("historyDays", 365).put("before", hashJson(before)))
+                val dao = db.cardVaultDao()
+                val repository = RoomCollectionRepository(db, MutableStateFlow(OWNER))
+                // Full-history lists stay in this completed helper, never in the
+                // parent coroutine that later collects both independent live flows.
+                suspend fun measuredPhases(): com.dominik.cardvault.model.PortfolioSummary {
+                    val rows = dao.observeCollection(OWNER).first()
+                    val baseline = dao.observeOwnedRawPriceHistory(OWNER, SOURCE).first()
+                    assertHistoryProbeRows(baseline)
+                    val capturedQuery = checkNotNull(captured.get()) { "No real production history query captured" }
+                    check(captureError.get() == null) { captureError.get().orEmpty() }
+                    val candidate = postFixFirstPositiveQuery(capturedQuery, OWNER)
+                    report.put("capturedHistorySql", capturedQuery.sql)
+                        .put("capturedHistoryBindings", JSONArray(capturedQuery.bindings))
+                        .put("candidateSql", candidate.sql).put("candidateBindings", JSONArray(candidate.bindings))
+                        .put("historyPlan", postFixExplain(sql, capturedQuery))
+                        .put("candidatePlan", postFixExplain(sql, candidate))
+                    val expectedBases = postFixBasesOracle(rows.map { it.priceCardId }, baseline)
+                    assertEquals(950, expectedBases.size)
+                    for ((id, bases) in expectedBases) {
+                        val index = id.removePrefix("fixture-card-").toInt()
+                        assertEquals(PostFixBases(100L + index % 9_000, 150L + index % 9_000), bases)
+                    }
+                    val baselinePortfolio = repository.portfolio.first()
+                    postFixAssertAnnualPortfolio(baselinePortfolio)
+                    for (sample in 0..config.repeats) {
+                        val byProduct = annualMeasured(report, "postFix.realDao.productOrder", 365, sample, name, counter) {
+                            dao.observeOwnedRawPriceHistoryByProduct(OWNER, SOURCE).first()
+                        }
+                        assertEquals(346_750, byProduct.size)
+                        assertTrue(byProduct.zipWithNext().all { (a, b) ->
+                            a.cardId < b.cardId || (a.cardId == b.cardId && a.effectiveAtEpochMillis < b.effectiveAtEpochMillis)
+                        })
+                        val chronological = annualMeasured(report, "postFix.sameStableSort.Default", 365, sample, name, counter) {
+                            withContext(Dispatchers.Default) { byProduct.sortedBy { it.effectiveAtEpochMillis } }
+                        }
+                        assertEquals(baseline, chronological)
+                        assertHistoryProbeRows(chronological)
+                        val grouped = annualMeasured(report, "postFix.groupBy.Default", 365, sample, name, counter) {
+                            withContext(Dispatchers.Default) { chronological.groupBy { it.cardId } }
+                        }
+                        assertEquals(expectedBases.keys, grouped.keys)
+                        assertEquals(346_750, grouped.values.sumOf { it.size })
+                        grouped.values.forEach { assertEquals(365, it.size) }
+                        val history = annualMeasured(report, "postFix.productionSweep.Default", 365, sample, name, counter) {
+                            withContext(Dispatchers.Default) {
+                                com.dominik.cardvault.data.buildChronologicalPortfolioHistory(rows, chronological)
+                            }
+                        }
+                        assertEquals(baselinePortfolio.history, history)
+                        val candidateBases = annualMeasured(report, "postFix.counterfactual.firstPositiveCursor", 365, sample, name, counter) {
+                            readPostFixBases(sql, candidate)
+                        }
+                        assertEquals(expectedBases, candidateBases)
+                        // This is exact full-record reconstruction while retaining unchanged fields,
+                        // not a test of a hypothetical new production repository or Room mapper.
+                        postFixAssertReconstructedCards(rows, baselinePortfolio.cards, candidateBases)
+                        report.getJSONArray("transferCounts").put(JSONObject().put("sample", sample)
+                            .put("productionHistoryRows", byProduct.size).put("candidateBaseRows", candidateBases.size))
+                    }
+                    return baselinePortfolio
+                }
+                val baselinePortfolio = measuredPhases()
+                // No full baseline, byProduct, chronological or grouped object is
+                // returned or captured here. Garbage collection remains unforced.
+                for (sample in 0..config.repeats) {
+
+                    val pair = annualMeasured(report, "postFix.concurrentPortfolioAndPrivate.first", 365, sample, name, counter) {
+                        coroutineScope {
+                            val release = CompletableDeferred<Unit>()
+                            val portfolioReady = CompletableDeferred<Unit>()
+                            val privateReady = CompletableDeferred<Unit>()
+                            val portfolio = async(Dispatchers.Default) {
+                                portfolioReady.complete(Unit); release.await()
+                                val start = System.nanoTime()
+                                val value = repository.portfolio.first()
+                                PostFixTimed(value, (System.nanoTime() - start) / 1_000_000.0)
+                            }
+                            val privateCards = async(Dispatchers.Default) {
+                                privateReady.complete(Unit); release.await()
+                                val start = System.nanoTime()
+                                val value = repository.privateBinderContents(BINDER).first()
+                                PostFixTimed(value, (System.nanoTime() - start) / 1_000_000.0)
+                            }
+                            portfolioReady.await(); privateReady.await(); release.complete(Unit)
+                            portfolio.await() to privateCards.await()
+                        }
+                    }
+                    assertEquals(baselinePortfolio, pair.first.value)
+                    assertEquals(950, pair.second.value.size)
+                    assertEquals(baselinePortfolio.cards.associateBy { it.entryId },
+                        pair.second.value.associate { it.card.entryId to it.card })
+                    pair.second.value.forEach { placed ->
+                        val index = (placed.card.entryId - 1).toInt()
+                        assertEquals("placement-$index", placed.placementId)
+                        assertEquals(BINDER, placed.binderId)
+                        assertEquals(index.toLong(), placed.position)
+                        assertEquals(if (index % 2 == 0) "rainbow" else null, placed.holoEffectId)
+                        assertEquals(if (index % 2 == 0) .35f else 0f, placed.holoIntensity, 0f)
+                    }
+                    report.getJSONArray("concurrentReadings").put(JSONObject().put("sample", sample)
+                        .put("portfolioMs", pair.first.elapsedMs).put("privateContentsMs", pair.second.elapsedMs))
+                }
+                check(captureError.get() == null) { captureError.get().orEmpty() }
+                assertEquals(before, hashes(sql))
+                assertNoForeignKeyErrors(sql)
+                assertEquals(25, report.getJSONArray("samples").length())
+                assertEquals(4, report.getJSONArray("concurrentReadings").length())
+                assertEquals(4, report.getJSONArray("transferCounts").length())
+                report.getJSONArray("integrity").put(JSONObject().put("afterReadHashMatch", true))
+            } finally {
+                db.close(); check(!db.isOpen)
+                if (files.any(File::exists)) check(context.deleteDatabase(name))
+                check(files.none(File::exists))
+                report.getJSONArray("cleanup").put(JSONObject().put("databaseName", name)
+                    .put("closed", true).put("filesAbsent", true))
+            }
+            report.put("status", "PASS")
+        } catch (failure: Throwable) {
+            report.put("status", "FAIL").put("failureType", failure.javaClass.simpleName)
+            throw failure
+        } finally { save(report, config) }
+    }
+
+    @Test fun localRoomFirstPositiveCounterfactualEdgeParity() = runBlocking<Unit> {
+        val config = config()
+        assumeTrue("First-positive edge proof not requested", InstrumentationRegistry.getArguments()
+            .getString("release27RoomHistoryPostFix") == "phase-first-positive")
+        require(config.sizes == listOf(1_000) && config.repeats == 3)
+        val report = report(config, "localRoomFirstPositiveEdgeParity")
+            .put("fixtureVersion", 2).put("historyDays", JSONArray(listOf(2)))
+            .put("scope", "Fresh annual2 synthetic fixture, explicit local mutations, read parity after each; no product changes and no production/user database")
+            .put("cleanup", JSONArray()).put("states", JSONArray())
+        val name = freshName("first-positive-edges")
+        val files = checkedPostFixFiles(name)
+        val captured = java.util.concurrent.atomic.AtomicReference<HistoryProbeSql?>()
+        val db = Room.databaseBuilder(context, CardVaultDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+            .setQueryCallback(RoomDatabase.QueryCallback { statement, bindings ->
+                val normalized = statement.replace(Regex("\\s+"), " ").trim()
+                if (normalized.startsWith("SELECT p.cardId, p.effectiveAtEpochMillis, p.trendValueMinor, p.holoTrendValueMinor FROM raw_price_snapshots p WHERE p.source = ?") &&
+                    bindings == listOf(SOURCE, OWNER)) {
+                    captured.compareAndSet(null, HistoryProbeSql(normalized, listOf(SOURCE, OWNER)))
+                }
+            }, Executor { it.run() }).build()
+        try {
+            try {
+                val sql = db.openHelper.writableDatabase
+                seedAnnualHistory(sql, 2); assertSeed(sql, 1_000)
+                val dao = db.cardVaultDao()
+                dao.observeOwnedRawPriceHistory(OWNER, SOURCE).first()
+                val originalQuery = checkNotNull(captured.get())
+                suspend fun state(label: String, expectedOne: PostFixBases?, onePresent: Boolean = true) {
+                    val before = hashes(sql); assertEquals(15, before.size)
+                    val perOwner = JSONArray()
+                    for (owner in listOf(OWNER, OTHER_OWNER, "fixture-owner-with-no-data")) {
+                        val rows = dao.observeCollection(owner).first()
+                        val history = dao.observeOwnedRawPriceHistory(owner, SOURCE).first()
+                        val candidate = readPostFixBases(sql, postFixFirstPositiveQuery(originalQuery, owner))
+                        assertEquals(postFixBasesOracle(rows.map { it.priceCardId }, history), candidate)
+                        val repository = RoomCollectionRepository(db, MutableStateFlow(owner))
+                        val portfolio = repository.portfolio.first()
+                        postFixAssertReconstructedCards(rows, portfolio.cards, candidate)
+                        val privateCards = repository.privateBinderContents(BINDER).first()
+                        // This fixture retains one placement for every active entry of either owner.
+                        // An intentionally owner-reassigned entry can have no matching old-owner placement.
+                        val placements = dao.observePrivateBinderPlacements(BINDER, owner).first()
+                        val byId = portfolio.cards.associateBy { it.entryId }
+                        val expected = placements.mapNotNull { p -> byId[p.collectionEntryId]?.let { c ->
+                            com.dominik.cardvault.model.PrivateBinderCard(p.id, p.binderId, p.slotPosition, c, p.holoEffectId, p.holoIntensity)
+                        } }
+                        assertEquals(expected, privateCards)
+                        if (owner == OWNER) {
+                            assertEquals(onePresent, candidate.containsKey("fixture-card-1"))
+                            if (onePresent) assertEquals(expectedOne, candidate["fixture-card-1"])
+                            if (label == "owned-product-without-history") {
+                                assertTrue(candidate.containsKey("fixture-card-5"))
+                                assertEquals(PostFixBases(null, null), candidate["fixture-card-5"])
+                            }
+                            if (label == "explicit-quarantined-identity") {
+                                assertFalse(candidate.containsKey("fixture-card-6"))
+                                assertEquals("", rows.single { it.entryId == 7L }.priceCardId)
+                            }
+                        }
+                        perOwner.put(JSONObject().put("owner", owner).put("historyRows", history.size)
+                            .put("bases", candidate.size).put("fullCardsEqual", true).put("privatePlacementsEqual", true))
+                    }
+                    assertEquals(before, hashes(sql)); assertNoForeignKeyErrors(sql)
+                    report.getJSONArray("states").put(JSONObject().put("label", label)
+                        .put("before", hashJson(before)).put("afterReadHashMatch", true).put("owners", perOwner))
+                }
+                suspend fun correct(at: Long, normal: Long?, reverse: Long?) {
+                    // Genuine unique-index REPLACE, not merely UPDATE: row ID can change.
+                    dao.insertRawPricesReplacing(listOf(com.dominik.cardvault.data.local.RawPriceSnapshotEntity(
+                        cardId = "fixture-card-1", source = SOURCE, currency = "EUR", lowValueMinor = null,
+                        averageValueMinor = null, trendValueMinor = normal, marketValueMinor = normal,
+                        holoTrendValueMinor = reverse, fetchedAtEpochMillis = at, effectiveAtEpochMillis = at,
+                    )))
+                }
+                suspend fun insert(at: Long, normal: Long?, reverse: Long?, source: String = SOURCE) {
+                    dao.insertRawPrices(listOf(com.dominik.cardvault.data.local.RawPriceSnapshotEntity(
+                        cardId = "fixture-card-1", source = source, currency = "EUR", lowValueMinor = null,
+                        averageValueMinor = null, trendValueMinor = normal, marketValueMinor = normal,
+                        holoTrendValueMinor = reverse, fetchedAtEpochMillis = at, effectiveAtEpochMillis = at,
+                    )))
+                }
+                val first = AT + ANNUAL_DAY_MILLIS
+                val second = AT + 2 * ANNUAL_DAY_MILLIS
+                val third = AT + 3 * ANNUAL_DAY_MILLIS
+                val earlier = AT + ANNUAL_DAY_MILLIS / 2
+                state("baseline", PostFixBases(101L, 151L))
+                correct(first, null, null); correct(second, 0L, -7L)
+                state("all-null-zero-negative", PostFixBases(null, null))
+                insert(third, -11L, 77L)
+                state("reverse-first-positive-on-later-date", PostFixBases(null, 77L))
+                insert(earlier, 23L, null)
+                state("out-of-order-earlier-normal", PostFixBases(23L, 77L))
+                correct(earlier, 0L, 31L)
+                state("same-date-correction-removes-normal-base", PostFixBases(null, 31L))
+                correct(third, 47L, 0L)
+                state("independent-normal-reverse-dates", PostFixBases(47L, 31L))
+                insert(AT + 1L, 999_999L, 888_888L, "IGNORED_HISTORY_SOURCE")
+                state("wrong-source-cannot-supply-base", PostFixBases(47L, 31L))
+                // Entry 3 still has its different visual card; link now points at product 1.
+                sql.execSQL("UPDATE collection_entries SET externalProductId=?,finishOverride=? WHERE id=?",
+                    arrayOf<Any>(90_000_001L, "Reverse Holo", 3L))
+                state("duplicate-linked-product-distinct-finish", PostFixBases(47L, 31L))
+                // Removing the original product-1 owner does not remove the linked sibling's base.
+                sql.execSQL("UPDATE collection_entries SET deletedAtEpochMillis=? WHERE id=?", arrayOf<Any>(AT + 99L, 2L))
+                state("tombstone-original-with-linked-sibling", PostFixBases(47L, 31L))
+                sql.execSQL("UPDATE collection_entries SET deletedAtEpochMillis=? WHERE id=?", arrayOf<Any>(AT + 100L, 3L))
+                state("tombstone-last-owner-reference", null, onePresent = false)
+                sql.execSQL("UPDATE collection_entries SET ownerUid=? WHERE id=?", arrayOf<Any>(OTHER_OWNER, 4L))
+                state("entry-only-owner-reassignment", null, onePresent = false)
+                // Delete only rows in this fresh test-owned UUID fixture, never product data.
+                sql.execSQL("DELETE FROM raw_price_snapshots WHERE cardId=?", arrayOf<Any>("fixture-card-5"))
+                state("owned-product-without-history", null, onePresent = false)
+                sql.execSQL("UPDATE collection_entries SET externalProductId=?,sourceCardId=? WHERE id=?",
+                    arrayOf<Any>(670816L, "swsh11-201", 7L))
+                state("explicit-quarantined-identity", null, onePresent = false)
+                // Every price of the now unowned product remains retained; no pruning.
+                assertEquals(5L, scalar(sql, "SELECT COUNT(*) FROM raw_price_snapshots WHERE cardId='fixture-card-1'"))
+                assertEquals(13, report.getJSONArray("states").length())
+            } finally {
+                db.close(); check(!db.isOpen)
+                if (files.any(File::exists)) check(context.deleteDatabase(name))
+                check(files.none(File::exists))
+                report.getJSONArray("cleanup").put(JSONObject().put("databaseName", name)
+                    .put("closed", true).put("filesAbsent", true))
+            }
+            report.put("status", "PASS")
+        } catch (failure: Throwable) {
+            report.put("status", "FAIL").put("failureType", failure.javaClass.simpleName)
+            throw failure
+        } finally { save(report, config) }
+    }
+
+    private data class PostFixBases(val normal: Long?, val reverse: Long?)
+    private data class PostFixTimed<T>(val value: T, val elapsedMs: Double)
+
+    private fun checkedPostFixFiles(name: String): List<File> {
+        val file = context.getDatabasePath(name).canonicalFile
+        check(file.name == name && file.parentFile == context.getDatabasePath("postfix-proof-parent").canonicalFile.parentFile)
+        return listOf(file, File(file.path + "-wal"), File(file.path + "-shm"), File(file.path + "-journal"))
+            .also { check(it.none(File::exists)) { "Only an entirely fresh UUID fixture is permitted" } }
+    }
+
+    /** Preserve the ACTUAL generated ownership/source/quarantine subquery, fail on shape drift. */
+    private fun postFixFirstPositiveQuery(actual: HistoryProbeSql, owner: String): HistoryProbeSql {
+        val normalized = actual.sql.replace(Regex("\\s+"), " ").trim()
+        val prefix = "SELECT p.cardId, p.effectiveAtEpochMillis, p.trendValueMinor, p.holoTrendValueMinor FROM raw_price_snapshots p WHERE p.source = ? AND p.cardId IN ("
+        val suffix = ") ORDER BY p.cardId, p.effectiveAtEpochMillis"
+        check(actual.bindings == listOf(SOURCE, OWNER))
+        check(normalized.startsWith(prefix) && normalized.endsWith(suffix))
+        check(normalized.count { it == '?' } == 2)
+        val membership = normalized.removePrefix(prefix).removeSuffix(suffix).trim()
+        check(membership.startsWith("SELECT COALESCE(linked.id, c.id) FROM collection_entries e "))
+        check(membership.count { it == '?' } == 1)
+        val candidate = """
+            WITH candidates(cardId) AS ($membership),
+            owned(cardId) AS (SELECT DISTINCT cardId FROM candidates)
+            SELECT o.cardId,
+              (SELECT p.trendValueMinor FROM raw_price_snapshots p
+               WHERE p.cardId=o.cardId AND p.source=? AND p.trendValueMinor>0
+               ORDER BY p.effectiveAtEpochMillis ASC LIMIT 1) AS firstNormal,
+              (SELECT p.holoTrendValueMinor FROM raw_price_snapshots p
+               WHERE p.cardId=o.cardId AND p.source=? AND p.holoTrendValueMinor>0
+               ORDER BY p.effectiveAtEpochMillis ASC LIMIT 1) AS firstReverse
+            FROM owned o ORDER BY o.cardId
+        """.trimIndent()
+        return HistoryProbeSql(candidate, listOf(owner, SOURCE, SOURCE))
+    }
+
+    private fun readPostFixBases(sql: SupportSQLiteDatabase, query: HistoryProbeSql): Map<String, PostFixBases> {
+        val result = linkedMapOf<String, PostFixBases>()
+        sql.query(androidx.sqlite.db.SimpleSQLiteQuery(query.sql, query.bindings.toTypedArray())).use { cursor ->
+            assertEquals(listOf("cardId", "firstNormal", "firstReverse"), cursor.columnNames.toList())
+            while (cursor.moveToNext()) {
+                assertFalse(cursor.isNull(0))
+                val id = cursor.getString(0)
+                val value = PostFixBases(if (cursor.isNull(1)) null else cursor.getLong(1),
+                    if (cursor.isNull(2)) null else cursor.getLong(2))
+                assertTrue(value.normal == null || value.normal > 0L)
+                assertTrue(value.reverse == null || value.reverse > 0L)
+                check(result.put(id, value) == null) { "Duplicate candidate product" }
+            }
+        }
+        return result
+    }
+
+    private fun postFixBasesOracle(ids: List<String>, prices: List<com.dominik.cardvault.data.local.OwnedPriceHistoryProjection>): Map<String, PostFixBases> {
+        assertTrue(prices.zipWithNext().all { (a, b) -> a.effectiveAtEpochMillis <= b.effectiveAtEpochMillis })
+        val grouped = prices.groupBy { it.cardId }
+        return ids.filter { it.isNotEmpty() }.distinct().associateWith { id ->
+            val history = grouped[id].orEmpty()
+            PostFixBases(history.firstOrNull { (it.trendValueMinor ?: 0L) > 0L }?.trendValueMinor,
+                history.firstOrNull { (it.holoTrendValueMinor ?: 0L) > 0L }?.holoTrendValueMinor)
+        }
+    }
+
+    private fun postFixAssertReconstructedCards(
+        rows: List<com.dominik.cardvault.data.local.CollectionProjection>,
+        cards: List<com.dominik.cardvault.model.CollectionCard>, bases: Map<String, PostFixBases>,
+    ) {
+        val byId = rows.associateBy { it.entryId }
+        assertEquals(rows.size, cards.size)
+        assertEquals(byId.keys, cards.map { it.entryId }.toSet())
+        val candidate = cards.map { card ->
+            val row = byId.getValue(card.entryId)
+            val base = bases[row.priceCardId]
+            val first = if (row.finish.contains("reverse", true)) base?.reverse else base?.normal
+            val latest = row.marketValueMinor?.takeIf { it > 0L }
+            val change = if (first != null && latest != null) (latest - first) * 100.0 / first else 0.0
+            card.copy(changePercent = change)
+        }
+        assertEquals("Full records retain all non-derived fields and exact first-positive change", cards, candidate)
+    }
+
+    private fun postFixAssertAnnualPortfolio(portfolio: com.dominik.cardvault.model.PortfolioSummary) {
+        val live = (0 until 1_000).filterNot(::deleted)
+        assertEquals(live.map { it + 1L }.toSet(), portfolio.cards.map { it.entryId }.toSet())
+        assertEquals(365, portfolio.history.size)
+        portfolio.history.forEachIndexed { point, value ->
+            assertEquals(live.sumOf { annualValueMinor(it, point) * quantity(it) } / 100.0, value.value, .00001)
+            val label = java.time.Instant.ofEpochMilli(AT + (point + 1) * ANNUAL_DAY_MILLIS)
+                .atZone(java.time.ZoneOffset.UTC).toLocalDate().format(java.time.format.DateTimeFormatter.ofPattern("MMM"))
+            assertEquals(label, value.label)
+        }
+        portfolio.cards.forEach { card ->
+            val index = (card.entryId - 1).toInt()
+            val first = annualValueMinor(index, 0)
+            val last = annualValueMinor(index, 364)
+            assertEquals(last / 100.0, card.currentValueEur, .00001)
+            assertEquals((last - first) * 100.0 / first, card.changePercent, .00001)
+            assertEquals(AT + 365 * ANNUAL_DAY_MILLIS, card.priceUpdatedAtEpochMillis)
+        }
+    }
+
+    private fun postFixExplain(sql: SupportSQLiteDatabase, query: HistoryProbeSql): JSONArray {
+        val result = JSONArray()
+        sql.query(androidx.sqlite.db.SimpleSQLiteQuery("EXPLAIN QUERY PLAN " + query.sql, query.bindings.toTypedArray())).use { cursor ->
+            assertEquals(4, cursor.columnCount)
+            while (cursor.moveToNext()) {
+                check(result.length() < 64)
+                result.put(JSONObject().put("id", cursor.getLong(0)).put("parent", cursor.getLong(1))
+                    .put("aux", cursor.getLong(2)).put("detail", cursor.getString(3)))
+            }
+        }
+        check(result.length() > 0)
+        return result
+    }
 
     @Test fun localRoomAnnualHistoryAtBoundedSyntheticScale() = runBlocking<Unit> {
         val config = config() // Existing emulator-only guard, safe label and opt-in.

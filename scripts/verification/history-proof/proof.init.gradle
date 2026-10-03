@@ -1,0 +1,47 @@
+// Opt-in synthetic history packaging; never included in ordinary Android Studio builds.
+import org.gradle.api.GradleException
+def runId = gradle.startParameter.projectProperties['historyProofRun']
+if (!(runId ==~ /[a-f0-9]{32}/)) throw new GradleException('Exact fresh history proof ID required')
+def repo = new File('C:/Users/Dominik/AndroidStudioProjects/CardVault').canonicalFile
+def proof = new File(repo, 'scripts/verification/history-proof').canonicalFile
+def output = new File(repo, 'artifacts/release27-engineering-20261003/history-proof/' + runId).canonicalFile
+if (!new File(output, 'before.json').isFile()) throw new GradleException('Preservation snapshot required')
+if (new File(repo, 'keystore.properties').exists()) throw new GradleException('Release signing must be absent')
+if (System.getenv().keySet().any { it.startsWith('DOMIDEX_UPLOAD_') }) throw new GradleException('No upload credentials')
+if (gradle.startParameter.taskNames != [':app:assembleDebug', ':app:assembleDebugAndroidTest']) {
+    throw new GradleException('Only the isolated diagnostic debug APK pair may be built')
+}
+gradle.beforeProject { project ->
+    project.layout.buildDirectory.set(new File(output, project.path == ':app' ? 'app-build' : 'root-build'))
+    if (project.path == ':app') {
+        project.plugins.withId('com.android.application') {
+            project.extensions.getByName('androidComponents').finalizeDsl { android ->
+                android.defaultConfig.applicationId = 'com.dominik.cardvault.historyproof.r' + runId
+                android.defaultConfig.testInstrumentationRunner = 'com.dominik.cardvault.HistoryProofRunner'
+                android.defaultConfig.buildConfigField('boolean', 'DOMIDEX_APP_CHECK_ENABLED', 'false')
+                android.sourceSets.getByName('debug').manifest.srcFile(new File(proof, 'AndroidManifest.xml'))
+                android.sourceSets.getByName('debug').res.srcDir(new File(proof, 'res'))
+                android.sourceSets.getByName('androidTest').java.setSrcDirs([new File(proof, 'androidTest'), new File(output, 'injected-source')])
+                android.sourceSets.getByName('androidTest').kotlin.setSrcDirs([new File(proof, 'androidTest'), new File(output, 'injected-source')])
+                android.sourceSets.getByName('androidTest').assets.setSrcDirs([])
+            }
+        }
+        project.tasks.configureEach { task -> if (task.name == 'processDebugGoogleServices') task.enabled = false }
+    }
+}
+gradle.projectsEvaluated {
+    if (gradle.rootProject.projectDir.canonicalFile != repo) throw new GradleException('Wrong repository')
+    def android = gradle.rootProject.project(':app').extensions.getByName('android')
+    if (android.defaultConfig.applicationId != 'com.dominik.cardvault.historyproof.r' + runId) throw new GradleException('Not isolated')
+    if (android.buildTypes.getByName('debug').signingConfig?.name != 'debug') throw new GradleException('Normal debug key required')
+    if (android.signingConfigs.findByName('release') != null) throw new GradleException('No release key permitted')
+    if (!android.buildTypes.getByName('release').minifyEnabled) throw new GradleException('R8 must stay enabled')
+}
+gradle.taskGraph.whenReady { graph ->
+    def forbidden = graph.allTasks.findAll { task ->
+        task.project.path != ':app' || task.name.toLowerCase().matches('.*(release|install|publish|upload|connected|clean).*') ||
+            (task.name.toLowerCase().contains('bundle') && !(task.name in ['bundleDebugClassesToCompileJar', 'bundleDebugClassesToRuntimeJar']))
+    }
+    if (!forbidden.empty) throw new GradleException('Forbidden task: ' + forbidden*.path)
+    println('DOMIDEX_HISTORY_PROOF debugOnly=true isolatedPackage=true releaseSigning=false network=false')
+}

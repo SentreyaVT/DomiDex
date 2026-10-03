@@ -2,6 +2,62 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-03.
 
+### Current-history phase and first-positive counterfactual proof (2026-10-03)
+
+New isolated, offline Room diagnostic run `934ff50d449d416993598a6e51c9200c`
+passes **2/2, no failures/skips**: annual-history phases173.081s; thirteen edge
+states18.429s. Debug-only build passes2m24s/72executed tasks. Four pure host
+validator groups pass; independent source/fixture/harness review found no blocker.
+No product source changed. Default app/SDK initializers and network permission
+are excluded only from the disposable diagnostic package, not the ordinary app.
+
+Unchanged annual365 fixture contains1003 products,950 active owner-A products,
+366095 retained raw observations,346750 eligible observations. All25 samples,
+all365 independent chart values/labels, full card/placement models,950 independent
+normal/reverse bases and all15 typed persisted-table hashes pass. The separate
+edge fixture proves13 states across ownerA, ownerB and empty owner: null/zero/
+negative values, independent finish dates, earlier inserts, genuine same-date
+REPLACE corrections, wrong source, linked siblings, tombstones, owner reassignment,
+missing history and explicit quarantined identity. Every read phase preserves its
+complete before-state; deliberate edge-fixture mutations are not product writes.
+
+Three-warm medians on this exact isolated build/environment:
+
+| Measured operation | Median ms |
+|---|---:|
+| Actual product-major Room history read | 2986.99 |
+| Same stable chronological sort on Default | 223.74 |
+| Default grouping | 191.75 |
+| Existing chronological portfolio sweep | 98.71 |
+| Test-only first-positive cursor | 9.19 |
+| Concurrent actual portfolio + private-detail first subscriptions | 6351.76 |
+
+These separately timed sequential phases are **not additive attribution**. The
+candidate transports950 base records instead of346750 history records, but the
+report does not claim that SQLite visited only950 rows. Both actual plans use the
+existing product/source/date index. Normal and Reverse have independent earliest
+positive lookups; the actual owner/link/quarantine predicate is preserved exactly.
+This justifies investigating the narrow private-detail projection, not claiming
+that the integrated Binder screen is already faster. The full portfolio remains
+an open large-history cost. No rows, schema, retention or FULL-sync strategy change.
+
+Sample0 follows unmeasured baseline reads and is not a cold/first DAO read.
+The full-history comparison lists are scoped to a completed sequential helper;
+concurrent reads retain only compact expected cards/chart. No forced GC/heap
+increase. Current emulator has host GPU/4GiB RAM/192MiB growth limit; this is not a
+physical-device or historical cross-environment A/B result. Four one-shot pairs
+do not prove sustained invalidation, UI responsiveness or a latency SLA.
+
+Evidence: `artifacts/release27-engineering-20261003/history-proof/`
+`934ff50d449d416993598a6e51c9200c/{runtime,emulator-context.json}`.
+Exact debug APK755ea554b70cd417a4c73e385cc408ae1ab3900d593cb43f0426b11cbb7b8dbd;
+test APK9a50a29e2012d21a5d5f9b6f95613d688d2cf28f3b55cea7bf91ff35139383ec.
+Inputs, ordinary output tree and complete v26 archive are unchanged; both owned
+packages/databases are removed. Ordinary installed APK7f003…b105 is unchanged.
+Reproduction/limits: `scripts/verification/history-proof/README.md`.
+**G12 remains partial, Gate15 locked; no release-key signing, AAB, phone action,
+production write, deployment, push or Play action.**
+
 ### Automatic large FULL continuation through actual WorkManager (2026-10-03)
 
 The unchanged production worker now proves both budget continuations through
