@@ -15,10 +15,13 @@ import java.time.format.DateTimeFormatter
  *
  * Quantities, products and the running total deliberately use wrapping Long arithmetic,
  * matching the previous per-row Long sum. Conversion to Double happens only at emission.
+ * Pre-window events still update all product states; only emitted observations are bounded.
+ * No synthetic point is inserted when the window starts between real observations.
  */
 internal fun buildChronologicalPortfolioHistory(
     rows: List<CollectionProjection>,
     prices: List<OwnedPriceHistoryProjection>,
+    windowStartEpochMillis: Long = Long.MIN_VALUE,
 ): List<PortfolioPoint> {
     val holdings = HashMap<String, HistoryHolding>()
     for (row in rows) {
@@ -51,12 +54,14 @@ internal fun buildChronologicalPortfolioHistory(
             index++
         } while (index < prices.size && prices[index].effectiveAtEpochMillis == timestamp)
 
-        // Even an unrelated/quarantined/zero-price event contributes its original timestamp.
-        result += PortfolioPoint(
-            Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC).toLocalDate()
-                .format(DateTimeFormatter.ofPattern("MMM")),
-            totalMinor / 100.0,
-        )
+        // Even an unrelated/quarantined/zero-price event inside the window retains its time.
+        if (timestamp >= windowStartEpochMillis) {
+            result += PortfolioPoint(
+                Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC).toLocalDate()
+                    .format(DateTimeFormatter.ofPattern("MMM")),
+                totalMinor / 100.0,
+            )
+        }
     }
     return result
 }

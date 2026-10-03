@@ -81,6 +81,42 @@ class GuardedPortfolioHistoryTest {
         }
     }
 
+    @Test fun windowProcessesEveryEarlierDeltaAndIncludesExactBoundary() {
+        val rows = listOf(guard(), event(0L, 700L), event(1L, -200L),
+            event(2L, -100L), event(3L, 0L), event(4L, 300L))
+        val actual = requireNotNull(buildGuardedPortfolioHistory(rows, windowStartEpochMillis = 2L))
+        assertEquals(listOf(4.0, 4.0, 7.0), actual.map { it.value })
+    }
+
+    @Test fun windowDoesNotInventBoundaryPointOrRelabelTheFirstRealObservation() {
+        val old = Instant.parse("2023-12-01T00:00:00Z").toEpochMilli()
+        val boundary = Instant.parse("2024-01-01T00:00:00Z").toEpochMilli()
+        val observed = Instant.parse("2024-02-01T00:00:00Z").toEpochMilli()
+        val month = java.time.LocalDate.of(2024, 2, 1).format(DateTimeFormatter.ofPattern("MMM"))
+        assertEquals(listOf(PortfolioPoint(month, 3.0)), buildGuardedPortfolioHistory(
+            listOf(guard(), event(old, 200L), event(observed, 100L)), boundary))
+    }
+
+    @Test fun windowWithOnlyOldEventsIsEmptyAndUnsafeStillRequestsFallback() {
+        assertEquals(emptyList<PortfolioPoint>(), buildGuardedPortfolioHistory(
+            listOf(guard(), event(0L, 100L), event(1L, -100L)), 2L))
+        assertEquals(emptyList<PortfolioPoint>(), buildGuardedPortfolioHistory(listOf(guard()), 2L))
+        assertNull(buildGuardedPortfolioHistory(listOf(guard(safe = 0)), 2L))
+    }
+
+    @Test fun windowStillRejectsMalformedOrUnorderedHiddenEvents() {
+        val invalid = listOf(
+            listOf(guard(), event(0L, 100L).copy(isSafe = 0)),
+            listOf(guard(), event(0L, 100L).copy(effectiveAtEpochMillis = null)),
+            listOf(guard(), event(1L, 100L), event(1L, 200L)),
+            listOf(guard(), event(1L, 100L), event(0L, 200L)),
+            listOf(guard(safe = 0), event(0L, 100L)),
+        )
+        invalid.forEach { rows ->
+            assertThrows(IllegalStateException::class.java) { buildGuardedPortfolioHistory(rows, 10L) }
+        }
+    }
+
     private fun guard(safe: Int = 1) = OwnedPortfolioDeltaProjection(0, safe, null, 0L)
     private fun event(at: Long, delta: Long) = OwnedPortfolioDeltaProjection(1, 1, at, delta)
 }

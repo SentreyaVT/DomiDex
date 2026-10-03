@@ -127,6 +127,56 @@ class ChronologicalPortfolioHistoryTest {
         }
     }
 
+    @Test fun windowKeepsAsynchronousProductAndFinishStateBeforeItsInclusiveBoundary() {
+        val rows = listOf(row("a", quantity = 2), row("a", "Reverse", 3), row("b"))
+        val events = listOf(
+            price("a", 0, 100, 200),
+            price("b", 1, 700),
+            price("a", 2, null, 300),
+            price("b", 3, 800),
+            price("a", 4, 150, -1),
+        )
+        val actual = buildChronologicalPortfolioHistory(rows, events, windowStartEpochMillis = 3L)
+        assertEquals(listOf(17.0, 11.0), actual.map { it.value })
+        assertEquals(naive(rows, events).drop(3), actual)
+    }
+
+    @Test fun windowKeepsHiddenNullNegativeResetsAndRealUnreferencedZeroEvents() {
+        val rows = listOf(row("a", quantity = 2), row("a", "Reverse", 3))
+        val events = listOf(price("a", 0, 100, 200), price("a", 1, -1, null),
+            price("unused", 5, 999), price("a", 6, 0, -1))
+        assertEquals(listOf(0.0, 0.0), buildChronologicalPortfolioHistory(rows, events, 5L).map { it.value })
+        assertEquals(emptyList<PortfolioPoint>(), buildChronologicalPortfolioHistory(rows, events, 7L))
+        assertEquals(emptyList<PortfolioPoint>(), buildChronologicalPortfolioHistory(rows, emptyList(), 5L))
+    }
+
+    @Test fun windowGroupsEveryBoundaryTieBeforeEmittingAndDoesNotInventGapPoints() {
+        val rows = listOf(row("a", quantity = 2), row("b"))
+        val old = Instant.parse("2023-12-01T00:00:00Z").toEpochMilli()
+        val observed = Instant.parse("2024-02-01T00:00:00Z").toEpochMilli()
+        val events = listOf(price("a", old, 100), price("b", old, 700),
+            price("a", observed, 200), price("b", observed, 900), price("a", observed, 300))
+        val month = java.time.LocalDate.of(2024, 2, 1).format(DateTimeFormatter.ofPattern("MMM"))
+        val expected = listOf(PortfolioPoint(month, 15.0))
+        assertEquals(expected, buildChronologicalPortfolioHistory(rows, events, observed))
+        assertEquals(expected, buildChronologicalPortfolioHistory(rows, events,
+            Instant.parse("2024-01-01T00:00:00Z").toEpochMilli()))
+    }
+
+    @Test fun windowPreservesWrappingFallbackAndQuarantineAgainstIndependentAsOfOracle() {
+        val rows = listOf(
+            row("a", quantity = Int.MAX_VALUE), row("a", "Reverse", Int.MIN_VALUE),
+            row("b", quantity = -2),
+            row("a", quantity = 300).copy(sourceCardId = "swsh11-201", externalProductId = 670816),
+        )
+        val events = listOf(price("a", 0, Long.MAX_VALUE, Long.MAX_VALUE - 1),
+            price("b", 1, Long.MAX_VALUE), price("a", 2, 1, Long.MIN_VALUE),
+            price("b", 3, 1), price("unused", 4, null))
+        val expected = naive(rows, events).drop(2)
+        assertEquals(expected, buildChronologicalPortfolioHistory(rows, events, 2L))
+        assertEquals(expected, buildChronologicalPortfolioHistory(rows.reversed(), events, 2L))
+    }
+
     /** Deliberately independent: every original row scans the entire event list per date. */
     private fun naive(rows: List<CollectionProjection>, events: List<OwnedPriceHistoryProjection>): List<PortfolioPoint> =
         events.map { it.effectiveAtEpochMillis }.distinct().map { timestamp ->

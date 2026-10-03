@@ -6,8 +6,15 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
-/** null requests the unchanged full-history path; emptyList is a valid empty safe chart. */
-internal fun buildGuardedPortfolioHistory(rows: List<OwnedPortfolioDeltaProjection>): List<PortfolioPoint>? {
+/**
+ * null requests the unchanged full-history path; emptyList is a valid empty safe chart.
+ * Pre-window events still initialize the total and undergo every validation. Only emission
+ * is bounded: the window never invents an observation at its boundary.
+ */
+internal fun buildGuardedPortfolioHistory(
+    rows: List<OwnedPortfolioDeltaProjection>,
+    windowStartEpochMillis: Long = Long.MIN_VALUE,
+): List<PortfolioPoint>? {
     val guard = checkNotNull(rows.firstOrNull()) { "Portfolio query must return its snapshot guard" }
     check(guard.rowKind == 0 && guard.effectiveAtEpochMillis == null && guard.deltaValueMinor == 0L)
     check(guard.isSafe == 0 || guard.isSafe == 1)
@@ -24,11 +31,13 @@ internal fun buildGuardedPortfolioHistory(rows: List<OwnedPortfolioDeltaProjecti
         val timestamp = checkNotNull(row.effectiveAtEpochMillis)
         check(previousTimestamp == null || timestamp > previousTimestamp)
         totalMinor += row.deltaValueMinor
-        points += PortfolioPoint(
-            Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC).toLocalDate()
-                .format(DateTimeFormatter.ofPattern("MMM")),
-            totalMinor / 100.0,
-        )
+        if (timestamp >= windowStartEpochMillis) {
+            points += PortfolioPoint(
+                Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC).toLocalDate()
+                    .format(DateTimeFormatter.ofPattern("MMM")),
+                totalMinor / 100.0,
+            )
+        }
         previousTimestamp = timestamp
     }
     return points
