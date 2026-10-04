@@ -1,0 +1,42 @@
+import org.gradle.api.GradleException
+def run = gradle.startParameter.projectProperties['maintenanceProofRun']
+if (!(run ==~ /[a-f0-9]{32}/)) throw new GradleException('Exact maintenance UUID required')
+def repo = new File('C:/Users/Dominik/.codex/worktrees/r27-storage-maintenance/CardVault').canonicalFile
+def proof = new File(repo, 'scripts/verification/maintenance-proof')
+def output = new File(repo, 'artifacts/release27-engineering-20261004/maintenance-proof/' + run)
+if (!new File(output, 'before.json').isFile()) throw new GradleException('Frozen inputs required')
+if (new File(repo, 'keystore.properties').exists() || System.getenv().keySet().any { it.startsWith('DOMIDEX_UPLOAD_') }) throw new GradleException('No release credentials')
+if (!gradle.startParameter.offline || gradle.startParameter.taskNames != [':app:assembleDebug', ':app:assembleDebugAndroidTest']) throw new GradleException('Only offline isolated debug pair')
+if (gradle.startParameter.projectCacheDir?.canonicalFile != new File(output, 'project-cache').canonicalFile) throw new GradleException('Isolated project cache required')
+gradle.beforeProject { project ->
+    project.layout.buildDirectory.set(new File(output, project.path == ':app' ? 'app-build' : 'root-build'))
+    if (project.path == ':app') {
+        project.plugins.withId('com.android.application') {
+            project.extensions.getByName('androidComponents').finalizeDsl { android ->
+                android.defaultConfig.applicationId = 'com.dominik.cardvault.maintenanceproof.r' + run
+                android.defaultConfig.testInstrumentationRunner = 'com.dominik.cardvault.MaintenanceProofRunner'
+                android.defaultConfig.buildConfigField('boolean', 'DOMIDEX_APP_CHECK_ENABLED', 'false')
+                android.sourceSets.getByName('debug').manifest.srcFile(new File(proof, 'AndroidManifest.xml'))
+                android.sourceSets.getByName('debug').res.srcDir(new File(proof, 'res'))
+                android.sourceSets.getByName('androidTest').manifest.srcFile(new File(proof, 'AndroidTestManifest.xml'))
+                android.sourceSets.getByName('androidTest').java.setSrcDirs([new File(proof, 'androidTest'), new File(output, 'injected-source')])
+                android.sourceSets.getByName('androidTest').kotlin.setSrcDirs([new File(proof, 'androidTest'), new File(output, 'injected-source')])
+                android.sourceSets.getByName('androidTest').assets.setSrcDirs([new File(output, 'injected-assets')])
+            }
+            // Existing cached Binder WorkManager proof dependency, same exact product version.
+            // This opt-in init script alone adds it; ordinary application dependencies stay unchanged.
+            project.dependencies.add('androidTestImplementation', 'androidx.work:work-testing:2.11.2')
+        }
+        project.tasks.configureEach { task -> if (task.name == 'processDebugGoogleServices') task.enabled = false }
+    }
+}
+gradle.projectsEvaluated {
+    if (gradle.rootProject.projectDir.canonicalFile != repo) throw new GradleException('Wrong worktree')
+    def android = gradle.rootProject.project(':app').extensions.getByName('android')
+    if (android.defaultConfig.applicationId != 'com.dominik.cardvault.maintenanceproof.r' + run || android.defaultConfig.minSdk != 26 || android.buildTypes.getByName('debug').signingConfig?.name != 'debug') throw new GradleException('Not exact isolated API26-compatible debug')
+    if (android.signingConfigs.findByName('release') != null || !android.buildTypes.getByName('release').minifyEnabled) throw new GradleException('Release/R8 untouched')
+}
+gradle.taskGraph.whenReady { graph ->
+    def bad = graph.allTasks.findAll { task -> task.project.path != ':app' || task.name.toLowerCase().matches('.*(release|install|publish|upload|connected|clean).*') || (task.name.toLowerCase().contains('bundle') && !(task.name in ['bundleDebugClassesToCompileJar','bundleDebugClassesToRuntimeJar'])) }
+    if (!bad.empty) throw new GradleException('Forbidden tasks: ' + bad*.path)
+}

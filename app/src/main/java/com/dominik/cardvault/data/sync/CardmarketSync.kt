@@ -5,7 +5,6 @@ import androidx.room.withTransaction
 import androidx.work.*
 import com.dominik.cardvault.data.local.*
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -29,9 +28,15 @@ object CardmarketSyncContract {
 }
 
 class CardmarketImporter(private val context: Context, private val database: CardVaultDatabase) {
-    suspend fun import(): Result<Unit> = CardmarketImportGuard.run { importExclusive() }
+    suspend fun import(): Result<Unit> {
+        val imported = CardmarketImportGuard.run { importExclusive() }
+        // The successful transaction owns the intent. Release the import guard first;
+        // an enqueue failure must not be recorded as a failed import attempt.
+        if (imported.isSuccess) PriceHistoryMaintenanceScheduler.recoverPendingAfterCommit(context, database)
+        return imported
+    }
 
-    private suspend fun importExclusive(): Result<Unit> = runCatching {
+    private suspend fun importExclusive(): Result<Unit> = cardmarketImportResult(operation = {
         val dao = database.cardVaultDao(); val now = System.currentTimeMillis(); val previous = dao.syncState(CardmarketSyncContract.SOURCE)
         dao.putSyncState((previous ?: emptyState()).copy(status = "RUNNING", lastAttemptAtEpochMillis = now, errorMessage = null))
         // The public Cardmarket catalog and price guide are independent downloads.
@@ -51,11 +56,7 @@ class CardmarketImporter(private val context: Context, private val database: Car
             val prepared = prepareCardmarketImport(products, prices)
             persistCardmarketImport(database, prepared, now, historyReference)
         }
-    }.onFailure { error ->
-        if (error is CancellationException) throw error
-        val dao = database.cardVaultDao(); val previous = dao.syncState(CardmarketSyncContract.SOURCE)
-        dao.putSyncState((previous ?: emptyState()).copy(status = "ERROR", lastAttemptAtEpochMillis = System.currentTimeMillis(), errorMessage = error.message?.take(300) ?: "Unbekannter Importfehler"))
-    }
+    }, reportFailure = { error -> reportCardmarketImportFailure(database, error) })
 
     private suspend fun download(address: String, target: File): CardmarketHistoryReference? = withContext(Dispatchers.IO) {
         val connection = URL(address).openConnection() as HttpURLConnection
@@ -83,7 +84,14 @@ class CardmarketImporter(private val context: Context, private val database: Car
         }
     }
 
-    private fun emptyState() = CatalogSyncStateEntity(CardmarketSyncContract.SOURCE, "IDLE", null, null, null, 0, 0, null)
+}
+
+private fun emptyState() = CatalogSyncStateEntity(CardmarketSyncContract.SOURCE, "IDLE", null, null, null, 0, 0, null)
+
+/** The existing actual Room status writer, shared with isolated failure-boundary proofs. */
+internal suspend fun reportCardmarketImportFailure(database: CardVaultDatabase, error: Throwable) {
+    val dao = database.cardVaultDao(); val previous = dao.syncState(CardmarketSyncContract.SOURCE)
+    dao.putSyncState((previous ?: emptyState()).copy(status = "ERROR", lastAttemptAtEpochMillis = System.currentTimeMillis(), errorMessage = error.message?.take(300) ?: "Unbekannter Importfehler"))
 }
 
 /** The same atomic persistence boundary is used by the real importer and Room tests. */
@@ -110,6 +118,11 @@ internal suspend fun persistCardmarketImport(
         dao.putSyncState(CatalogSyncStateEntity(CardmarketSyncContract.SOURCE, "SUCCESS", now, now, prepared.sourceCreatedAt, prepared.products.size, matchedPrices.size, null))
         historyReference?.let { reference ->
             dao.putMetadata(AppMetadataEntity(CardmarketHistoryReference.METADATA_KEY, reference.epochMillis.toString()))
+            // Atomic local maintenance intent, not an enqueue or an inline deletion. An import
+            // without a fresh verified reference cannot re-arm an old stored clock. Updating
+            // this coalesced ticket deliberately leaves any active pass/cursor untouched.
+            dao.putMetadata(AppMetadataEntity(PriceHistoryMaintenanceCodec.PENDING_KEY,
+                PriceHistoryMaintenanceCodec.encodeTicket(PriceHistoryMaintenanceCodec.freshTicket(reference))))
         }
     }
 }
