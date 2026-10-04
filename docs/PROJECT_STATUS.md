@@ -20,6 +20,16 @@ bleibt gesperrt; genaue Artefakte und Grenzen im aktuellen Release-27-Ledger.
 
 ## Unterschiedliche Projektstände
 
+**Ergänzung 04.10.2026, 20:15:** Der lokale signierte R27-Kandidat ist gebaut und
+verifiziert: `releases/v27/DomiDex-v27.aab`, Versionscode27,
+`1.0-closed-alpha.6`, bestehendes Upload-Zertifikat, eingebettetes passendes
+R8-Mapping. 39 Pipelineprüfungen und die erneute JVM-/Release-Lint-Prüfung sind
+bestanden (Lint ohne Fehler, 170 Warnungen). Native ZIP deckt exakt libc++ ab;
+sechs Herstellersymbole fehlen weiterhin. Keine vollständige Rolloutfreigabe:
+Web-/Backend-Voraussetzungen sowie Hardware-/Betriebsgrenzen bleiben im Ledger
+ausdrücklich dokumentiert. Kein Google-Play-Upload, Deployment oder Gerätetest.
+R26 unverändert; der separate vorhandene Hardware-Harness bleibt unangetastet.
+
 **Ergänzung 04.10.2026, 20:00:** Der aktuelle vollständige JVM-/Lint-Lauf und die
 anschließende Android17-Gesamtregression sind bestanden: 1.062 JVM-PASS, ein
 unveränderter optionaler Live-Skip; 371/371 Androidfälle ohne Skip/Fehler.

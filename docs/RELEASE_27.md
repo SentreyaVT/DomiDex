@@ -2,6 +2,81 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
 
+### Signed local R27 candidate — 2026-10-04 20:15 Europe/Berlin
+
+**Local artifact verification PASS; not a blanket rollout approval.** The reviewed
+36-file worktree delta was committed as `cffaeea8635ae3da590dfeca038904eeeff26a8e`
+and integrated byte-equivalently through Git as `56eb4a47e58fe6b3c8428aa9d1faf3606e073e76`.
+Build source commit: `a3c7aa7ddef8987faa285bebf1bd8779313baae4`.
+No dependency, schema, Rules, version or signing configuration was altered by
+this integration. Separate existing hardware-proof scaffolding remains untracked
+and unchanged; it is not an input to the ordinary app build. The archive's
+`source_dirty_at_archive=true` records precisely those ten untracked scaffold
+files, not uncommitted compiled code. The before/after source snapshot is equal.
+
+Existing `Build-SignedBundle.ps1` completed in 368.015s through the bounded local
+runner. All 39 release-pipeline checks PASS; Gradle BUILD SUCCESSFUL, 134 tasks
+(87 executed/47 up-to-date), full JVM 1,063 cases/1,062 PASS/one unchanged opt-in
+live skip/zero failures or errors. Release lint: zero errors, 170 warnings and
+four hints. Release lint and debug lint have different variant scopes; this is
+not a warning-free claim. No tests were disabled or relaxed.
+
+The original two launcher failures are retained. First, missing PATHEXT prevented
+PowerShell from waiting for Python; second, the isolated Windows batch invocation
+failed before Gradle started. A paired native-command probe reproduced both
+conditions. Only the ignored orchestration runner gained normal PATHEXT,
+native-backslash COMSPEC and OS=Windows_NT. The release helper and application
+were unchanged. Credentials were cleaned by the existing helper's finally block;
+no key/password content was printed or archived.
+
+Immutable candidate archive: `releases/v27/`:
+
+- `DomiDex-v27.aab`: 52,705,225 bytes, SHA256
+  `2c3fe33bb84c47fda4525297a8134859f44fd727dabf268bade401d36f276cc7`.
+- Actual manifest: `com.dominik.cardvault`, code27, `1.0-closed-alpha.6`,
+  min26/target37, non-debuggable, arm64-v8a only.
+- All 688 payload entries verify against the existing pinned upload certificate
+  `837D12C024DFED3904E13CEB241B9B99584AD54AE8AA9D4F58084BBC76B70EA2`;
+  bundletool structure validation PASS.
+- Embedded R8 mapping equals `mapping.txt`, SHA256
+  `8900194e5eaa4042f46e4043eba099062d30d60f7974d533cee7868649448c8e`.
+  Existing conservative R8 configuration retained. MainActivity and the new
+  WorkManager worker names remain preserved in the actual mapping.
+- `native-debug-symbols.zip`, SHA256
+  `cbef5ac45ae8c7c870d40cc8ea77fa75da8b9bfe1c8d7a556be65f776e30e687`:
+  **partial coverage, one of seven libraries**, exact original libc++ verified
+  against this AAB's Build-ID, allocated/load bytes and symbol addresses.
+  Six vendor originals remain unavailable: graphics.path, datastore_shared_counter,
+  image_processing_util_jni, mlkit_google_ocr_pipeline, opencv_java4 and
+  surface_util_jni. The native-symbol Play warning may therefore remain.
+- Native license evidence retains three explicit provider limitations for
+  CameraX/libyuv, future ML Kit symbol-delivery rights and OpenCV/KleidiCV.
+  These are unresolved provenance checks, not an invented legal clearance.
+
+Bounded build receipt:
+`artifacts/release27-engineering-20261004/final-candidate/signed-92f582e7070745d898d29686a080cdf9/`.
+Result SHA256 `9dd9d7d6a8ccfe13f8b796e6b7469a66b8e8b2b01fcc887de1b06d6cf960f97e`;
+archive verification `838493175b65c33c166d6f2aedb999b979771947efbc656a8ec3a7d474ceec98`.
+All tracked inputs, protected R26 files and the earlier tested worktree APK pair
+remained unchanged. Normal MAIN debug outputs were intentionally rebuilt by
+the existing release pipeline; no device was installed or launched.
+
+**Before a corresponding production rollout promise:** cross-device alternative
+prices need a compatible Web client and verified deployed
+`collectionPriceSelections` Rules (current live Rules are unverified, not proven
+absent). The corrected public-share alternative-price path and fresh-job account
+deletion access-fence are explicitly local Web/backend fixes, not deployed by
+this Android build. Android cannot activate those server changes. The documented
+physical-device, operational-privacy, trusted-ingress/load and alerts/billing
+limits still apply. No new requirement to enable Delta or App Check is implied.
+The candidate does not establish a new physical ARM64/minified runtime test.
+
+No Google Play upload, production deployment, GitHub stable release or tag was
+created. Engineering-branch push is a separate authorized source backup; it does
+not upload the ignored AAB/symbol archive. Its outcome requires a separate exact
+remote HEAD readback and is not inferred from this successful local build.
+
+
 ### Final local regression checkpoint — 2026-10-04 20:00 Europe/Berlin
 
 The post-import-fix full JVM/debug-lint run passed: 152 suites, 1,063 cases,
@@ -3452,7 +3527,7 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 12 Load/scale | PARTIAL; bounded history and local maintenance verified | Prior matched58/87-sample and complete-model/SQL/private-data proofs remain dated; portfolio improvement is not private-binder speedup. API26 complete113-row annual plan now passes. User-approved12-month collection-only retention preserves every local owner/pending/tombstone and unowned latest price. Actual isolated44+SQLiteFull45, file reclamation, two-process recovery and OS-triggered same-child continuation pass. No physical ENOSPC/WAL/power-loss/OEM proof;13GiB test explicitly withdrawn, not a blocker to restart. O(N) sharing/fan-out and production load remain open. |
 | 13 Full regression | Current local regression PASS; release verification pending | Latest app64170e3c/test5da0d817 passes371/371, zero skips/failures,310.127s with source/diagnostic checks. Full JVM1062PASS/one unchanged opt-in skip; debug lint0errors/144warnings. Native46 and actual deletion workflow separately PASS. Historical368/371 and370/371 remain; intermittent OCR cause unresolved. Web1295/private36 retain dated scopes. Final physical/live/minified-packaged evidence is not inferred from debug PASS. |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
-| 15 Release engineering | Local candidate authorized; archive verification pending | Reviewed storage/import fixes and required local regressions complete. Integrate exact source and create only the user-authorized signed local candidate; verify version/signature/R8/native coverage. Earlier hardware/live/privacy/load limits remain rollout gates, not silently waived. No Play upload or stable publication. |
+| 15 Release engineering | Local signed candidate verified; no rollout approval | Immutable releases/v27: actual code27/name, pinned upload signature, 688 signed payloads, bundletool validation, exact embedded R8 mapping and partial1/7 native-symbol coverage verified. Earlier hardware/live/privacy/load and backend-deployment boundaries remain; no Play upload or stable publication. |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
 
 ## Initial findings (historical; later checkpoints document resolved items)
