@@ -20,6 +20,150 @@ bleibt gesperrt; genaue Artefakte und Grenzen im aktuellen Release-27-Ledger.
 
 ## Unterschiedliche Projektstände
 
+**Ergänzung 04.10.2026, 20:00:** Der aktuelle vollständige JVM-/Lint-Lauf und die
+anschließende Android17-Gesamtregression sind bestanden: 1.062 JVM-PASS, ein
+unveränderter optionaler Live-Skip; 371/371 Androidfälle ohne Skip/Fehler.
+Debug-Lint hat keine Fehler, aber 144 Warnungen. Die 46 Datenbank-Fehlerfälle
+und der tatsächliche lokale Löschworkflow sind separat ebenfalls bestanden.
+Jetzt folgt die gezielte Integration in den Engineeringbranch und der vom Nutzer
+erlaubte lokale signierte Kandidat. Das ist keine pauschale Gate- oder
+Produktionsfreigabe: Hardware-/Betriebsgrenzen und die fehlenden Herstellersymbole
+bleiben ausgewiesen. Keine Play-Veröffentlichung und kein Eingriff am Redmi.
+
+**Ergänzung 04.10.2026, 19:48:** Alle46 isolierten Datenbankfälle bestanden,
+einschließlich echtem Speicherfehler beim ERROR-Schreiben, erhaltenem ursprünglichem
+Importfehler, allen15 geschützten Tabellen und erfolgreichem Wiederöffnen.
+Testpakete sauber entfernt; reale Geräte unberührt. Beide reinen Harnessfehler
+(Wort im Dateipfad/Windows-Pfadlänge) bleiben als Fehlbelege dokumentiert und sind
+eng korrigiert. Die Live-Web-Zuordnung zur Serverrevision vom25.09. ist nun lesend
+bestätigt, ohne Deployment. Vollständige JVM/Lint- und aktuelle Android17-Prüfung
+folgen; noch keine signierte AAB oder Gesamtfreigabe.
+
+**Ergänzung 04.10.2026, nach19:15:** Der echte lokale Lösch-/Berechtigungsworkflow
+ist mit frischen Debug-APKs bestanden:1/1 Androidfall,2,257s, tatsächlicher
+Dienstaufruf und Firebase-Emulatoren, unveränderte private Daten sowie vollständig
+geprüfte Testbereinigung. Kein Nachweis für produktive Endlöschung oder ältere
+Löschaufträge. Beim folgenden46er-Datenbanklauf trat ein enger Prüfhelferfehler
+auf: `error` im eigenen Dateipfad wurde trotz erfolgreicher Installation als
+Fehler gewertet. Isoliertes Paket bereinigt, Parserkorrektur mit19 Kontrollen
+abgesichert; neuer Lauf folgt. Keine Änderung am Redmi, Signing oder Produktion.
+
+**Ergänzung 04.10.2026, 19:10:** Drei echte Regressionen im Import-Fehlerpfad
+sind reproduziert und gezielt behoben: dieselben elf JVM-Fälle bestehen jetzt,
+einschließlich Abbruch und Freigabe der bestehenden Importsperre. Kein Eingriff
+in Full-Sync, Preisquellen, Schema oder Import-Reihenfolge. Der tatsächliche
+native Fehlerstatus-Schreibtest und die anschließende Gesamtregression stehen
+noch aus. Neue Debug-APKs für den Lösch-/Berechtigungsnachweis werden gebaut;
+kein Release signiert oder veröffentlicht.
+
+**Ergänzung 04.10.2026, 19:00:** Der zusätzliche reale SQLite-Vollspeichertest
+ist nun bestanden:45/45, keine Skips/Fehler,109,877s. Ein passiver Testbeobachter
+belegt den echten nativen Speicherfehler trotz äußerem Room-Rollbackfehler;
+Bestandsdaten, Wiederöffnen und Fortsetzung nach testinternem Limit-Anheben sind
+geprüft. Die früheren Fehlversuche bleiben dokumentiert. Isolierte Testpakete sauber
+entfernt; normales App-Paket und Redmi unverändert.92 reine Hostprüfungen für den
+neuen Löschworkflow bestehen, dessen Android-/Dienstelauf noch offen ist. Ein
+separater Fehler beim Speichern des Import-Fehlerstatus wird reproduzierbar geprüft.
+Kein finaler Release-PASS; Gate15 bleibt gesperrt. Ältere Ergänzungen unten sind
+datierte Zwischenstände und ersetzen nicht diesen bzw. den aktuellen Ledgerstand.
+
+**Ergänzung 04.10.2026, 18:41:** Derselbe aktuelle Android17-Debugstand besteht
+auch den vorher festgelegten zweiten vollständigen Lauf:371/371, keine Skips oder
+Fehler,335,961s, unveränderte Quellen/APKs und bestandene Abschlusskontrollen.
+Damit zwei Gesamt-PASSes; der historische sporadische OCR-Fehler bleibt dennoch
+unaufgeklärt dokumentiert. Keine Aussage zu Echtgeräte-Geschwindigkeit oder
+finaler Freigabe. Speicher-/Rechteentzugsnachweise bleiben als nächste lokale
+Schritte offen; Redmi, Signing und Produktion unverändert.
+
+**Ergänzung 04.10.2026, 18:21:** Der zusätzliche echte SQLite-Vollspeicher-Fall
+scheitert an einer nicht passenden Ausnahme; alle bisherigen44 Speichertests
+bleiben grün. Native Logs zeigen zuerst Speicherfehler13, danach einen Fehler
+beim Rollback. Eine reine Testdiagnose wird geprüft; weder App-Fix noch
+Datenintegritäts-Pass werden daraus vorweggenommen. Isolierte Testpakete sauber
+entfernt, Redmi und Produktion unverändert. Gate15 bleibt gesperrt.
+
+**Ergänzung 04.10.2026, 18:03:** Der isolierte Android8-Nachweis für echte
+OS-Wiederaufnahme desselben gespeicherten Wartungs-Folgeauftrags ist bestanden,
+einschließlich unveränderter privater Daten und korrekter Akku-Wiederherstellung.
+Das ist kein Echtgeräte-/OEM-Nachweis. Der erste Paket-Cleanup entfernte die
+Testpakete, scheiterte aber an einer anschließenden ADB-Abfrage; seine separate
+Nachprüfung ist nun bestanden. SQLite-Speicherfehler und weitere Release-Grenzen
+bleiben offen.
+
+**Ergänzung 04.10.2026, 17:48:** Die neue, zeitdiagnostisch ergänzte Debug-APK
+besteht auf frisch gestartetem Android17 alle371 unveränderten Regressionen,
+ohne Fehler oder Skips. Quellen-/Artefakt- und Diagnoseprüfungen bestanden.
+Der frühere sporadische Scanner-Folgetestfehler ist damit nicht dauerhaft als
+behoben erklärt; es wurde kein Produkt-Lifecycle-Fix vorgenommen. Der eigene
+Hintergrundtest hat34 reine Steuerungsprüfungen bestanden; sein tatsächlicher
+Android-Nachweis und der SQLite-Full-Nachweis stehen noch aus. Details/Hashes im
+Ledger. Gate15 weiterhin gesperrt, keine Veröffentlichung und Redmi unberührt.
+
+**Ergänzung 04.10.2026, 16:45:** Die neue begrenzte Scanner-Zeitdiagnose besteht
+die vollständige lokale JVM-Prüfung:1.051 PASS aus1.052 Fällen; genau der bereits
+vorhandene optionale Live-Download-Test bleibt als Skip ausgewiesen. Debug-Lint
+ohne Fehler; Quell- und geschützte Release-Ausgaben unverändert. Die erste
+OS-Hintergrundtest-Vorbereitung bestand auf Android8, der Gesamtnachweis scheiterte
+aber an der Singleton-Auswertung. Diese wird mit unveränderten strikten
+Identitäts-/Ergebnisprüfungen korrigiert und der ganze Ablauf wiederholt. Kein
+OS-Fortsetzungs-Pass und keine Scanner-Freigabe daraus abgeleitet. Details und
+unveränderte Fehlbelege im Ledger; keine Signierung/Veröffentlichung.
+
+**Aktuellster Laufzeitstand 04.10.2026, 16:18:** Die vollständige aktuelle
+Android-17-Regression besteht370 von371 Fällen; der OCR-Folgetest nach Abbruch
+scheitert weiterhin im Gesamtlauf. Der frühere fokussierte8/8-Pass reicht damit
+nicht zur Freigabe. Ein zusätzlicher echter lokaler Firebase-SDK-Test auf Android16
+bestätigt dagegen den beobachteten Rechteentzug bis zur Invalidierung der
+Scanner-Hinweise (1/1,2.163s, geprüfte Bereinigung). Der frühere Lock-only-
+Zustellungsfehler bleibt getrennt offen. Aktuelle Belege stehen oben im Ledger;
+keine Signierung, kein Push oder Deployment, Redmi unverändert.
+
+**Gezielter Zugriffsfix 04.10.2026:** Nach einem tatsächlich gemeldeten
+Zugriffsverbot konnte der Scanner noch zwischengespeicherte Community-Hinweise
+verwenden. Sechs unveränderte Regressionen reproduzieren das Problem; nach dem
+engen Fix bestehen alle elf Prüfungen. Offline-Hinweise ohne Rechteentzug bleiben
+erhalten. Die Android-Oberflächenprüfung und der echte SDK-Gesamtnachweis stehen
+noch aus; die frühere Verzögerung beim serverseitigen Rechteentzug ist damit nicht
+als gelöst erklärt. Keine Produktionsänderung oder Releasefreigabe.
+
+Der anschließende unabhängige Review fand zusätzlich einen schnellen Wechsel
+A → B → A, bei dem eine alte Aufnahme wieder Hinweise liefern konnte. Auch dieser
+Fall ist mit unverändertem Test reproduziert und eng behoben: jetzt zwölf von zwölf
+gezielten Fällen bestanden. Der vollständige JVM-/Lint-Lauf und Android-Prüfungen
+werden gegen diesen neueren Stand erneut ausgeführt.
+
+Der erneute vollständige JVM-Lauf besteht inzwischen 1.038 Tests, bei einem
+unverändert ausgelassenen optionalen Live-Test. Lint enthält keine Fehler,
+aber144 Warnungen und4 Hinweise. Das Auswertungsskript erkannte die Kategorie
+„Hint“ nicht und bleibt deshalb mit seinem ursprünglichen FAIL-Beleg erhalten;
+die getrennte Nachprüfung aller unveränderten Berichte und Schutzinventare ist
+inzwischen bestanden. Die aktuelle
+Debug-App samt Testpaket ist erfolgreich neu gebaut. Android-Laufzeittests und
+Releasefreigabe sind damit ausdrücklich noch nicht abgeschlossen.
+
+Der getrennte Android-8-Neustartnachweis ist jetzt ebenfalls bestanden: zwei
+echte Prozesse setzen dieselbe gespeicherte Bereinigung ohne neuen Import fort.
+Geschützte Daten und Fotos bleiben identisch, nur veraltete Preiszeilen entfallen.
+Beide Prüfungen und die anschließende Entfernung der eigenen Testpakete bestehen.
+Dies prüft die Wiederaufnahme beim App-Start, nicht die automatische Zustellung
+durch Androids Betriebssystem-Scheduler.
+
+Die fokussierte Android-17-Prüfung besteht sechs von acht Fällen: Kamera in allen
+Display-Drehungen, drei Compose-Zugriffsfälle und zwei Abbruchkontrollen. Zwei
+echte OCR-Identitätstests scheitern weiterhin. Die Messung zeigt, dass innerhalb
+der unveränderten fünf Sekunden nur Namensproben fertig werden und die
+Kartennummern-Proben noch gar nicht starten. Eine eng begrenzte Priorisierung
+wird geprüft; kein bestandener Scanner-Gesamtnachweis wird daraus vorweggenommen.
+Der vollständige fehlgeschlagene Beleg bleibt erhalten, einschließlich eines
+nach Testende verbliebenen App-Prozesses. Details und Prüfsummen im Ledger.
+
+Die gezielte OCR-Reihenfolgeänderung besteht inzwischen acht zusätzliche
+JVM-Fälle und die vollständige Regression: 1.046 bestanden, ein bestehender
+optionaler Live-Test ausgelassen, keine Fehler. Lint bleibt bei144 Warnungen
+und4 Hinweisen ohne Fehler. Das neue Debug-Paar ist gebaut und wird separat
+mit den unveränderten echten OCR-Prüfungen auf Android17 verglichen. Daraus
+folgt noch keine allgemeine Geschwindigkeits-, Geräte- oder Releasefreigabe.
+
 **Fortschreibung 04.10.2026:** Der Nutzer hat Signierung und GitHub-Push
 grundsätzlich freigegeben, aber vor dem Start zusätzlich eine nachzuweisende
 Speicherbegrenzung als Voraussetzung für das AAB ergänzt. Preisverläufe dürfen
@@ -34,10 +178,41 @@ Engineering-Push ist keine Releasefreigabe. Google Play bleibt unberührt.
 aller lokalen Sammlungen beschränkt werden, einschließlich Gastdaten, anderer
 Konten und noch nicht synchronisierter Einträge. Für nicht gesammelte Karten
 bleibt der letzte vollständige Preisstand; ältere Verläufe dürfen unwiederbringlich
-entfallen. Die Bereinigung ist noch nicht in der normalen App aktiv. Ein neuer,
-getrennter Offline-Emulator dient der Schutz- und 13GiB-Prüfung; ein bestandener
-Großdatentest wird noch nicht behauptet. Der gesicherte Engineeringbranch steht
-remote auf `3d4f91f`; neuere lokale Arbeiten sind noch nicht darin enthalten.
+entfallen. Die Bereinigung ist noch nicht in der normalen App aktiv. Der künstliche
+13GiB-Fülllauf wurde auf Nutzerwunsch bewusst beendet, ohne Ergebnis; weder
+Produktfehler noch PASS. Er wird nicht wiederholt. Kleinere reproduzierbare
+Prüfungen müssen Begrenzung, tatsächliche Speicherfreigabe, Datenerhalt und
+Fortsetzung nachweisen. Der gesicherte Engineeringbranch steht
+remote auf `f76feaf`; die weitere dauerhafte Fortschrittssicherung wird getrennt
+im Worktree `codex/r27-storage-maintenance` geprüft. Dort sind 38/38 Android-8-
+Datenbanktests sowie 1.012 JVM-Fälle erfolgreich (ein bestehender optionaler
+Test bleibt ausgelassen). Ein zusätzlich gefundener rückwärtsgehender Zeitfall
+ist inzwischen mit einem echten Datenvergleich reproduziert (38 PASS/1 FAIL).
+Der kleine Pausen-Fix besteht anschließend dieselben 39 Tests vollständig.
+Der ergänzte Android-8-Lauf besteht jetzt 41/41 Fälle ohne Auslassungen. In einer
+isolierten Datenbank mit 100.002 echten Preiszeilen schrumpft der tatsächliche
+Room-Standardmodus von 18.059.264 auf 753.664 Bytes; geschützte Tabellen und Fotos
+bleiben identisch. Ein separater NONE-Fall prüft die manuelle Komprimierung nur
+der eigenen Testdatei. Keine pauschale Produkt-VACUUM-Funktion ist aktiviert.
+Die lokale Hintergrundanbindung besteht 14 neue JVM-Fälle; der Gesamtlauf besteht
+1.026 Fälle bei einem bestehenden optionalen SKIP und erfolgreicher Lint-Prüfung.
+Der anschließende isolierte Android-8-Lauf besteht **44/44 Fälle ohne Auslassungen**
+in 111,277s, einschließlich drei echter WorkManager-Warteschlangenfälle. Der
+negative Kontrollfall bestätigt, dass ein fehlgeschlagener Vorgänger seinen
+bereits blockierten Nachfolger ebenfalls scheitern lässt. Die echten pausierten
+bzw. nach zwei Wiederholungen ausgeschöpften Wartungsjobs lassen dagegen einen
+frisch angehängten Nachfolger vollständig fertig werden. Die drei unabhängigen
+Reportdateien und der anschließende Eigentümer-Cleanup sind geprüft; die gewöhnlichen
+Apps sowie Quellen und Release-26-Dateien bleiben unverändert. Dies belegt die
+kontrollierte WorkManager-Engine, nicht Betriebssystemzustellung oder Fortsetzung
+nach echtem Prozessneustart. Die genauen Belege stehen im Release-27-Ledger.
+Auch der zuvor an einer zu engen EXPLAIN-Diagnosegrenze gescheiterte Android-8-
+Jahrestest besteht jetzt vollständig: ein Test, 13 Messpunkte, 365 Diagrammpunkte,
+vollständige Modelle und 15 unveränderte Tabelleninventare; der echte SQLite-Plan
+enthält 113 Zeilen. Frühere Fehlbelege bleiben erhalten. API37-Kamera/OCR,
+Neustart-/Low-Disk- und weitere kritische Release-Nachweise bleiben offen.
+Gate15 bleibt gesperrt; diese Einzelnachweise sind keine vollständige Speicher-
+oder Releaseabnahme, keine Signierung und keine Veröffentlichung.
 
 | Ebene | Befund vor diesem Dokumentations-Commit |
 | --- | --- |

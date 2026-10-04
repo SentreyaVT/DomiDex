@@ -2,6 +2,967 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
 
+### Final local regression checkpoint — 2026-10-04 20:00 Europe/Berlin
+
+The post-import-fix full JVM/debug-lint run passed: 152 suites, 1,063 cases,
+**1,062 passed, zero failures/errors, one unchanged opt-in Cardmarket live skip**.
+Debug lint: zero errors, 144 warnings and four hints; not warning-free.
+Receipt in the storage worktree:
+`artifacts/release27-engineering-20261004/storage-prerequisite/import-error-status-review/full-jvm-lint-3e8bbaac9f0744e9acaf377ef5812392`,
+267.719s; result SHA256
+`50d573c06c376fce3cf9d3e684aa97d64e443486738a8ebdff0a1c95f841e3bf`.
+Protected sources, ordinary APKs, release outputs and R26 remained unchanged.
+
+Fresh API37.1/16KiB full regression on the exact current debug pair passed
+**371/371, zero failures/skips, JUnit 310.127s**. Receipt:
+`artifacts/release27-engineering-20261004/storage-prerequisite/import-error-status-review/api37-followup/runtime-api37-full371-42a75432ac494088846e9c29486bbf9b`.
+Manifest SHA256 `5ce1e4445801fcb4d7af17ee6c9a6ea011fb3023a6cc0442f1918e8598e153c3`;
+JUnit log `f4a2ad815ce48ca3fe6f024564dd101c7b9495745f6cbc99d53f85373a7dbdd9`;
+diagnostics `eb8bcd5318610ab96be46b62773505a335611a9e8e637437f4636d60a67ae6f9`;
+terminal receipt `7067b5cefdf4b93fe95a38ee3be4d9d561c30ca5fb2b02d75f64271765fb6c15`.
+All source/APK/profile/offline and both scanner-diagnostic checks passed.
+The terminal contract explicitly permits an observed cached test process only
+after complete JUnit/diagnostic success and no active instrumentation/camera;
+it is not a native-unload or background-delivery assertion. A PowerShell display
+step could not parse the driver's mixed text/JSON stdout; the saved actual
+driver manifest, JUnit and diagnostic receipts independently establish PASS.
+No test was rerun or reclassified because of that presentation error.
+
+Exact pair: app `64170e3ccffb821dabb886826fcaf20b7372e4cac2e7b952a6540630c160c9b9`,
+test `5da0d817c2fed4c4fc0ac02119410cdcf9b3b129e14e02f1dc1999c29bad1e46`.
+Earlier intermittent OCR failures remain historical unresolved evidence, not
+retroactively fixed by these passes. The separate lock-only SDK expectation
+also remains RED; the actual deletion workflow has its own newer PASS above.
+
+The user-authorized next step is integration of the reviewed storage-worktree
+sources and a **local signed candidate**, followed by archive verification and
+engineering-branch backup. This is not a blanket PASS of Gates4–14 or permission
+to publish: physical multi-device/camera evidence, operational privacy completion,
+public-ingress/load controls and live alerts/billing still have their documented
+boundaries. No new speculative architecture work is added. Full-Sync stays;
+Delta stays off. R26 remains immutable. Google Play upload, stable-release
+publication and production deployment are not part of this candidate build.
+
+
+### Native ERROR-write46 PASS and live metadata binding 2026-10-04 19:48 Europe/Berlin
+
+New isolated output `artifacts/r27-native46-20261004/40fe15a815e040de964b5df6cd7fd22d`
+built127.719s; check/install passed. Actual runtime
+`runtime-run-f5286e3a2a954ed6ab3a736e608bad51`:46/46 PASS, no skips/failures,
+117.094s, all source/output/device/offline/ordinary-package/terminal guards green.
+Manifest SHA256 `118be1b1f1d9ff3ac8fbaf7cf6dcf8ca5a178b1e16492c964eaa7dad187876a6`;
+JUnit log `ce2d2a1ae41888aab2bf32f7b86e98cbdb96d6205e71653fc82aee7e0a19fc13`.
+Guarded cleanup `4b8fa51eceaa462bb1960cd3b01cf5c5` passed; only UUID-owned
+test packages removed. Existing ordinary app and Redmi untouched.
+
+Original44 and unchanged catalogSQLite45 pass. New46 genuinely observes a separate
+native SQLiteFullException from the real ERROR-status INSERT, after a real FK
+primary failure. The fixed import Result retains the exact primary and secondary
+failure, releases its existing guard and preserves all15 typed tables, schema,
+sequence, photos, ticket and cursor across reopening. Lifting only the owned page
+limit permits that same ERROR writer to persist correctly; second reopen succeeds.
+Fixture telemetry:65pages at4096bytes,820 setup status rows,4.950s new-case scope.
+This is SQLite page exhaustion, not physical ENOSPC/WAL/power loss/network/crash proof.
+
+Both earlier host-only failures are preserved. After parser correction, second
+install43477... failed because Windows adb could not stat the existing260-character
+test-APK path. Cleanup02d0... passed. Only the isolated output root was shortened;
+20 pure controls bind identical test selection/lifecycle and both APK paths<240.
+No product modification arose from either harness correction.
+
+Read-only live Hosting-to-Run collector completed six bounded GETs, consistent
+at both observations. Actual Hosting versionc71089a842d591bc, tag and revision
+sharing-layout-repair-20260925. Actual Run ingressALL, max2instances, concurrency40,
+60s timeout,1CPU/512Mi,cpuIdle/startupCpuBoost true. Omitted values are not invented.
+WT `live-metadata-minimal-review/read-a6bb92af18194654ab61870bc53d6995/result.json`
+SHA256 `27d82d53c1215db6d39f76b3bf662d791fee99164829ebcf93d1117f74ce7e72`.
+Initial readf7f... remains UNVERIFIED for unsupported static legal prefix; exact
+locally documented five legal routes plus final Run are now admitted,21 pure
+controls PASS. No arbitrary routing, redirect, secret/log exposure or mutation.
+This closes the observed binding only, not IP provenance, load, alerts or billing.
+Full JVM/lint and current-pair API37 regression follow. Gate15 is not approved.
+
+### Actual local deletion workflow PASS and remaining checks 2026-10-04
+
+Fresh normal debug pair `normal-debug-8e07874c4864438596309ffa873dbbb1` built
+in157.641s; app SHA256 `64170e3ccffb821dabb886826fcaf20b7372e4cac2e7b952a6540630c160c9b9`,
+test `5da0d817c2fed4c4fc0ac02119410cdcf9b3b129e14e02f1dc1999c29bad1e46`.
+Both are standard-debug-signed, not release artifacts. Sources and protected outputs
+unchanged. Installed hashes were independently checked on owned API36/5556 only.
+
+The real local deletion-request/Android SDK workflow passed1/1 in2.257s at19:15,
+using Auth/Firestore/Storage emulators and actual deletionRequest handler202.
+Existing Session reaches NO_ACCESS, the consumer closes/denies later capture,
+and all15 private tables/photos/consent remain unchanged. Actual same-clock retry
+retains the pending65-minute fence. Server proof, exact fixture-only cleanup,
+port/reverse/instrumentation cleanup and protected-input guards all passed.
+Receipt in WEB `outputs/collection-sync-session-deletion-local/2026-10-04T17-14-48-739Z-6900c5e290e2441c8032c84d13042e68`:
+manifest SHA256 `b641d43f70d0770ea7972418ceea02a8e5c3b81d70097393842b551d091c98cf`;
+server proof `a03e92233971496420e9e80de63f06ea14b5c14073abd9fe37acacb63af25533`;
+Android log `bdbcc2573fb8ee493b81f2372cdfea4083e74500a4d05319a4fe39af8f034c5f`.
+No natural65-minute expiry, final provider purge, live Google/AppCheck, isolated
+listener causality or legacy-job repair is claimed. Historical lock-only30s RED remains.
+Only identified5556 was shut down after completed cleanup; Redmi untouched.
+
+The additive native ERROR-write46 suite built131.140s under `c0edd05b1900456fa5af47d25d840437`.
+Preflight passed. Installation actually returned exit0/Success, but the historical
+generic parser rejected `error` inside its exact local artifact directory name.
+Original `runtime-install-bc152381ea7142da878d3807f7979c6b` remains FAIL, not rewritten.
+Guarded cleanup `runtime-cleanup-60c1ca0d9b15451595f3e555903dc236` passed, removing
+only the identified isolated app. No46-case runtime result exists from that attempt.
+Private adapter now validates the exact three-line push receipt, bound APK path,
+byte size and positive decimal rate/duration; the complete install lifecycle is
+source-compared with the original except that parser call.19 pure controls pass,
+including reproduction of the original path false-positive and explicit negatives.
+The six old helper files, normal app code and historical receipts are unchanged.
+Fresh46 build/runtime and full JVM/lint remain next; no speculative new test block.
+No release signing, push, deployment or Google Play operation in this continuation.
+
+### Import error-reporting regression and targeted fix 2026-10-04 19:10 Europe/Berlin
+
+The old error-status callback can throw out of Result.onFailure, replacing the
+original failed import; a cancelled Job can also expose a non-cancellation cleanup
+failure. A behavior-preserving extraction retained the exact operation, actual Room
+ERROR writer and import guard. New11 focused JVM cases genuinely reproduced three
+predeclared assertion failures with eight controls passing; zero skips/errors.
+RED `jvm-red-731738a473a9481a9d2f4c1a37de7e27`,109.718s; result SHA256
+`152510a6c51f2c31c5556c769e4d6fbe3b0664ccde43b10bedd91b0394e557c7`,
+raw XML `91ff0c9ce21c4b303bd9c69c994bf8bdaa64bc697e6bea4fbaf17ac52a8ee847`.
+
+The narrow fix catches ordinary reporting failure, checks coroutine cancellation,
+and attaches a different reporting Throwable as suppressed to the original failed
+Result. Direct cancellation still propagates; successful imports do not report an
+error. Existing provider routes, atomic persistence, maintenance scheduling, schema,
+mutexes, Sync and retry policy are unchanged. No actual process-crash claim.
+Same frozen11 cases now PASS, zero skips/errors,113.735s:
+`jvm-green-9da65bff21f64331ad7c085a7439445b`; result SHA256
+`24c5d7ed2683e0e7ee6868c4d9348c90e13b630599adbba87c7a7ba1ad71ef99`,
+raw XML `0086c2b22dbb8a21f96380d62a065522dfa682e66e46fa7746897db2ac56579e`.
+All protected source/output inventories remained unchanged within each run;
+11 pure validator negatives also passed. Receipts live under maintenance WT
+`artifacts/release27-engineering-20261004/storage-prerequisite/import-error-status-review`.
+
+Synthetic callback exceptions establish this Result/cancellation contract, NOT a
+native ERROR-write or complete network-import/crash proof. An additive real Room
+page-limit ERROR-writer test and full subsequent regressions remain pending.
+Normal debug/test build is now running for the new deletion-workflow SDK proof.
+No release signing, push, production or physical-device change; Gate15 still locked.
+
+### SQLite-full observer proof and fresh deletion preparation 2026-10-04 19:00 Europe/Berlin
+
+The independently reviewed fixture-only native exception observer now establishes
+the actual SQLiteFullException at the unchanged real generated catalog INSERT
+execute() boundary. It rethrows the identical object; the outer known Room rollback
+mask is accepted only alongside that exact per-attempt native witness. No product
+SQL, transaction, deadline, original44 test or preservation oracle was changed.
+Both previous45th-test failures remain retained, not overwritten or called PASS.
+
+Isolated build `40116ed93c4b49a5ab8ff76a45d2b8b7` passed124.969s; check/install passed.
+Runtime `runtime-run-1b9b2d2d601d4a6d943be1a86fd341e6` passed45/45, zero skips/failures,
+109.877s. All source/output, identity, offline, ordinary-package and terminal guards
+passed. All15 tables, private fixtures, schema, sequence, photos, ticket and cursor
+are preserved through the actual failed import and reopen; lifting only the owned
+page cap allows the same prepared import to succeed, followed by another reopen.
+This is bounded SQLite max_page_count exhaustion, NOT physical ENOSPC, WAL,
+power-loss,13GiB or the outer import ERROR-status-write proof.
+
+Receipts below the maintenance worktree's
+`artifacts/release27-engineering-20261004/storage-prerequisite/sqlite-full-proof/runs/40116ed93c4b49a5ab8ff76a45d2b8b7`:
+runtime manifest SHA256 `96a1ae6ee7185551ae8897dd1ddb039162e94ea0ae0e6c4eaabfdbd8888d5ee9`;
+JUnit log `2960f704e2a7ea7d980e0b24b6485a0845148de070c8e431304a457dc92b98c4`.
+Owned-package cleanup `57d6412efcda43a1b200d551e0d6c271` passed; manifest
+`7f51b431b7843e935b397e7ff86af09fc2a225c9ec815612d4696efdbb376bc0`.
+Only identified emulator5558 was shut down afterwards, without ordinary data clear.
+
+The fresh actual deletion-workflow proof packet is locally applied but not yet built
+or run on Android. Its complete host pure suite passed92/92, zero skips/failures,
+18.461s; saved output `g9-deletion-workflow-review/pure-host-92-output.log` SHA256
+`36a1563b7b9a16e6c0f30d45f72397ee742674b8bd1f3639636f8b913b7eb1f5`.
+This is not a Firebase/Android runtime or final provider-deletion proof.
+
+A distinct static importer defect is under RED-test preparation: the existing
+Result.onFailure status writer can itself throw and escape the import Result.
+Its effect differs for immediate launch and WorkManager; no process crash has been
+measured. Proposed changes remain artifact-only pending cancellation review and
+genuine regression. Full-Sync retained; no release signing, push or deployment.
+Gate15 remains locked by the separate critical evidence boundaries.
+
+### Second fixed same-binary API37 full regression 2026-10-04 18:41 Europe/Berlin
+
+The sole predeclared repeat `16a32691058043a7bd18b7e7665e879c` passed371/371,
+zero failures/skips,335.961s, on the fresh observed boot. Both diagnostic parsers
+passed with no errors; source/APK/environment checks remained exact. Same app
+`58bbfa38...39427` and test `2e7be736...aceca` as the earlier394.237s PASS;
+no new code, timeout, fixture or lifecycle change between these completed suites.
+No claim of speed improvement follows from whole-suite duration variance.
+
+Receipt in the maintenance worktree under
+`artifacts/release27-engineering-20261004/compatibility-remaining-review/ocr-call-timing-review/runtime-api37-full371-16a32691058043a7bd18b7e7665e879c`.
+SHA256 manifest `9085112aa711f0c94e723596a37a20f4cf9774ce4abdcefa292cc51490620be0`;
+JUnit `79b944801e5e82ee7211e1ea0bc7503cfeac2d5eb170fff44ec55c2602fe3e91`;
+diagnostics `8c01b9795faf68273153c5458a41a2feb6065203bc3a987958d9f12684c1aca0`;
+terminal `905564330e0a237ad0190180b269b4d4d29bda4aaeb11f229cb5b3a19d8f6e23`;
+raw OCR `9743afdb5824d26f0f6774e451c58457aa50c645bf082868d982d2db38c1efab`.
+No active instrumentation/main-app PID/camera clients at terminal; cached test
+PID3883/UID10230 state18 remains explicitly recorded. Not a native-unload or
+no-background-work proof. Root shut down only the identified emulator after
+successful terminal checks, without data clearing. The historical370/371 OCR
+failure remains retained and unexplained, not relabelled fixed by these two PASSes.
+SQLite-full and real fresh deletion-workflow tests remain pending; Gate15 locked.
+
+### SQLite-full actual negative result 2026-10-04 18:21 Europe/Berlin
+
+Update18:36: the predeclared second same-binary API37 run is in progress under
+token `16a32691058043a7bd18b7e7665e879c`, boot `e24cef40-a38e-46ac-96c6-96ad8791e3ab`,
+profile SHA256 `c680abd4d4286acd407d37cd94899a9c3b2054f7350e8e224681f8b43f501b3b`.
+Preflight initially rejected an existing cached-empty app PID2873/UID10229;
+Root independently verified installed APK hashes, absent instrumentation/camera
+clients, and stopped only that pre-test emulator app, without data clearing.
+Next preflight `f6be0ed217ff4e6cb84d4cb828599b3d` passed with all input guards.
+These were preparation-only checks, not repeated JUnit until green. Exact371
+identities/61 selectors and diagnostic contracts remain unchanged. No result yet.
+
+Update18:28: diagnostic build `3e478acfdef74a2491d90e75cbac11d2` passed140.28s,
+check/install passed. Runtime `runtime-run-1c7bfda1d4014a3b82d1b7460300a88d`
+again passed original44 and failed the new45th (113.505s). Attached actual cause:
+`android.database.sqlite.SQLiteException: cannot rollback - no transaction is active (code 1)`
+from SQLiteSession.endTransactionUnchecked439 / RoomDatabase.withTransaction2048.
+This confirms outer rollback masking, not an import data-preservation PASS.
+Cleanup `runtime-cleanup-02dca64fe39e4301b49871d9dbc6c662` passed.
+An independent review proposes observing/rethrowing the actual SQLiteFullException
+at the unchanged real compiled INSERT execute() boundary in the fixture only;
+all15 typed-table/reopen/same-import oracles remain mandatory. No product change
+is justified merely to satisfy this test. Original failures remain retained.
+
+The isolated45-case build `4dabe0ba7fe54a4fbe85d5e961b58e6f` succeeded136.844s;
+fresh check/install passed. Actual runtime
+`runtime-run-0cb2e44ac8bf4959998afc0f29c91084` failed45th case after114.135s:
+all original44 passed, but `realImportSqliteFullRollsBackAllRowsAndResumesAfterOwnedLimitLift`
+did not observe the required actual SQLiteFullException in the caught cause chain.
+No rollback/reopen/resumption PASS follows from this. Cleanup
+`runtime-cleanup-95651365cf5541bf99c4aaf5eb39c8a7` passed; ordinary packages,
+Redmi and production were untouched. Original negative receipt remains retained.
+
+A subsequent read-only SQLiteLog query shows native error13 during the real
+catalog INSERT followed2ms later by error1 during ROLLBACK (no active transaction),
+at16:12:18 device time, PID10313/thread10345. This suggests cleanup may mask
+the original exception, but does not by itself establish the required operation
+cause or complete data-integrity proof. A diagnostic-only isolated fixture change
+now attaches the original caught throwable to the same rejecting assertion.
+No product source, selection45,90s bound or data oracle changed. Source SHA256
+`5ececdd591c2797a2fb91ad2ef60fe8cacd7739f8e0a05326694fb184204de08`;
+all12 pure adapter tests passed0.080s. Fresh build/runtime pending.
+The one predeclared same-binary API37 repeat remains pending after cleanup.
+Gate15 remains locked; no release signing, push or deployment.
+
+### Actual OS wake and same-child completion 2026-10-04 18:03 Europe/Berlin
+
+Isolated debug build7 `97f18412c2d7447f93a648aca3ecd14c` passed in160.125s,
+with protected sources/ordinary outputs unchanged. Fresh check/install passed.
+Runtime `runtime-run-eb7dc56b77a44ab4856fc421a796f872` then passed the complete
+bounded OS-triggered fresh-process/same-persisted-child proof on API26/5558:
+parent `819d39a7-6195-4b39-83b6-ee92768931e4`, worker PID7506; genuinely
+constraint-stopped/requeued child `cb522acb-8455-489d-94af-0c21c4130697` resumed
+under OS-started PID8153, without replacing its UUID or dependency.
+Actual system_server PID1711/UID1000 process-start events plus matching
+SystemJobService-before-worker delivery were retained for both wakes. Parent
+128 transactions/129→2 and child2→1 completed with exact protected table/photo
+oracle, cleared maintenance state and two successful singleton assertions.
+Measured device gates1413ms/1195ms stayed inside the unchanged5s bound; unchanged
+30s worker/120s proof bounds applied. Normal GreedyScheduler remains enabled:
+this is not an exclusive-SystemJob dispatch claim or an OEM/physical/reboot test.
+
+Manifest SHA256 `7c40afbd09d75a0ca7f7ee6d2d3d9944cf0de64a224e6a6719b693a2c9eff9a4`;
+original final verification `974fd960666588f7d65402fbcd2791ee5146cc405c1cc5936448b634f09b846f`.
+Battery restored exactly and all final source/device checks passed. The first
+explicit cleanup removed both owned packages but its subsequent SDK-property
+read returned ADB exit255; `runtime-cleanup-d1fe89d0880c450bbd6b4ab747146811`
+remains FAIL. The separate cleanup verification
+`runtime-cleanup-43d14285c0f9484eaa95de63e2e122d0` passed against its
+already-cleaned ownership receipt with all final guards; no runtime PASS was
+rewritten or enlarged. Only owned synthetic packages were removed; ordinary
+app data and all host proof receipts remain.
+Prior failed proof attempts remain retained. SQLite-full and the predeclared
+second same-binary API37 run remain next; no release/Gate15 approval follows yet.
+
+### Fresh API37 timing-enabled full regression 2026-10-04 17:48 Europe/Berlin
+
+Update17:56: OS build6 `37239f59a4e94bf18ccd805c9c1ed1a8` succeeded176.234s.
+Check/install passed on freshly observed API26 boot
+`3033979d-db02-460f-820e-841235bdfd85`, profile SHA256
+`e7efe0eaeacd9c225e3b3408b17c366c768f508286904f8b531e7afd59fadf2a`.
+Actual runtime `d34c79aff1d34b598f9d657b73571367` remains FAIL before OS wake:
+the baseline contains real user0/UID1037 WebView preload-helper process events
+with two empty hosting fields. Original baseline SHA256
+`fe5fe976b09e8e403e15d90a6bd59193e5b2d43d04e62fe928cb895922d3bb48`.
+Battery restored exactly, final guards passed, owned package cleanup
+`a6e2902898da4833acb371e13715b53b` passed. Two additive pure cases first
+reproduced the error (10 pass/1 error), then passed11/11 after the parser
+admitted only those two observed helper names with user0/UID1037/both fields
+empty. Exact owned service-launch validation is unchanged; no product code
+or test deadline changed. No runtime PASS is inferred from this parser fix.
+
+The fresh normal debug pair (app SHA256
+`58bbfa38c2db6bcaa895111fa526a1640f3419bbf085aa3ef909c05136039427`,
+test `2e7be736b83c4ede598043d621a4c21234ba61b50465f022f687574c091aceca`)
+built in208.000s and was separately verified against the existing Android Debug
+certificate. Only owned API37/5560 received this pair. Its fresh observed boot
+`be83254d-300c-434b-8321-3d3091f00178`, image/AVD metadata, dependencies and APKs
+are bound by profile SHA256
+`47735e09d45609ef63f6341f547db2fa2a36593df282bba9fad0613e222c238e`.
+
+The original371 identities/61 selectors then passed **371/371, zero failures,
+zero skips**. Timing and original probe parsers both passed, with unchanged
+source/protected-output inventories. Receipt directory in the maintenance worktree:
+`artifacts/release27-engineering-20261004/compatibility-remaining-review/ocr-call-timing-review/runtime-api37-full371-0ddf0d0f06d74983a7efdab75bbe95f2`.
+Manifest SHA256 `ec30a05a40554393ddf7f5eb75fbe0b805f983c90c1419365d564fedc809a3da`;
+instrumentation `05f8ecbf3316dda228fdbad509eb5bfda3377a06acc752ac62cabd238732a898`;
+diagnostics `a7bde27d484d1580557b77a17a37967cae8a3f2ed5663d9ee1f4194b94b35f74`.
+The explicit terminal contract observed no active instrumentation, no main-app
+PID and no current camera client, while separately recording any cached test
+process. It does NOT claim all processes absent, native unload completion or
+absence of background work. Historical failed receipts remain unchanged.
+
+The formerly failing cancellation-followed-by-new-identity test passed in this
+run. Its first B number task completed1854.526ms after process() returned and
+reached serial processing0.525ms later. These are task-callback/dispatch intervals,
+not isolated native CPU measurements. This one green timing run does NOT prove a
+fix for the previous intermittent370/371 failure: only bounded diagnostics were
+added, deadlines/fixtures/assertions were not relaxed, and no SDK-lifecycle fix
+was made. A/B trace clocks have separate origins and must not be subtracted.
+
+The durable OS-launch witness correction was independently reviewed; its9 new
+pure cases and25 existing host cases pass. Actual OS/SQLite-full proofs remain
+pending. API37 was stopped only after terminal completion, without clearing data,
+then the next isolated OS proof build was started. Full-Sync remains, Delta off;
+Gate15 remains locked. No signing, push, deployment, Play upload or Redmi action.
+
+### Continued local verification 2026-10-04 17:06 Europe/Berlin
+
+Update17:29: Fifth OS build `39dbb3d9c0e64197b6e846377af64de9` succeeded
+in228.953s. One preflight-only attempt `db99761117b94aa1bf47db6b1b4c9f5e`
+failed a20s pidof transport bound before any test/battery mutation; final
+guards passed and its receipt remains FAIL. The same byte-identical pair's
+first actual attempt `d565110d7e4a441b9895f655830cca4c` reached parent128
+batches/129→2 and true constraint-cancelled ENQUEUED child
+`a1a09cb8-854c-4085-9427-c410224950c9`, preserving its dependency across
+normal termination of PID14461. The OS restarted PID14994, same child UUID,
+attempt1. This full attempt still remains **FAIL**: its mandatory live service
+binding witness was no longer present and its unchanged5s gate expired.
+Retained command0277 has actual child onStartJob before Worker creation/gate,
+but `dumpsys activity services` shows `(nothing)` after the normal service
+callback had already returned. Root separately observed system-server PID1714
+`am_proc_start` with exact PID14994/UID10087/owned package, reason `service`,
+component `androidx.work.impl.background.systemjob.SystemJobService`. This is
+useful diagnosis, not a retroactive PASS or completed child-body assertion.
+Battery restored exactly, final guards passed; cleanup
+`9e689e9f09104662ac71f52d2758fb20` removed only owned synthetic packages.
+API26 was then stopped, without resetting its data, before normal debug build
+and the next API37 scanner measurement. Redmi remains untouched.
+
+Update17:18: Fourth build `b0e5d98afb4d4b678803357729a79ccd` passed
+in166.360s. Actual parent OS wake/PID11645, SystemJobService-before-Worker
+ordering and bounded1212ms gate passed. Parent completed128 batches/129→2
+rows with exact protected state and created child
+`7f87f11d-3803-4160-ac61-899d5937e92e`. The complete runtime remains **FAIL**:
+the artificial bare `awaitCancellation()` hold allowed a weak future
+completer to be garbage collected (`FutureGarbageCollectedException`). Child
+became FAILED, not ENQUEUED; the unchanged assertion correctly rejected it.
+The cancellation marker alone is not an OS-cancellation proof. Evidence:
+`runtime-run-9f6e28af641243b0861f2c4df63b0a37`, plus root's exact
+`observations-b0e5d98a.txt`. Battery restoration and final guards passed;
+receipt-owned cleanup `2e7bdd4da201466b9c111263a7f534de` passed.
+Only the fixture now retains its artificial hold in a process-local
+`CompletableDeferred` that is never completed, preserving genuine Worker
+cancellation and every original state/deadline assertion. Independent static
+review found no blocker; the next fresh runtime is still required. No product
+fix or complete scheduler clearance is claimed from this fixture change.
+
+The third OS proof debug pair `ae405270cd01459996e17a038700ec0f` built
+successfully in145.563s, with frozen sources/protected outputs unchanged.
+Its actual preflight and owned installation passed. Runtime
+`runtime-run-bb33b9b9614f4441a683da72867260e9` remains **FAIL**: Android8's
+SQLite3.18.2 shell does not implement the `-readonly` command-line switch.
+Original command0077 retains the exact error. The host therefore stopped
+before making the claimed OS-continuation assertions. Root's separate
+read-only observation confirmed `file:<exact owned DB>?mode=ro` can read
+that actual WorkDB; an absent URI DB fails without creating a file.
+This is a proof-host compatibility issue, not evidence of production loss.
+Battery restoration and final guards passed. Explicit cleanup
+`runtime-cleanup-c1c2a018f4e942988ff815f6fb7c8e90` passed, removing only the
+receipt-owned synthetic package pair. All original failed receipts remain.
+
+The independent scanner lifecycle review found a candidate boundary, not
+a proven cause: a session-specific MLKit client shares the SDK's underlying
+option-keyed resource, and public `close()` returns before its queued unpin
+necessarily finishes. Existing cancellation tests prove app session/task
+lease cleanup, not SDK unload completion. Fresh task/dispatch timing is
+required before any product change; no timeout extension, private SDK API,
+test relaxation or artificial waiting was introduced.
+
+### Resumed local verification 2026-10-04 16:42 Europe/Berlin
+
+The first isolated OS-scheduler build (`storage-prerequisite/os-scheduler-proof/
+runs/4c707189e014406094b2057a43a2aec1`) failed compilation because its fixture's
+`assertFinalData` called suspend DAO methods from a non-suspend function. Only
+that fixture declaration was changed to `suspend`; both callers already run in
+coroutine contexts. No production scheduling behavior or assertion changed.
+The fresh debug-only pair `b95e1e3f71d142f28dbaf81fa70a8420` built successfully
+in119.969s, with both source/protected-output snapshots unchanged. Its actual
+API26 preflight and receipt-owned installation passed; ordinary app/test APKs
+were preserved. The separate reviewed profile binds boot
+`7c069d2f-fc00-4cf9-beb0-288670d66e5a` and SHA256
+`0777aae7070decfd34caae0d2fc73a1f6eb23f2311344a68226bd5c75b6c4888`.
+
+The first preparation singleton passed on-device (1/1,1.864s), but the existing
+generic instrumentation parser only recognizes plural `OK (N tests)`, not the
+actual singleton `OK (1 test)`. The original complete run remains **FAIL**:
+`runtime-run-aaeb827d1e4446c48ed5b8e8bb4e71d0/manifest.json`, SHA256
+`2ca849985916311fc786df52e8069bd968a27f3773fdba55e5578c38462c6093`.
+Original phase log SHA256
+`ba86c80507c918b6ae90f40816e09b3576e0b2b7c709668bef7e22c4b31d13f6`.
+No OS process-restart/continuation PASS is claimed. Battery simulation was
+restored exactly; final source/device/ordinary-package guards passed. Explicit
+cleanup removed only this receipt-owned synthetic package pair, preserving all
+host reports and ordinary app data (`runtime-cleanup-a80453aa6e8c4031b28115b8c3929e7e`,
+manifestSHA256 `73a6ad37f2a29b56c3007e79d134346e357911c65ad360df34d0efe4168ec731`).
+
+The bounded debug-plus-explicit-observer OCR timing diagnostics are now compiled
+in that isolated build, but not yet runtime-verified. They do not change OCR
+deadlines, fixtures, thresholds or native-call count. A fresh complete JVM/lint
+run for151 suites/1052 cases completed: **1051 PASS, zero failures/errors, one
+unchanged named optional CardmarketLiveSmokeTest skip**,233.453s. Debug lint:
+zero errors,144 existing warnings and4 hints. Both source/protected-output
+snapshots remained unchanged. Receipt:
+`compatibility-remaining-review/ocr-call-timing-review/full-jvm-lint-5a53e416195d4329982369f49c5c6f9e/result.json`,
+SHA256 `2003ca6b0d1093a164a564bff466086d05c3102f9034179960652a162aeb0d82`.
+The seven singleton grammar and four wake-command host tests also pass, without
+changing the generic pinned instrumentation validator. The previous
+API37 full370/371 failure remains open. Full-Sync/Delta-off, Gate15 lock, no
+release signing/push/production deployment/Play upload and untouched Redmi remain.
+
+The next OS attempt (`54c47ade9b9c40e7b405bee8cabb6d94`) built in140.281s and
+its preparation singleton passed1/1 in1.983s. Its strict host report readback
+then failed because API26 cannot exec the shell builtin `test` through run-as:
+the retained command0067 stderr is `run-as: exec failed for test: Permission denied`.
+The owned fixture report demonstrably existed. Root's read-only checks confirmed
+the exact `/system/bin/sh -c 'test -f <owned path>'` form returns0 for that file
+and1 for an absent fixture path; direct toybox test is unavailable. This is a
+host-fixture compatibility correction, not a production data-loss finding.
+The original full run remains FAIL, SHA256
+`788eb1f62ed96f3d378a02f1c5a1132ebabf7249fc6fbe22fa56d84455a57293`.
+Battery restored exactly and final guards passed; explicit owned cleanup passed,
+SHA256 `a95574c8c3bb98b0bb9ef8eb24c92b7b0b285ba994c8471417a46ca329524edc`.
+The new helper accepts only strict ASCII owned run/name components, empty output
+and integer0/1 exits. All18 proof-local host tests pass (7 existence,7 singleton,
+4 wake-publication); the next fresh complete run is pending. No original
+JUnit condition, real worker deadline, scheduler or product code was changed.
+
+The separate bounded OCR timing parser also passes20 pure tests. It requires
+four exact run-token/PID-bound snapshots with contiguous entries, no overflow
+or clock errors. Missing task completion is explicitly unknown, not a pending,
+failure, success or native-unload assertion. This is parser proof only; it does
+not supersede the Android17 full370/371 RED.
+
+### Current runtime checkpoint 2026-10-04 16:18 Europe/Berlin
+
+The current normal debug pair (app933850685d66/testa0286d8e1280) ran the
+unchanged full371 registry on API37.1/16KiB: **370 PASS, 1 FAIL, zero skips**,
+305.630s. The unchanged cancellation-followed-by-new-native-OCR test still
+returns no number instead of098/197. Its resource/cancellation assertions pass;
+the subsequent two same-analyzer identities both pass. The earlier focused8
+PASS is therefore not a complete scanner clearance. The failed capture starts
+two prioritized native calls but has no completed session readout before the
+5.053s probe deadline; it safely reports insufficient orientation evidence.
+This differs from the earlier unstarted-number priority bug. SDK completion,
+callback dispatch and deadline timing are not yet separately measured; no
+deadline, fixture, recognition assertion or acceptance threshold was relaxed.
+
+Original retained worktree proof:
+`compatibility-remaining-review/api37-full371-current/runtime-api37-full371-927795ea2e204f54aa83b776959c02db/`.
+Manifest SHA256 `ffac1456808b34bcf756a37a203194df3839c386f1fe4dd5e635c5427dd3a129`;
+raw instrumentation `313dc6c7c022a0e688322723ac8c4bec06e026dd784303aafb97acdc53f11992`.
+Both source/output inventories remained unchanged. Wrapper FAIL and null
+complete-diagnostics verdict remain preserved, not rewritten as a pass.
+
+The additive actual SDK singleton **passes** on the same APK pair in owned
+API36/5556, boot980e87a1-5412-4299-a452-77c3b06d3512:2.163s, one test, no skip.
+Actual SERVER-backed shared knowledge is ready before the atomic own access
+disable/deletion-lock write. Observed Session NO_ACCESS invalidates the shared
+consumer, closes its observation and prevents reuse without polling, Auth
+changes or new knowledge writes. It does not isolate which denied Session
+listener reports first, and does not supersede the original lock-only30s RED.
+Web proof `outputs/collection-sync-session-consumer-local/2026-10-04T14-16-42-516Z-694ee79d04564a8caa5c63cb889252f5/manifest.json`,
+SHA256 `c123d1f0cfcef76b69cd1e910a2b34209e135389a51441e2b70e8f474b0e3c3a`:
+exit0, atomic CAS cleanup, complete unchanged synthetic tree/accounts, ports
+and reverse mappings released, no active instrumentation, frozen inputs PASS.
+Both installed APK byte hashes and normal debug certificate61e8314b147e were
+independently checked. WT Rules were mechanically normalized CRLF→LF after
+semantic byte comparison; they now exactly equal Web Rules, with no rule change.
+
+API37 was stopped only after matching owned AVD/boot, no active instrumentation
+and no camera clients. API36 was booted without wipe/snapshot. Redmi unchanged.
+No signing, production deployment, Play upload or Git push; Gate15 stays locked.
+
+### Deletion access-fence lifetime: local RED/GREEN (2026-10-04 16:22)
+
+The existing account deletion path removed `accountAccess/<uid>` in its initial
+personal-data sweep, before its existing65-minute post-revocation expiry fence.
+The target's disabled payload could therefore be short-lived. This is a lifecycle
+defect, not proof that every remote listener coalesces those writes. A narrowly
+scoped backend fix keeps this exact owned inventory item unfinished until the
+existing post-expiry sweep. The start transaction replaces old role/lease fields
+with only `{disabled:true, updatedAt:now}`. Normal personal-data cleanup continues;
+the final sweep removes the access item and accounts for it in the receipt.
+No new worker, timer, Rules, expiry policy or job schema is introduced.
+
+Real local Auth/Firestore/Storage regression in the Web checkout retains all35
+existing test identities and adds one boundary/retry/foreign-protection case.
+Added assertions first reproduce **33 PASS / 3 FAIL / zero skips** against the
+unchanged backend (`outputs/private-operations-local/2026-10-04T14-18-04-023Z-e7e8563c/`,
+manifestSHA256 `671708d18a9aa82c2f085c7858f5b163e343ccbcfdd0f43d7613ac26d5f1db18`).
+With only the narrow backend patch, identical tests pass **36/36**,42.349s test
+time (`2026-10-04T14-20-11-689Z-a6a5cb93/`, manifestSHA256
+`8d54c3dd7c75d7aa3839e7a7f6fd9b9e88948f3c05eef123aa42f1e61b2a90a5`).
+Both retained manifests have unchanged source hashes and released local ports;
+actual Web add/increment and rejected-collision readbacks remain verified.
+Backend sourceSHA256 `07938f9340b2e253d156f337bc2ec78715cbd193d8d38ebd446ca531676ad050`.
+The17 host-safety tests also pass; none is a substitute for Android delivery.
+
+Scope is **fresh deletion jobs and their retries**, with an injected clock, not
+a65-minute wall-clock proof. Previously pending jobs whose old access document
+was already removed are not silently repaired/migrated. Concurrent role admin
+can still append metadata while disabled remains true; permanent minimality
+under such concurrent writes is not claimed. REVIEW_REQUIRED/failed jobs can
+retain this fence until operator continuation. Original lock-only SDK RED and
+production retention/operation proofs remain separate. Not deployed.
+
+The subsequent complete isolated Web unit regression also passes:78 files,
+1,295 cases, zero failures/skips/todos,24.580s. Original report/log:
+`outputs/release-local/2026-10-04T14-22-04-802Z-6996.{json,log}`. Network and
+ambient credentials remain excluded by the unchanged release-local runner.
+Existing JSDOM canvas-not-implemented and React act warnings are retained in the
+raw log; this is not a rendered browser QA or a production deployment proof.
+
+### Observed scanner-access denial: actual RED/GREEN (2026-10-04)
+
+The scanner's community-knowledge consumer could retain and reuse cached hints
+after the existing session had reported `NO_ACCESS` for that same owner. The
+shared production consumer is now generation/owner scoped: observed denial
+invalidates the hint and rejects subsequent cache reads and late callbacks for
+that owner during the consumer lifetime. External listener cleanup occurs outside
+the state lock. Foreign-owner denial and ordinary offline/error/checking states
+do not revoke legitimate offline knowledge; reviewed/pretester knowledge is
+unchanged. There is no new network request, polling, permission grant or data
+deletion. Coarse `ACTIVE`/access-confirmed state alone does not undo denial.
+
+Worktree evidence under `artifacts/release27-engineering-20261004/g9-no-access-review/`:
+
+- `jvm-red-8b11258d0d3c4c319aa34a9e8763a47d/result.json`: real
+  **6 assertion failures / 5 passes / zero skips or errors**, unchanged 11 methods;
+  raw XML SHA256 `bff2b1f586c9346413d61c7e6fbece00bbceb5675a0be92208b35b71f312d9a9`.
+- `jvm-green-f15c9cf2051f4eea83b077b3f4f59836/result.json`: same methods
+  **11/11 PASS**, 110.391s build/test command; raw XML SHA256
+  `63b36d477f44c2dca907ed4c0716e78cdda837a2dc7450ea107eb7e309bdf7b9`.
+- Both runs preserved complete protected source/output snapshots. The earlier
+  `jvm-red-8d95842daccf42188de51da17ba2ca9f` was a pre-test init/filter failure,
+  not a reproduced product failure, and remains retained as such.
+
+This closes the focused JVM regression only. Compose integration, broad current
+regression and genuine SDK integration remain pending. It does **not** change or
+close the prior real-SDK lock-only notification latency failure. Gate15 stays
+locked; no release signing, production deployment or Play upload occurred.
+
+An independent review then found a real consumer ABA regression: A's capture
+ignored an observation's null callback while B was current; returning to A before
+the conflated cloud-state collector observed B could revive the old hint. The
+additive twelfth test deliberately delivers B/null and returns to A without a
+cloud-state-B call. `jvm-aba-red-574355ca05034289a0b7d54d0daac3f8` reproduces
+exactly this stale-value assertion (11 controls PASS, 1 FAIL, zero skips/errors),
+raw XML SHA256 `3564c80823b596297a46db1261d149b8a6c54553c7dc98209212f5024e7aa3b5`.
+The narrow fix permanently retires an inactive capture when its callback arrives,
+closing its listener outside the consumer lock. A genuinely new capture may still
+use normal offline knowledge; an account transition is not an entitlement denial.
+The identical 12 methods then pass in
+`jvm-aba-green-c643ae28e7264114a0780c0f93f911a7` (109.796s command, 12/12, no skip),
+raw XML SHA256 `1038d4c741212d06aaaa58197079faf50de7b0cd74faf030a0a7bf742507707a`.
+Both source/protected-output checks pass. Seven additional pure receipt-parser
+tests pass; they are not Android evidence. The previously built standard debug
+pair `normal-debug-5a5b798ccd0e4eb68e4fe425f725d18d` passed its build in150.297s
+but predates this ABA fix and was **not installed or accepted as the final pair**.
+
+The fresh full JVM/lint invocation `full-jvm-lint-cad78ce0024c427a91507a8e473edb51`
+completed Gradle successfully in237.766s: **149 suites, 1,038 PASS, zero failures
+or errors, one unchanged explicit opt-in Cardmarket live-test SKIP**. The original
+wrapper receipt is retained as **FAIL**: its lint parser did not recognize the
+actual report's `Hint` severity. The raw lint report contains144 warnings and4
+hints, no Error/Fatal, SHA256
+`71933c23e9dd99990fc30dd67db30294e1d1d3640e96694c9e6a90b575c93553`.
+This is a receipt-parser compatibility issue, not an assertion failure or a
+suppressed lint error. Independent read-only receipt revalidation now passes:
+`revalidate-full-jvm-lint.py` SHA256
+`6adb24b62b0285de71e093889d33b401af3522e0abb10beda03fba733e911955`
+verified the unchanged original result/log/lint, all149 XML reports, fresh ordered
+task markers and both byte-identical source/output inventories. Its20 negative
+and positive pure checks pass (0.074s); Error/Fatal and unknown severities still
+fail closed. Original wrapper/result remain unchanged FAIL, separate verdict is
+`OFFLINE_REVALIDATED_JVM_LINT_PASS_WITH_EXISTING_OPT_IN_SKIP`; no new Gradle run.
+All protected inputs/outputs remained identical. The new consumer files have
+zero lint findings; the flagged CardVaultApp source expressions and four
+autoboxing hints already exist in HEADf76feaf. A complete old/new lint comparison
+is unavailable because the earlier1027-case run did not archive its raw lint XML.
+
+The actual post-ABA normal debug pair is now built in
+`normal-debug-70beca95920f424591725ed4df579142` (155.907s, protected guards PASS):
+app SHA256 `7c89b08327bf95ed1933cd9a648e2328342d28232e2feeb33df7e74e37da6ebd`,
+test SHA256 `74168e2326db56a83532ccb6cf826cde320f3fe08ce1083379372b7add95e040`.
+This pair was subsequently installed and verified on the owned API37.1/16KiB
+emulator; its focused runtime result is recorded below, not a release approval.
+
+### API37 focused runtime: real OCR starvation reproduced (2026-10-04)
+
+`compatibility-remaining-review/api37-focus8/runtime-focus8-d8b1b53eaf79415e8139597c2222a09e/`
+ran the eight explicit methods on the exact post-ABA debug pair: **6 PASS, 2
+assertion failures, zero skips**, 28.379s. The real CameraX all-rotations case,
+three actual Compose-consumer cases and two cancellation controls pass. Both
+unchanged real-ML-Kit identity assertions fail: expected098/197 or094/084,
+actual collectorNumber=null. Neither fixtures nor deadlines were relaxed.
+Manifest SHA256 `6a75f2ddf74fc26f158050050d3e3976ac053711169a10d7efc3bdc42810fe9e`;
+JUnit log `b636a26216964b6eefca8d1dd423c69f9b60afe7f815bf0e39fa82dcf9da85ca`;
+raw OCR log `d87a990d53ecc2b42b26ec66ed623c5f5d0ce6d61e576305ec8e8d894f06a1bd`.
+
+Actual probe wall times are5.011s and5.013s. Only4/3 native OCR calls start;
+only2/1 name ROIs complete. The modern number ROI is sixth in the existing
+launch order and therefore is never attempted in either capture. Name-only
+score20 is safely rejected, clearing identity instead of inventing a match.
+This establishes scheduling starvation under the measured deadline, not why
+native OCR completion itself is slow. The second same-session capture is not
+reached after the first assertion fails. The bounded next candidate is launch
+priority only, with original pixel/slot/cache identities and time limits kept.
+It remains unverified until actual regressions are rerun.
+
+All source/APK/profile guards pass. The wrapper remains FAIL also because an
+app PID persists after instrumentation; raw camera/process dumps are retained.
+No automatic force-stop was used to turn that postcondition green. The earlier
+368/371 API37 result and the independent SDK lock-only RED remain unresolved.
+No phone action, production change, signing or Play upload occurred.
+
+The scheduling-only candidate is now implemented in the separate worktree:
+original modern NUMBER groups for each orientation, then original NAME/SET,
+then the unchanged stable remainder. Group objects, original result indices,
+cache keys, pixels, evidence thresholds, timeouts and concurrency remain intact;
+the later full OCR batch returns its original list/order unchanged. Eight added
+JVM cases cover orientation fairness, all-slot preservation, out-of-order result
+mapping, duplicate keys/blank cache hits, timeout cleanup suffix and conservative
+acceptance of unknown sets. No instrumented assertion was changed.
+
+`ocr-priority-review/full-jvm-lint-eac146754b154d2aac82e311cfe0b5b5/`
+passes the complete fresh JVM/lint run in225.985s: **150 suites, 1,046 PASS,
+zero failures/errors, the one unchanged optional live SKIP**. Lint has144
+warnings and4 hints, no errors; both source/output inventories match. The old
+Hint-parser failure and its receipts are untouched; this fresh wrapper explicitly
+recognizes the observed Hint severity while still rejecting Error/Fatal.
+New normal debug pair `normal-debug-5325b88b750a45cdb5aaeb1385a6053b` builds in
+153.407s with protected guards passing: app SHA256
+`933850685d669070fb44ce8f019b486a5b60999618bbbd2b10c25b42ba172845`, test
+`a0286d8e1280f3429e10ab572d97b7a731f94642fc0755fbff3021b9c5819455`.
+Both retain the standard debug certificate; runtime acceptance is still pending.
+
+The subsequent exact focus8 runtime
+`runtime-focus8-30ae980f4a9e467e835af75781b8e7ea` has **8/8 actual JUnit PASS,
+zero skips/failures**, 67.52s. The unchanged native OCR assertions now read
+OBF098/197, PBL094/084 and OBF098/197 in the three required captures, each
+orientation score98 and empty quality reason. All three full diagnostic records
+validate, and source/APK/environment inventories remain identical. These captures
+take16.280/16.377/16.209s on this emulator; they demonstrate correct identity
+instead of the prior early manual fallback, **not a demonstrated latency win**.
+Manifest SHA256 `0488c35eb2ed6f2d9d00b7b9504a0677ddd736ede3ebfac2cc97f67e354b3f57`,
+raw JUnit `d93480154a74b413cc9328910b51607243119c2e8a6479f6f33f78b5ff51b274`,
+OCR log `d77f525f40e63fa7424bbbe70f5dea58b2aa491841f1e79642987b09b5f9cfc1`.
+
+The wrapper is deliberately retained **FAIL**, solely its strict final empty-PID
+guard: AndroidX leaves a cached Recents helper in the test package. Independent
+fresh inspection finds no app process or live app/test activity, both service
+lists empty, camera clients empty/device closed, and the rotation history names
+AndroidX InstrumentationActivityInvoker$EmptyActivity. The separate explicitly
+owned test-helper cleanup at16:02:44+02:00 verifies boot049356a3-21a2-40d8-ac15-136a2ce30a54,
+test APK hash above, UID10230, PID4337/startTicks28521 before stopping only
+com.dominik.cardvault.test. Both app/test PIDs are then absent. No data clear,
+phone action or retroactive manifest PASS. The first cleanup attempt refused an
+unrecognized dump-header indentation without stopping anything. Full current
+API37 regression remains a separate requirement.
+
+### User-directed storage scope correction and API26 baseline (2026-10-04)
+
+**Actual process-restart recovery, completed04.10:** The separate isolated
+`storage-prerequisite/restart-host/runs/c432caa5f1e44d789909d69a62d45b9a/`
+build and `runtime-run-c592df5d014c491aa8aa9d84f41c178f` both pass. Run manifest
+SHA256 `891eeeefd91f5e9818d150ba1eba253f8865b9e24d915904bd40eeaf0ff0e1ca`.
+The first real worker performs128 bounded transactions, leaves two of129 genuine
+price rows and an actual dependent ENQUEUED continuation. After verified closure
+and stopping only that owned test app, process26733 is replaced by process27237.
+The fresh process uses the production startup-recovery helper without a new import:
+it resumes the original cursor, removes only the final obsolete row, retains the
+complete latest row, and clears the finished ticket/cursor. Both singleton tests
+PASS with no skip. Raw prepare/resume report hashes are respectively
+`16f585221c741e407ff62133df7451e18553b4f4f174d369d3dc50fb17ee62c0` and
+`8e26043034b0b25a0e70381f77a65873d44c3dce8a5fb1ae757d615bdcb6e53a`.
+Three owners including guest, a tombstone, pending outboxes, typed table contents
+and the photo remain unchanged. UID/APKs/boot and closed DB/sidecar/photo/prepare
+bytes match across the stop. Both source/output trees, R26, ordinary emulator apps
+and final offline/idle checks pass. Explicit owned cleanup
+`runtime-cleanup-ab5fcb9331b548ca8349871dd1bfc085` passes (manifest SHA256
+`53ca8fd0263e7fca25d82299471fe80c9a9d8c42eb4ee1c9e73d2143c4544e21`).
+This proves **startup fallback after a real process change**, not OS JobScheduler
+delivery, persisted WorkDB-child survival, reboot or interruption during SQL.
+The test-only WorkManager queue is deliberately cancelled/closed before stopping;
+that boundary is explicit and cannot be represented as an OS scheduling PASS.
+
+The user explicitly discontinued the artificial 13GiB fill run via the parallel
+`Domidex-Aufbau und Skalierung` task and subsequently resumed this task. The
+original human instructions and the deliberate package removal were read back.
+The run was stopped intentionally and its isolated emulator packages removed;
+it is **WITHDRAWN / NO RESULT**, not a product failure and not PASS. Do not restart
+it. Its interrupted receipt still says RUNNING because the host process was
+terminated; that stale field does not mean work continues. Earlier references
+below to a running large seed or a mandatory 13GiB prerequisite are superseded.
+
+The product requirement remains bounded image/price caches, collection/outbox
+protection, correct existing Full-Sync, cleanup and real reclaimed storage, and
+safe interruption/restart/resume. Smaller deterministic fixtures and existing
+contract/pilot evidence must prove those properties. Removing the artificial
+size target does not turn incomplete runtime wiring or missing proofs green.
+The 500,000-row pilot and earlier completed tests remain valid for their stated
+scope. No phone, real collection or Cloud data was involved in that fill run.
+
+The separate maintenance worktree passed its first real Android-8 matrix:
+`artifacts/release27-engineering-20261004/maintenance-proof/b5f1392ad33143fb823a9944f43d28db/runtime-run-a382df2cfce74607bc1c78e4001ec41b/manifest.json`
+(under the managed worktree), SHA256
+`a8b1fed3df07178f1d731c76ee8c530b5b024e19499964776d7e9ed8db1ea120`:
+**38/38 PASS, zero skipped/failed**, instrumentation 6.403s. Ordinary emulator
+app/test APK hashes, both source inventories and R26/standard outputs stayed
+unchanged. Its exact UUID test pair was then explicitly removed with a passing
+cleanup receipt `runtime-cleanup-31dfbbe9cf7d41c889471feb402e5c33`; this was on
+API26/5558, distinct from the discontinued API36/5562 large-fill package.
+
+Independent review then found a narrower missing case: a later legitimate
+provider/device clock reference can clamp backwards, making the active pass's
+older cutoff too aggressive for the newly conservative collection window.
+The unchanged 38 methods plus the new exact-data regression were executed in
+`maintenance-proof/1f0fa75b513c410ca132e32792e3fc72/runtime-run-7b0706fdb7a4462497f3335d8ce422ba/manifest.json`:
+**38 PASS / 1 FAIL, no skips**, 5.762s. The failure is the actual all-row equality
+assertion after the backwards reference, not compilation or instrumentation.
+Source/protected-output inventories and final device guards remained unchanged.
+The owned pair was removed by passing cleanup
+`runtime-cleanup-c54cef51280840eca08842115e58a8f9`; ordinary apps were untouched.
+A seven-line guard now pauses without changing rows, cursor or tickets when the
+active cutoff is more aggressive than the newest verified reference permits.
+Its fresh identical 39-method GREEN run then passed **39/39, zero skips/failures**:
+`maintenance-proof/76e065d085764bf28bd68870b280df11/runtime-run-d6b0634755f1472eb6769fd4f0e8f959/manifest.json`,
+SHA256 `a18e81272acbd9ea2b1abbb7cc36afb0455221c11c7054cf59703c75e8b062f9`.
+Both source/protected inventories and ordinary-app/offline/idle checks passed.
+Its UUID pair was removed by passing cleanup
+`runtime-cleanup-2a6b8f914dd54161b728bb749cf3b0ab`. The test proves exact row and
+metadata preservation on the backwards clock, followed by resumption of the
+original durable cursor when verified time is sufficient again.
+The successful 38-case baseline is not represented as covering this new case.
+Worker scheduling, actual file reclamation and other critical release proofs
+remain open. No R27 signing, AAB, production deployment or Play upload yet.
+
+An additive 40th test is now prepared for 100,002 real price observations,
+98 bounded batches, exact independently derived 2,298 retained rows, 14 protected
+table multiset hashes, two photo-file hashes, actual cursor resumption and
+physical file/allocation reduction. It operates only on its private disposable
+UUID Room database. The 120s bound is cooperative around native SQL, not a native
+statement hard timeout. Its closed-fixture VACUUM is not automatic production
+compaction approval. Its first run is **39 PASS / 1 FAIL**, not a reclaim PASS:
+`maintenance-proof/c86a738772194bffae27a36bc3142ff5/runtime-run-bc1de15ffddd41838fe614374db2ef88/manifest.json`.
+After the exact row/cursor/protected-data/integrity checks, it failed the unverified
+`freelist_count > 0` expectation (13.301s total). The fixture had never selected
+or checked auto-vacuum mode. This is an unproven test precondition, not evidence
+of data loss. Guards passed; owned cleanup passed in
+`runtime-cleanup-29b70f104b074a7cafed9dab53abf621`.
+
+The completed 41-case follow-up preserves the prior 39 tests and separates two
+fixtures: explicit NONE configured before tables, retaining all original
+freelist/VACUUM assertions; and untouched actual Room default. FULL must itself
+reduce file length AND allocated blocks after DELETE/checkpoint. NONE/INCREMENTAL
+must pass the strict pre-compaction checks and owned-file VACUUM. Mode and exact
+byte counts are recorded, not inferred from an unrelated in-memory CLI database.
+
+Fresh API26 run `maintenance-proof/e4126c9743f94e97818762638c3694d1/runtime-run-b242fd8669564f0eb7c7f3dbedc9678f/manifest.json`
+passes **41/41, zero skips/failures**, 20.959s; manifest SHA256
+`d8ee9ae7febc303f5d0ee27f7498d1cfc796c0ab067a364302e2729822372379`.
+The adjacent `reclaim-observations.json`, SHA256
+`75caf6906f44313bfeb4ea0ac2ae86897e57259055bbfd85b6492cb15e3ee088`,
+retains the two exact-package/UUID tagged logcat observations. Both fixtures
+generated 100,002 rows, examined 100,002 in 98 batches, deleted 97,704, and retained
+the same independently derived 2,298-row typed hash. Fourteen protected table
+multiset hashes, two photo hashes, integrity, foreign keys and cursor reopening pass.
+Actual Room default was **auto_vacuum=1/FULL**: after deletion/checkpoint both file
+length and allocated bytes fell **18,059,264 -> 753,664**, without extra VACUUM.
+Explicit NONE retained 18,034,688 bytes/4,220 free pages after logical pruning;
+offline VACUUM of that exact owned test file reduced both byte measures to 659,456.
+This is small-fixture evidence, not 13GiB, every-platform/legacy database or
+production compaction evidence. No additional product VACUUM path is activated.
+Both source/protected-output inventories and final offline/ordinary-app/idle
+checks passed. The exact owned pair was removed with passing cleanup
+`runtime-cleanup-08ed4b15e16e4c4896a799b52c504b94`; no ordinary app data changed.
+
+The worktree now includes local Worker wiring after committed import and Ready
+startup: confirmed APPEND_OR_REPLACE continuation, 128 bounded batches / 30s
+checked between transactions, battery/storage constraints and finite retry.
+Invalid-clock/retry-exhausted tickets stay pending. Their WorkManager SUCCESS
+means transport completion with `maintenanceComplete=false`, not cleanup PASS;
+it prevents poisoning fresh already-appended successors. Fourteen new JVM tests
+and actual WorkManager evidence remain separate obligations. The whole JVM/lint
+rerun `storage-prerequisite/maintenance-jvm-36ca4cffac534331be29f54e45f24968/manifest.json`
+now passes **148 suites / 1,027 cases: 1,026 PASS, the same one optional SKIP,
+zero errors/failures**, including all fourteen new coordination cases. Build and
+lint succeeded in 2m49s; frozen inputs and standard/R26 outputs stayed unchanged.
+Actual Android queue execution is not implied by JVM success. Full-Sync is unchanged.
+No ordinary app installation or product cleanup has occurred.
+
+The subsequent real isolated API26 matrix now passes **44/44, zero skipped/failed**,
+instrumentation 111.277s. Its worktree-relative receipt is
+`artifacts/release27-engineering-20261004/maintenance-proof/9a1543d7cdab4ea3987b94136f8e5011/runtime-run-2a584624ecef429fb11f54d39af134e7/manifest.json`,
+SHA256 `1c0f8ca2e0affa7cce9a69102f2a2ec1041406c781487dd8a5ba5b45bea80eea`.
+All prior41 identities remain, plus three actual WorkManager2.11.2 queue cases.
+The deliberate failure control observes an already BLOCKED successor and then
+FAILED parent/child. The real INVALID_TICKET worker terminates as
+PAUSED_INVALID_TICKET with incomplete maintenance, permitting the fresh blocked
+successor to reach COMPLETE. The real retry-exhausted case records attempts
+`[0,1,2,0]`: two genuine retries, RETRY_EXHAUSTED predecessor, then COMPLETE
+successor. Both paused/exhausted parents are WorkManager SUCCEEDED, not a claim
+that their maintenance completed. All three reports record body/cleanup PASS.
+
+The read-only supplemental receipt in the same build directory,
+`runtime-check-af475825ad5b40d49119207bcf2ca866/manifest.json`, SHA256
+`1302e4a02aca623d4e4644350c81c3127fc1a51b00372f6c8cbf018616366d55`,
+retains exact package/run/invocation-bound `failure_control.json`, `invalid.json`
+and `exhausted.json` with byte hashes. Its final guards pass. Runtime source and
+protected-output inventories, ordinary app/test APKs, offline and final idle
+guards pass; the explicitly owned post-terminal stops are recorded, not natural
+process-exit evidence. The UUID pair was subsequently removed by passing
+`runtime-cleanup-87d5e2a918b140608e5c9bb1c6a48f29/manifest.json`, SHA256
+`b7dd0fb9bbe163d784cf39fb2de83dddbee0bd18115b034b9e5807c837460148`.
+This proves the controlled time-based WorkManager test engine with real Worker
+and database behavior, not OS scheduling, power-loss durability, process restart
+or low-disk behavior. Older RED receipts above remain unchanged. Gate15 remains
+blocked; no normal user database cleanup, release signing, AAB or Play action.
+
+The subsequent source-set isolation check moves the Reclaim and WorkManager
+queue classes byte-identically out of ordinary `app/src/androidTest` and into
+`scripts/verification/maintenance-proof/testSources`. Only two explicit copied
+source paths change; the six classes, 44 identities and all assertions remain.
+This avoids leaking proof-only WorkManager test dependencies/owned-package
+preconditions into the ordinary test build. Sixteen host contracts pass.
+Fresh isolated build `b61be36874ec4eb7b494133d25feb6e4` then passes the same
+**44/44, zero skipped/failed**, 110.422s, runtime
+`043f69601972424e93f2f7ddf8ae4088`, manifest SHA256
+`6e9710ac39affc9e75221e7fa52c7bb971c718647a30538fc4b11e4fe7bfe1a4`.
+Supplemental read `b793823c0e884af48ef252d069c8fc46` retains all three exact
+queue reports, manifest SHA256
+`7b29bba8b2876e603ebb4cf96b0239d59b0ef972b0b33b63713b22c5764c00db`.
+Owned cleanup `4bd9099059f548c08807f3b459928229` passes, SHA256
+`8889e457749a34bda23ab30d5efce72adb2d5fdcd4e36f7c5aa87475827147b1`.
+Both final protection guards pass; ordinary apps, production and R26 are untouched.
+This additional isolated success is not itself a normal instrumentation-build
+or process-restart proof. The subsequent ordinary compile-only check, with no
+proof init or work-testing dependency, passes in 126.313s:
+`compatibility-remaining-review/compile-standard-6c468d7e13bb4172a8bdae6631a2aba9/manifest.json`,
+SHA256 `db8d3eaacd67626a079c9c93e0060042e67b1e86adbdf9309c3ee98aeabaacea`.
+Debug Kotlin, ordinary Android-test Kotlin and the Android-test dependency model
+all compile. Both complete source and ordinary APK/AAB/mapping/R26 inventories
+stay byte-identical. This is not on-device execution or release verification.
+It includes additive OCR terminal-cache diagnostics and the G9 consumer
+extraction/regression baseline; no denial-fix PASS is inferred from compilation.
+The first focused JVM RED starter failed before tests because its init-script
+task admission did not account for the CLI test selector. Receipt
+`g9-no-access-review/jvm-red-8d95842daccf42188de51da17ba2ca9f/result.json`
+remains FAIL with all protection guards passing, not a reproduced product RED.
+The intended assertions and existing SDK failures remain unchanged.
+
+Physical compaction remains unactivated. SQLite's [VACUUM contract](https://www.sqlite.org/lang_vacuum.html)
+describes journal/WAL protection and up to twice the original file size in extra
+free disk, not a hard execution deadline. Existing NONE databases cannot gain
+incremental reclamation merely by a pragma: [auto_vacuum](https://www.sqlite.org/pragma.html#pragma_auto_vacuum).
+Actual default-mode evidence is checked before adding unnecessary machinery.
+
+### API26 annual diagnostic completion (2026-10-04)
+
+Only the full-plan diagnostic transport in `postFixExplain` is widened from
+64 rows to a bounded 1,024 rows / 256KiB total / 4KiB UTF-8 per detail. SQLite3.18.2
+expands the same query beyond64 rows; no SQL, model comparison, integrity, timing
+assertion or retention behavior changes. The old failed annual receipt is retained.
+Eight new adapter contracts and23 unchanged full-report/negative contracts pass.
+The first separate singleton build3bb576dcff1f44c1b409645ee298cc38 compiled and
+installed, but runtimee01a96ffce9545ab878f36d9eddcd85e failed BEFORE instrumentation:
+API26 `run-as` could not exec a standalone `test` command. Strict nonempty-output
+rejection prevented a false absence/PASS; no application test result exists.
+The exact owned pair was removed with passing cleanupe523186d83fb4b13aed18ac066899e48.
+Root verified the shell-builtin positive-directory/negative-file controls and
+corrected only the allowlisted absence probe. A fresh build/run is required;
+the earlier run is not relabelled and ordinary apps/R26 remain unchanged.
+
+Fresh isolated build314c277849584947aba15ef8eea02693 now passes its exact singleton,
+**1/1, zero skipped/failed, 124.915s**, in runtime44816510b8d2416289d7ccfb1b88e6c6.
+Manifest SHA256 `797d9dcc164a0d1752ce66975b8ecf7c220507771e3e2aa97d0dfa1a66c4cedb`;
+adjacent untouched raw report SHA256
+`cd60ad61104e70cdf84d3cac28c66b30784b68f7219a539fc516f16a98b599a4`.
+The complete SQLite3.18.2 aggregate plan has113 rows (legacy5), explaining the
+old diagnostic64-row abort. All13 samples,8 transport records,365 chart points,
+complete owner models,15 unchanged typed table inventories, FK and zero requested
+sync pass. The wrapper additionally verifies actual absence of each exact owned
+database/main/WAL/SHM/journal file, not just the Android report's cleanup assertion.
+Warm median public portfolio2092.1225ms; paired diagnostic legacy DAO+sweep4316.6743ms
+versus aggregate DAO+map2030.0594ms. Different paths/order: do not call this a matched
+whole-app/phone speedup. Ordinary APKs, both source inventories, standard/R26 files,
+offline/no-reverse and final idle guards pass. No release-gate or OS-restart claim.
+Owned cleanup439ee1e0d95f48f4abf915a3bac20b7f then passed all final guards.
+The full worktree-relative location is
+`artifacts/release27-engineering-20261004/compatibility-remaining-review/annual-adapter/runs/314c277849584947aba15ef8eea02693/`;
+the cleanup manifest SHA256 is
+`dcec8ea464e9b426b23235e69e40619e47b590404a772d5e1e59cea45bb2f0c6`.
+This closes the specific API26 full-plan diagnostic failure, not the remaining
+API37 camera/OCR failures or the complete storage/release gate.
+
+### Durable-maintenance checkpoint (2026-10-04, continuation, historical)
+
+Engineering checkpoint `f76feaf8a2a451416db968ad1991295d525abc29` was pushed
+non-forcibly to `codex/release-27-hardening` and read back from the remote. This
+is the retention foundation and proof harness, not a signed release. The main
+source tree and ordinary/R26 artifacts remain frozen for the still-running
+actual 13GiB seed. No scale PASS is claimed. The owned idle API36 regression
+emulator was stopped after identity/instrumentation checks to release RAM;
+neither its userdata nor the connected phone was changed.
+
+A separate managed worktree, `codex/r27-storage-maintenance`, now adds an atomic
+import ticket and durable maintenance cursor. They do not schedule deletion yet.
+Cursor advancement and bounded deletion share one Room transaction; a new import
+cannot erase the active pass or have its pending ticket cleared by an older pass.
+Fresh ticket authority must match committed verified-clock metadata. The fixed
+cutoff is never inferred from maintenance-time wall clock.
+
+Root's offline whole-JVM/lint receipt:
+`artifacts/release27-engineering-20261004/storage-prerequisite/maintenance-jvm-9a0556422fbf41129d51144683f98141/manifest.json`
+SHA256 `cd8a1c377ad85afbb54e21fc2aff4cf1fdad1afa8a6839ad6200e48e6eb68989`.
+It records **147 suites / 1,013 cases: 1,012 PASS, the same one opt-in SKIP,
+zero failures/errors**, with all source/protected inventories unchanged. The
+fourteen new file-Room tests are separate pending Android evidence; they are
+not included in that JVM count. The new fixed API26 harness's fourteen pure
+negative/parser tests pass. Its 38-case runtime matrix remains pending.
+
+The later root Web-module receipt
+`storage-prerequisite/market-local-tests-b743beebffcd43d2aec89ad3bf91edd4/manifest.json`
+records **174/174 PASS, zero skipped**, Node22.23.3, fifteen sources unchanged;
+test-log SHA256 `1adcbecc42f0e8d1be25e357eb53eb88bbfea8237f7610b3e47aa2451d0f63b0`.
+This adds a mandatory admitted-publisher wrapper and bounded CAS reservation
+tests to the earlier 131-case checkpoint. UNKNOWN/orphan reservations remain
+charged. The four-generation cap is fail-closed but NOT a continuous-production
+lifecycle or physical cloud billing cap. No Web commit, deployment, public route,
+Cloud write, signing, AAB or Google Play action is claimed for this checkpoint.
+
 ### Storage checkpoint and parallel backend evidence (2026-10-04)
 
 The actual 13GiB fixture is currently being generated on the dedicated offline
@@ -2481,17 +3442,17 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
 | 4 Collection/binder sync | IN PROGRESS, FULL retained | Current collection/binder SDK cases pass, including durable offline retry, separate-client stale-base convergence and1001-binder FULL/Room-reopen/idempotence (latest18.436s). Whole SDK run remains17/18 RED for the separate Gate9 lock-only case. Actual WorkManager retry1/1 and automatic large-budget continuation1/1 retain isolated-package scopes; exact4WorkSpecs/two cycles/complete local-remote integrity.18/18 focused Room controls remain dated. UI/OS/process delivery, simultaneous physical devices and broader mixed scale remain open. Delta is deferred; see SYNC.md |
-| 5 Pricing/catalog | IN PROGRESS | bounded Android import with4/4 real parser/Room persistence/rollback/conflicting-row cases, Web snapshot/identity fixes, seven verified mappings and incremental pricing tested. Conflicting duplicates were not found in the frozen provider download; this hardening does not close full coverage or centralized delivery |
+| 5 Pricing/catalog | IN PROGRESS | Bounded parser/Room import and verified mappings retain scope. API26 isolated46/46 proves catalog INSERT FULL plus real ERROR-status FULL, exact15-table preservation/reopen/recovery and retained failed Result. Three original JVM assertions reproduced, narrowly fixed,11/11 focused GREEN. Fresh full JVM/lint and final current-pair regression next. No complete provider price-coverage or central-cache production claim. |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card body cap/cancellation14/14, cache/package83/83. Missing-trend DTO resolves once instead of twice, full parity verified. O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator functional evidence) | Prior virtual rotation/CameraX fresh-JPEG tests retain their scopes. Actual MainActivity PreviewView STREAMING->CREATED/IDLE held1s->RESUMED/STREAMING passes twice13.144/12.801s without capture/queue/upload. New actual recreation/old-view retirement/new-view STREAMING test has1/1 JUnitPASS13.581s with protected-state checks. Overall wrapper failures for cached test-process idle are retained; separately verified owned cleanup is not retroactive whole-run PASS. Physical camera, HOME/OS-death, permission revocation and broader background matrix remain open |
 | 8 Recognition | IN PROGRESS (limited replay PASS) | Historical replays retain their scope. Latest owner-confirmed queue triple: Nidorina MEP101 read correctly3times, correct suggestions, two candidates each,4.2–4.7s active plus burst queue delay. Earlier sequential no-candidate observations have unknown ground truth and are not Nidorina failures. No automatic-printing, speedup vs26 or full hardware claim; quality checks unchanged |
-| 9 Community knowledge | IN PROGRESS, current expanded SDK run RED | Current17/18 after test-only executor fix: cache/sign-out passes without cleanup crash; lock-plus-valid-data-change gives genuine original-listener denial/null with preservation; lock-only still lacks denial in30s. Executor has genuine5FAIL/1PASS to6PASS regression.45 complete Admin snapshots/CAS restoration pass independently. Earlier16/16/61 synthetic/35 private-operation proofs retain their dated scopes. No fresh data leak or confirmed emulator cause inferred; cached identity-free hints are not forcibly erased by revocation. Eventarc/retry/load and live consent remain open |
-| 10 Privacy/lifecycle | IN PROGRESS (local owner/session fixes PASS) | Owner/session and deletion-consent fixes retain prior tests;35 local private-operation cases pass. Read-only metadata partly confirms provider configuration including seven-day Storage soft delete, not live-object TTL. Complete deletion/purge/operator workflow and retention decisions remain open |
-| 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Two actual Run revision resource configurations and partial retention metadata read-only verified; Hosting pinTag target, live metrics/alerts/billing and complete inventories remain unverified |
-| 12 Load/scale | PARTIAL; bounded portfolio history now compact | Genuine RED/GREEN and current2/2 sustained complete-model +29/29 focused Room proofs. Matched annual58 comparison: portfolio2950.91->1154.10ms for365dates, private45.39->53.79ms (no private improvement claimed). New13-sample full-model/SQL/15-table proof passes; all13 edge states x3owners and20000/20001/20000 fallback boundary pass. Original87-sample1k/5k/20k rerunPASS75.468s. ActualAPI36 multi-window testPASS82.971s, both concurrent commits before refill, all3x100001tuples coherent and15hashrestore. Unsafe states keep full history; no retention/schema/sync change. API26, O(N) sharing/fan-out and production load remain open |
-| 13 Full regression | IN PROGRESS, API37.1 RED | API36 app2c9ae510/test443db33e passes371/371, zero skips/failures,305.723s. New stableAPI37.1/16KiB run with unchanged app2c9ae510/test9354bed5 is368/371,3FAIL,0skip,280.558s: one fresh-device CAMERA grant plus two native OCR identity failures; strict cached-test idle also fails. Permission corrected only on owned5560, rerun pending; OCR diagnosis not resolved. Test-only Espresso3.7.0 supports target37 MessageQueue without compatibility bypass. Current SDK17/18 RED remains separate.925 executed JVM PASS/one existing opt-in skip retains its dated scope; later JVM UP-TO-DATE is not fresh proof. Both lints/releaseKotlin pass; no signing/minified runtime claim.1295Web/35private-operation retain dated scopes. Physical/live/final release contracts remain open |
+| 9 Community knowledge | IN PROGRESS; separate lock-only RED retained | Original18-case SDK suite remains17/18 because lock-only lacks listener denial within unchanged30s. Independent Session NO_ACCESS-to-consumer proof passes1/1. Fresh actual deletion-request/Auth/Firestore/Storage/Android workflow now passes1/1,2.257s, plus92 host controls and complete fixture/input cleanup. No listener SLA, legacy-job repair, final purge, Eventarc/load or live-consent claim. |
+| 10 Privacy/lifecycle | IN PROGRESS (fresh local deletion fence PASS) | Real local deletion-service suite36/36 and overall Web1295/1295 pass; fresh jobs atomically retain minimal disabled accountAccess through controlled65-minute session-expiry wait. Existing jobs whose access document was previously removed are not migrated; stalled/review-required jobs need operator continuation. Complete provider purge/expiry/retention workflow remains open. Seven-day Storage soft delete is not live-object TTL; no production change. |
+| 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Hosting live versionc71089a842d591bc now read-only bound to sharing-layout-repair-20260925 tag/revision with consistent start/end reads; actual limits2instances/40concurrency/60s/1CPU/512Mi. This does not prove IP provenance or load. Live metrics/alerts/billing and complete retention inventories remain unverified. |
+| 12 Load/scale | PARTIAL; bounded history and local maintenance verified | Prior matched58/87-sample and complete-model/SQL/private-data proofs remain dated; portfolio improvement is not private-binder speedup. API26 complete113-row annual plan now passes. User-approved12-month collection-only retention preserves every local owner/pending/tombstone and unowned latest price. Actual isolated44+SQLiteFull45, file reclamation, two-process recovery and OS-triggered same-child continuation pass. No physical ENOSPC/WAL/power-loss/OEM proof;13GiB test explicitly withdrawn, not a blocker to restart. O(N) sharing/fan-out and production load remain open. |
+| 13 Full regression | Current local regression PASS; release verification pending | Latest app64170e3c/test5da0d817 passes371/371, zero skips/failures,310.127s with source/diagnostic checks. Full JVM1062PASS/one unchanged opt-in skip; debug lint0errors/144warnings. Native46 and actual deletion workflow separately PASS. Historical368/371 and370/371 remain; intermittent OCR cause unresolved. Web1295/private36 retain dated scopes. Final physical/live/minified-packaged evidence is not inferred from debug PASS. |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
-| 15 Release engineering | BLOCKED by earlier gates | no release signing/build before critical gate evidence |
+| 15 Release engineering | Local candidate authorized; archive verification pending | Reviewed storage/import fixes and required local regressions complete. Integrate exact source and create only the user-authorized signed local candidate; verify version/signature/R8/native coverage. Earlier hardware/live/privacy/load limits remain rollout gates, not silently waived. No Play upload or stable publication. |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
 
 ## Initial findings (historical; later checkpoints document resolved items)
