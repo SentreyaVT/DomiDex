@@ -88,7 +88,7 @@
     <string name="portfolio_private_badge">Privater Tresor</string>
     <string name="portfolio_history">Wertentwicklung</string>
     <string name="portfolio_estimated_value">Geschätzter Sammlungswert</string>
-    <string name="portfolio_change">%1$.1f%% seit erstem gespeicherten Cardmarket-Snapshot</string>
+    <string name="portfolio_change">%1$.1f%% seit erstem Cardmarket-Snapshot innerhalb der letzten 12 Monate</string>
     <string name="stat_cards">Karten</string>
     <string name="stat_unique">Einträge</string>
     <string name="stat_languages">Sprachen</string>

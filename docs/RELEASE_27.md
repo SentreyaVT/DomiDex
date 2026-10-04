@@ -2,6 +2,151 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
 
+### Storage checkpoint and parallel backend evidence (2026-10-04)
+
+The actual 13GiB fixture is currently being generated on the dedicated offline
+API36 emulator; it is **not yet a passed scale proof**. Its prerequisite pilot
+`storage-proof/af59f51e91cc4ed8941bd8e2065c48a6/runtime-pilot-6bdfbea356084bc599bd867948ccdac8`
+passed with 500,000 generated rows, 113,410,048 live SQLite/main-file bytes,
+zero final WAL and unchanged non-price tables. Generation took 15,892ms; this
+small pilot is not a representative 13GiB runtime or a production migration.
+The large seed uses the same frozen source/APK pair and is slower per row than
+the pilot. Its final integrity, bounded prune, restart and physical reclamation
+phases are still pending. No user database has been cleaned.
+
+The separately checked-out Web repository now contains only unwired market-data
+foundations. Root verification at
+`artifacts/release27-engineering-20261004/storage-prerequisite/market-local-tests-fc7cefd0124a453bb2c12a63de7360c9/manifest.json`
+records **131/131 PASS, zero skipped**, Node22.23.3, and identical before/after
+hashes of the eleven selected sources. Seven tests exercise the installed
+Storage7.22.0 SDK against controlled loopback servers: actual CRC mismatch,
+generation-pinned read, multipart MD5/preconditions, HTTP412 and finite HTTP
+timeouts. No Cloud/ADC/DELETE occurs in these controlled cases. Their servers
+never redirect; the test interceptor is not a general network-egress firewall.
+The other twenty-one newly added HTTP-download cases prove fixed feed selection,
+body/header ceilings, no redirects/retries, and actual socket closure on
+deadline/idle/cancellation before fixture cleanup. Reviewer findings about
+coercible feed selectors and missing socket-close evidence were fixed and rerun.
+
+A separate **read-only** real-provider run at
+`storage-prerequisite/market-provider-read-4b1c5b9243494d1ca390e007508bacf4`
+successfully downloaded and normalized the two fixed official public feeds:
+74,620 products and 79,688 price-guide records, 74,620 exact matched product IDs,
+5,068 explicitly accounted other-category rows, 374 pages. Original source
+times are catalog `2026-10-03T11:44:53+0200` and prices
+`2026-10-04T02:40:55+0200`; generation is
+`eff5d9f1da4be49866c433bff60a3fd54c0d3a70b0625fedaff61ff533d689b6`.
+The source-byte receipts and hashes are retained. Total 12,210ms includes download
+and validation under parallel emulator load, NOT an application performance
+benchmark. A matching guide row is not proof of a non-null trend or complete
+set/card mapping. No snapshot was uploaded or exposed to clients.
+
+Remaining storage/backend blockers are explicit: durable atomic Android
+maintenance progress and enqueue-race proof, safe actual-file reclamation,
+cross-version/low-disk/concurrency checks, wired Cloud budget/admission and
+continuous lifecycle, public read admission, deploy/package/runtime proof.
+The preliminary admission prototype never releases UNKNOWN/orphan reservations;
+it is not a continuous-production cache. Full-Sync and existing signing/R8/
+packaging remain unchanged. The next maintenance implementation is being
+prepared in a separate managed worktree so the in-progress scale sources do
+not change. Engineering checkpoints are not release approvals or deployments.
+
+### Collection-only history authority and isolated verification (2026-10-04)
+
+The user explicitly approved retaining twelve-month history only for cards in
+any local collection, including guest, other-account and not-yet-synchronized
+entries. For other cards, only the latest complete source observation is kept;
+discarded history is not recoverable and starts accumulating again when the card
+is collected later. This does not authorize deleting collection entries, photos,
+preferences, outboxes or pending work. Tombstones are protected conservatively.
+
+The new retention primitive is still **unwired**: no ordinary application or
+user database has been pruned. Its opt-in collection policy reevaluates direct
+card IDs, exact external-product links and stored price selections inside every
+bounded transaction. The default non-collection-only contract is also retained
+and tested. Full-Sync remains unchanged and Delta remains disabled.
+
+The read-only twelve-month display window is now connected locally to the
+repository and UI. A separate trusted-clock foundation records a plausible Date
+header from the successful fixed HTTPS price-guide request in the same Room
+transaction as quotes and SUCCESS state. A missing clock does not reject valid
+quotes or advance the previous cutoff. This is not yet runtime maintenance.
+
+The first whole-JVM/lint attempt for this new work,
+`storage-prerequisite/jvm-235228-50c20274`, failed compiling a new test because
+`kotlinx.coroutines.test` is not an existing dependency. No test pass is claimed
+for that attempt; all source/protected hashes stayed unchanged. The test was
+rewritten using existing coroutine primitives and deterministic channel steps,
+not a new dependency or real-hour sleeps. A fresh complete rerun is required.
+
+That fresh rerun is now recorded at
+`artifacts/release27-engineering-20261004/storage-prerequisite/jvm-000619-ee9057a9/manifest.json`,
+SHA256 `273e26e032e3348d75c8afc24406a1654aa31a064b115bc26ff6c1a3ed5ab820`.
+It finished successfully in 2m53s with all source and protected artifacts
+unchanged: 146 suites / 1,007 cases, **1,006 PASS, 1 existing opt-in live SKIP,
+0 FAIL/ERROR**. Debug lint remains 0 errors, 167 warnings and 4 hints. This
+validates the eight added JVM cases; the 24 real Room cases are still a separate
+pending emulator proof, not included in this JVM count.
+
+A new dedicated offline API36 x86_64 AVD, `emulator-5562`, has a 48G data
+partition for the storage proof. Existing emulators and the connected phone
+were not changed. The reviewed profile is in
+`artifacts/release27-engineering-20261004/storage-proof/reviewed-profile.json`.
+The debug-only harness uses a new UUID package, no app components, INTERNET or
+CAMERA, exact copied test classes and pinned source/artifact hashes. Its first
+stage requires all 24 retention, repository and real-import contract tests.
+The later 500,000-row pilot and actual 13GiB fixture are separate proof stages,
+not a claimed complete gate. Final seed, restart, byte-exact preservation,
+integrity and physical-reclamation evidence remain pending.
+
+The engineering branch has been pushed and remote-read back at
+`3d4f91f3ccc89955c402b2f4e2cbfd1cc5ef0c14`; the current uncommitted retention and
+backend work is not part of that push. No R27 signing, AAB, Play action or
+production deployment has occurred during this verification tranche.
+
+The first isolated debug pair `storage-proof/5d582bcf2e424c55b12ce5132bb14f15`
+built successfully without changing ordinary APKs/AABs/mapping or archived R26.
+Its 24-case contract stage is **FAIL**, not a storage pass: a newly added test
+ended with `Log.i` and inferred `Int`, so JUnit rejected the retention class
+(`initializationError`, expected void). The other nine repository/import cases
+passed; the fifteen retention cases were not executed. The exact owned pair was
+then explicitly uninstalled, preserving host evidence and leaving the ordinary
+app/phone untouched. The correction is only explicit `: Unit` plus six explicit
+`arrayOf<Any?>` type arguments; independent byte comparison confirms no SQL,
+assertions, fixture values or timeouts were changed. A new full proof is needed.
+
+After that narrow correction, the whole JVM/lint rerun
+`storage-prerequisite/jvm-001724-d7f5de3c` again passed with 146 suites / 1,007
+cases: 1,006 PASS, the same one opt-in SKIP, zero failures/errors. Build time was
+4m03s. Manifest SHA256
+`5c563057846a32cde00606e237840ff8079686742b36307d03264e502cc282d4`
+records all source/protected inputs unchanged. The new isolated pair and its
+24-case stage must still be verified separately.
+
+The corrected isolated pair `storage-proof/af59f51e91cc4ed8941bd8e2065c48a6`
+now passes **24/24 real Android Room contracts**, zero skips/failures. Evidence:
+`runtime-contracts-c691bfda382446408f2ebb18dc1f5d64/manifest.json`, SHA256
+`d814d14af86d404a8af693a7e509eee9c4fec98ae6eaf410d8c5f3d1d2f9735e`.
+The actual instrumentation summary is `OK (24 tests)` / 2.976s. Source,
+ordinary outputs and R26 remain byte-identical; global instrumentation and both
+owned process-absence guards pass after explicitly stopping the exact completed
+test pair. This covers 15 retention, 3 windowed repository and 6 importer cases.
+It is not a 13GiB, power-loss, low-disk or production-worker pass. The previous
+failed run remains recorded unchanged.
+
+The new public-market modules in the separate Web repository are not deployed.
+Root verified 78 contract/ingestion/immutable-store tests with both Node24 and
+portable official Node22.23.3. The Node22 binary is local-only under
+`storage-prerequisite/node22-d4a84ff7ec944b1c856a833fe2500265/node.exe`, SHA256
+`9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e`, matching
+nodejs.org's release checksums with Valid OpenJS Authenticode. No system runtime
+or default PATH was changed. The same pinned real feeds normalize to 74,620
+products / 374 pages / generation
+`0b19503449f614fd76acefc86dbc25e6ee44c5863f94c73f48679300030b1795` on Node22.
+This proves this input snapshot, not all physical-card identities or non-null
+trend coverage. Linux packaging, actual cloud storage, HTTP boundaries, bounded
+generation lifecycle and production verification remain separate open work.
+
 ### Release authorization and new storage prerequisite (2026-10-04)
 
 The user authorized creating the signed R27 AAB and pushing the engineering

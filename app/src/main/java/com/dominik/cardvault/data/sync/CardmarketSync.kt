@@ -40,15 +40,16 @@ class CardmarketImporter(private val context: Context, private val database: Car
         // download time. Parsing and the single Room transaction remain ordered
         // to retain an atomic, matching catalog/price snapshot.
         withCardmarketDownloadFiles(context.cacheDir) { productFile, priceFile ->
-            coroutineScope {
+            val historyReference = coroutineScope {
                 val products = async(Dispatchers.IO) { download(CardmarketSyncContract.PRODUCT_URL, productFile) }
                 val prices = async(Dispatchers.IO) { download(CardmarketSyncContract.PRICE_URL, priceFile) }
-                products.await(); prices.await()
+                products.await()
+                prices.await()
             }
             val products = productFile.source().buffer().use(CardmarketParsers::products)
             val prices = priceFile.source().buffer().use(CardmarketParsers::prices)
             val prepared = prepareCardmarketImport(products, prices)
-            persistCardmarketImport(database, prepared, now)
+            persistCardmarketImport(database, prepared, now, historyReference)
         }
     }.onFailure { error ->
         if (error is CancellationException) throw error
@@ -56,22 +57,30 @@ class CardmarketImporter(private val context: Context, private val database: Car
         dao.putSyncState((previous ?: emptyState()).copy(status = "ERROR", lastAttemptAtEpochMillis = System.currentTimeMillis(), errorMessage = error.message?.take(300) ?: "Unbekannter Importfehler"))
     }
 
-    private suspend fun download(address: String, target: File): Unit = withContext(Dispatchers.IO) {
+    private suspend fun download(address: String, target: File): CardmarketHistoryReference? = withContext(Dispatchers.IO) {
         val connection = URL(address).openConnection() as HttpURLConnection
         connection.useCaches = false
+        // Fixed provider origins only: a redirect must not turn another server's Date
+        // header into authority for pruning local history. Keep the last valid import on failure.
+        connection.instanceFollowRedirects = false
         connection.connectTimeout = 20_000; connection.readTimeout = 90_000
         connection.setRequestProperty("User-Agent", "DomiDex/1.0 private Android app")
         connection.setRequestProperty("Cache-Control", "no-cache")
         connection.setRequestProperty("Pragma", "no-cache")
         try {
             require(connection.responseCode in 200..299) { "Download fehlgeschlagen (HTTP ${connection.responseCode})." }
+            // Capture the clock while receiving the response, not after a slow body download.
+            // A missing trustworthy clock never discards otherwise valid source prices.
+            val historyReference = if (address == CardmarketSyncContract.PRICE_URL && connection.url.toString() == address) {
+                CardmarketHistoryReference.fromPriceGuideResponse(connection.getHeaderField("Date"), System.currentTimeMillis())
+            } else null
             connection.inputStream.use { input ->
                 target.outputStream().use { output -> copyCardmarketDownload(input, output, connection.contentLengthLong) }
             }
+            historyReference
         } finally {
             connection.disconnect()
         }
-        Unit
     }
 
     private fun emptyState() = CatalogSyncStateEntity(CardmarketSyncContract.SOURCE, "IDLE", null, null, null, 0, 0, null)
@@ -82,6 +91,7 @@ internal suspend fun persistCardmarketImport(
     database: CardVaultDatabase,
     prepared: PreparedCardmarketImport,
     now: Long,
+    historyReference: CardmarketHistoryReference? = null,
 ) {
     val dao = database.cardVaultDao()
     val effectiveAt = prepared.effectiveAtEpochMillis
@@ -98,6 +108,9 @@ internal suspend fun persistCardmarketImport(
             RawPriceSnapshotEntity(cardId = "cm-pokemon-${price.productId}", source = CardmarketSyncContract.SOURCE, currency = "EUR", lowValueMinor = price.lowMinor, averageValueMinor = price.averageMinor, trendValueMinor = price.trendMinor, marketValueMinor = price.trendMinor, average1DayValueMinor = price.average1Minor, average7DayValueMinor = price.average7Minor, average30DayValueMinor = price.average30Minor, holoAverageValueMinor = price.holoAverageMinor, holoLowValueMinor = price.holoLowMinor, holoTrendValueMinor = price.holoTrendMinor, fetchedAtEpochMillis = now, effectiveAtEpochMillis = effectiveAt)
         }) }
         dao.putSyncState(CatalogSyncStateEntity(CardmarketSyncContract.SOURCE, "SUCCESS", now, now, prepared.sourceCreatedAt, prepared.products.size, matchedPrices.size, null))
+        historyReference?.let { reference ->
+            dao.putMetadata(AppMetadataEntity(CardmarketHistoryReference.METADATA_KEY, reference.epochMillis.toString()))
+        }
     }
 }
 

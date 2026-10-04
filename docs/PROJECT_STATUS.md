@@ -30,6 +30,15 @@ ein Cloud-Vertrag für alte Marktpreisstände ist nicht vorhanden. Gate15 bleibt
 bis zur Speicherabnahme und den übrigen kritischen Nachweisen gesperrt. Ein
 Engineering-Push ist keine Releasefreigabe. Google Play bleibt unberührt.
 
+**Ergänzende Speicherfreigabe:** Zwölf Monate Preisverlauf dürfen auf Karten
+aller lokalen Sammlungen beschränkt werden, einschließlich Gastdaten, anderer
+Konten und noch nicht synchronisierter Einträge. Für nicht gesammelte Karten
+bleibt der letzte vollständige Preisstand; ältere Verläufe dürfen unwiederbringlich
+entfallen. Die Bereinigung ist noch nicht in der normalen App aktiv. Ein neuer,
+getrennter Offline-Emulator dient der Schutz- und 13GiB-Prüfung; ein bestandener
+Großdatentest wird noch nicht behauptet. Der gesicherte Engineeringbranch steht
+remote auf `3d4f91f`; neuere lokale Arbeiten sind noch nicht darin enthalten.
+
 | Ebene | Befund vor diesem Dokumentations-Commit |
 | --- | --- |
 | GitHub Standardbranch | `master`, `9bbe7bc`, App `1.0-beta`, code 16 |

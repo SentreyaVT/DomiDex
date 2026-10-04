@@ -2513,7 +2513,7 @@ internal fun portfolioValuationDescription(portfolio: PortfolioSummary): String 
                 } }
                 val details: @Composable () -> Unit = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        if (portfolio.history.size > 1) "Preisänderung des heutigen Bestands: ${String.format(Locale.GERMANY, "%+.1f", portfolio.changePercent)} %" else "Noch nicht genügend echte Preisverlaufsdaten",
+                        if (portfolio.history.size > 1) "Preisänderung des heutigen Bestands (max. 12 Monate): ${String.format(Locale.GERMANY, "%+.1f", portfolio.changePercent)} %" else "Noch nicht genügend echte Preisverlaufsdaten",
                         color = if (portfolio.history.size < 2) VaultTextMuted else if (portfolio.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 12.sp,
@@ -2631,7 +2631,7 @@ internal fun portfolioValuationDescription(portfolio: PortfolioSummary): String 
 
 private enum class PriceHistoryRange(val label: String, val days: Long?) {
     DAYS_7("7T", 7), DAYS_30("30T", 30), MONTHS_3("3M", 90),
-    MONTHS_6("6M", 180), YEAR("1J", 365), MAX("MAX", null),
+    MONTHS_6("6M", 180), MAX("12M", null),
 }
 
 /**
@@ -2664,6 +2664,7 @@ private enum class PriceHistoryRange(val label: String, val days: Long?) {
     val change = visibleHistory.takeIf { it.size >= 2 }?.let { points -> points.last().valueEur - points.first().valueEur }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("TRENDPREIS-VERLAUF", fontWeight = FontWeight.Bold, color = MewRoseSoft)
+        Text("Gespeicherte Beobachtungen der letzten 12 Monate", color = VaultTextMuted, fontSize = 11.sp)
         if (current == null) {
             Text("Kein Marktwert verfügbar", color = VaultTextMuted, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Text("Für diese konkrete deutsche Variante ist noch kein eindeutig verknüpfter Cardmarket-Trendpreis gespeichert.", color = VaultTextMuted, fontSize = 11.sp)

@@ -40,6 +40,9 @@ class RoomCollectionRepository(
     private val onKeepLocalPriceConflicts: suspend (String) -> Int = { 0 },
     private val captureConflictSession: (String) -> (() -> Boolean) = { owner -> { activeOwnerUid.value == owner } },
     private val captureLocalSession: (String) -> (() -> Boolean) = { owner -> { activeOwnerUid.value == owner } },
+    // Explicitly supplied by the application; unbounded remains available for historical
+    // parity proofs and non-UI callers. This read boundary never authorizes pruning.
+    private val historyWindowStart: Flow<Long> = kotlinx.coroutines.flow.flowOf(Long.MIN_VALUE),
 ) : CollectionRepository {
     private val dao = database.cardVaultDao()
     private val catalogQueries = CatalogQueryCache<CatalogSearchResult>()
@@ -133,34 +136,39 @@ class RoomCollectionRepository(
         }
     }
 
-    override val portfolio: Flow<PortfolioSummary> = activeOwnerUid.flatMapLatest { portfolioFor(it) }
+    override val portfolio: Flow<PortfolioSummary> = combine(activeOwnerUid, historyWindowStart) { owner, start ->
+        owner to start
+    }.flatMapLatest { (owner, start) -> portfolioFor(owner, windowStartEpochMillis = start) }
 
     /** Summaries only need today's values; do not load every historical price to render a binder. */
     private fun currentCardsFor(ownerUid: String): Flow<List<CollectionCard>> = combine(
         dao.observeCollection(ownerUid), dao.observePriceSelections(ownerUid),
     ) { rows, selections -> collectionCards(rows, selections) }.flowOn(Dispatchers.Default)
 
-    /** Keep every private-card field and historical change without loading unused chart rows. */
-    private fun privateDetailCardsFor(ownerUid: String): Flow<List<CollectionCard>> = combine(
-        dao.observeCollection(ownerUid),
-        dao.observePriceSelections(ownerUid),
-        dao.observeOwnedFirstPositivePrices(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE),
-    ) { rows, selections, bases ->
-        collectionCards(rows, selections, firstPriceBases = bases.associateBy { it.cardId })
-    }.flowOn(Dispatchers.Default)
+    /** Keep every current private-card field; read only the window's percentage bases. */
+    private fun privateDetailCardsFor(ownerUid: String): Flow<List<CollectionCard>> =
+        historyWindowStart.flatMapLatest { start ->
+            combine(
+                dao.observeCollection(ownerUid),
+                dao.observePriceSelections(ownerUid),
+                dao.observeOwnedFirstPositivePrices(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, start),
+            ) { rows, selections, bases ->
+                collectionCards(rows, selections, firstPriceBases = bases.associateBy { it.cardId })
+            }
+        }.flowOn(Dispatchers.Default)
 
     private sealed interface PortfolioHistoryRead {
         data class Compact(val points: List<PortfolioPoint>) : PortfolioHistoryRead
         data class Full(val prices: List<OwnedPriceHistoryProjection>) : PortfolioHistoryRead
     }
 
-    private fun portfolioHistoryFor(ownerUid: String): Flow<PortfolioHistoryRead> =
+    private fun portfolioHistoryFor(ownerUid: String, windowStartEpochMillis: Long): Flow<PortfolioHistoryRead> =
         dao.observeOwnedPortfolioDeltas(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE)
             // An unchanged unsafe sentinel keeps one genuine legacy subscription alive.
             // That subscription independently observes every original history dependency.
             .distinctUntilChanged()
             .flatMapLatest { deltas ->
-                val points = buildGuardedPortfolioHistory(deltas)
+                val points = buildGuardedPortfolioHistory(deltas, windowStartEpochMillis)
                 if (points == null) {
                     dao.observeOwnedRawPriceHistory(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE)
                         .map { prices -> PortfolioHistoryRead.Full(prices) }
@@ -169,18 +177,25 @@ class RoomCollectionRepository(
                 }
             }
 
-    private fun portfolioFor(ownerUid: String, includePortfolioHistory: Boolean = true): Flow<PortfolioSummary> = combine(
+    private fun portfolioFor(
+        ownerUid: String,
+        includePortfolioHistory: Boolean = true,
+        windowStartEpochMillis: Long = Long.MIN_VALUE,
+    ): Flow<PortfolioSummary> = combine(
         dao.observeCollection(ownerUid),
-        portfolioHistoryFor(ownerUid),
+        portfolioHistoryFor(ownerUid, windowStartEpochMillis),
         dao.observePriceSelections(ownerUid),
-        dao.observeOwnedFirstPositivePrices(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE),
+        dao.observeOwnedFirstPositivePrices(ownerUid, com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE, windowStartEpochMillis),
     ) { rows, history, selections, bases ->
         when (history) {
             is PortfolioHistoryRead.Full -> {
-                // Original complete mapper and wrapping chronological calculation, unchanged.
-                val cardmarketPrices = history.prices.groupBy(OwnedPriceHistoryProjection::cardId)
+                // Keep original wrapping valuation and pre-window carry; only percentage
+                // bases and visible points are restricted to the requested window.
+                val cardmarketPrices = history.prices.asSequence()
+                    .filter { it.effectiveAtEpochMillis >= windowStartEpochMillis }
+                    .groupBy(OwnedPriceHistoryProjection::cardId)
                 PortfolioSummary(collectionCards(rows, selections, cardmarketPrices),
-                    if (includePortfolioHistory) buildChronologicalPortfolioHistory(rows, history.prices) else emptyList())
+                    if (includePortfolioHistory) buildChronologicalPortfolioHistory(rows, history.prices, windowStartEpochMillis) else emptyList())
             }
             is PortfolioHistoryRead.Compact -> PortfolioSummary(
                 collectionCards(rows, selections, firstPriceBases = bases.associateBy { it.cardId }),
@@ -1114,13 +1129,15 @@ class RoomCollectionRepository(
             return kotlinx.coroutines.flow.flowOf(emptyList())
         }
         val usesReverseHoloPrice = card.finish.contains("reverse", ignoreCase = true)
-        return activeOwnerUid.flatMapLatest { ownerUid ->
+        return combine(activeOwnerUid, historyWindowStart) { owner, start -> owner to start }
+            .flatMapLatest { (ownerUid, start) ->
             dao.observeCardPriceHistory(
                 entryId = card.entryId,
                 fallbackCardId = card.id,
                 source = com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE,
                 useHoloPrice = usesReverseHoloPrice,
                 ownerUid = ownerUid,
+                windowStartEpochMillis = start,
             ).map { rows ->
                 rows.filter { it.valueMinor > 0L }.map { row ->
                     CardPricePoint(

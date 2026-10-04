@@ -195,6 +195,73 @@ class CardmarketImportRoomInstrumentedTest {
 
     private fun product(id: Long) = CardmarketProduct(id, "Product $id", 1, 6_601, null)
 
+    @Test fun historyClockIsCommittedWithQuotesAndMissingReferenceKeepsPriorValue() = runBlocking(Dispatchers.IO) {
+        val reference = verifiedClock(fetchedAt)
+        persistCardmarketImport(database, prepared(listOf(product(42)), listOf(price(42))), fetchedAt, reference)
+        val key = CardmarketHistoryReference.METADATA_KEY
+        assertEquals(reference.epochMillis.toString(), database.cardVaultDao().metadata(key))
+        assertEquals("SUCCESS", database.cardVaultDao().syncState(source)?.status)
+        assertEquals(1, rows("raw_price_snapshots").size)
+
+        val missingClock = CardmarketHistoryReference.fromPriceGuideResponse(null, fetchedAt + 86_400_000)
+        assertNull(missingClock)
+        persistCardmarketImport(database, prepared(listOf(product(42)),
+            listOf(price(42).copy(trendMinor = 876))), fetchedAt + 86_400_000, missingClock)
+        assertEquals("Valid quotes still import without a fresh trusted clock", "876",
+            rows("raw_price_snapshots").single()["trendValueMinor"])
+        assertEquals("Missing clock cannot advance the old maintenance cutoff",
+            reference.epochMillis.toString(), database.cardVaultDao().metadata(key))
+    }
+
+    @Test fun lateHistoryClockWriteFailureRollsBackQuotesAndSuccessfulState() = runBlocking(Dispatchers.IO) {
+        val key = CardmarketHistoryReference.METADATA_KEY
+        persistCardmarketImport(database, prepared(listOf(product(42)), listOf(price(42))),
+            fetchedAt, verifiedClock(fetchedAt))
+        val before = snapshot()
+        val nextFetch = fetchedAt + 86_400_000
+        val reference = verifiedClock(nextFetch)
+        val incoming = prepared(listOf(product(42).copy(name = "Updated clock probe")),
+            listOf(price(42).copy(trendMinor = 987)), "2026-09-23T02:48:57+0200")
+        val sql = database.openHelper.writableDatabase
+        sql.execSQL("""
+            CREATE TEMP TRIGGER cardmarket_clock_rollback_probe
+            AFTER INSERT ON main.app_metadata
+            WHEN NEW.key = '$key' AND NEW.value = '${reference.epochMillis}'
+            BEGIN
+                SELECT CASE WHEN
+                    (SELECT name FROM main.catalog_cards WHERE id = 'cm-pokemon-42') = 'Updated clock probe'
+                    AND (SELECT COUNT(*) FROM main.raw_price_snapshots WHERE cardId = 'cm-pokemon-42') = 2
+                    AND (SELECT trendValueMinor FROM main.raw_price_snapshots
+                         WHERE cardId = 'cm-pokemon-42' ORDER BY effectiveAtEpochMillis DESC LIMIT 1) = 987
+                    AND (SELECT lastSuccessAtEpochMillis FROM main.catalog_sync_state
+                         WHERE source = '$source' AND status = 'SUCCESS') = $nextFetch
+                    THEN RAISE(ABORT, 'CARDMARKET_CLOCK_AFTER_QUOTES_AND_SUCCESS')
+                    ELSE RAISE(ABORT, 'CARDMARKET_CLOCK_TOO_EARLY') END;
+            END
+        """.trimIndent())
+        try {
+            val failure = runCatching {
+                persistCardmarketImport(database, incoming, nextFetch, reference)
+            }.exceptionOrNull()
+            assertNotNull(failure)
+            val causes = generateSequence(requireNotNull(failure)) { it.cause }.toList()
+            assertTrue(causes.any { it is SQLiteException })
+            assertTrue(causes.any { it.message.orEmpty().contains("CARDMARKET_CLOCK_AFTER_QUOTES_AND_SUCCESS") })
+            assertEquals("Clock, quotes, products and SUCCESS must share the rollback boundary", before, snapshot())
+        } finally {
+            sql.execSQL("DROP TRIGGER IF EXISTS temp.cardmarket_clock_rollback_probe")
+        }
+        persistCardmarketImport(database, incoming, nextFetch, reference)
+        assertEquals(reference.epochMillis.toString(), database.cardVaultDao().metadata(key))
+        assertEquals(2, rows("raw_price_snapshots").size)
+        assertEquals(nextFetch, database.cardVaultDao().syncState(source)?.lastSuccessAtEpochMillis)
+    }
+
+    private fun verifiedClock(at: Long): CardmarketHistoryReference = requireNotNull(
+        CardmarketHistoryReference.fromPriceGuideResponse(
+            java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(
+                Instant.ofEpochMilli(at).atZone(java.time.ZoneOffset.UTC)), at))
+
     @Test fun contradictoryRowsCannotReplaceTheLastGoodRoomSnapshotInEitherOrder() = runBlocking(Dispatchers.IO) {
         persistCardmarketImport(database, prepared(
             listOf(product(42), product(43)),
@@ -247,12 +314,12 @@ class CardmarketImportRoomInstrumentedTest {
         ParsedDownload(1, createdAt, prices),
     )
 
-    private fun snapshot() = listOf("catalog_cards", "raw_price_snapshots", "catalog_sync_state")
+    private fun snapshot() = listOf("catalog_cards", "raw_price_snapshots", "catalog_sync_state", "app_metadata")
         .associateWith(::rows)
 
     private fun rows(table: String): List<Map<String, String?>> {
-        require(table in setOf("catalog_cards", "raw_price_snapshots", "catalog_sync_state"))
-        val key = if (table == "catalog_sync_state") "source" else "id"
+        require(table in setOf("catalog_cards", "raw_price_snapshots", "catalog_sync_state", "app_metadata"))
+        val key = when (table) { "catalog_sync_state" -> "source"; "app_metadata" -> "`key`"; else -> "id" }
         return database.openHelper.readableDatabase.query("SELECT * FROM $table ORDER BY $key").use { cursor ->
             buildList {
                 while (cursor.moveToNext()) add(cursor.columnNames.mapIndexed { index, name ->

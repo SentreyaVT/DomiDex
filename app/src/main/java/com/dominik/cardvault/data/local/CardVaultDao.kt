@@ -332,7 +332,7 @@ interface CardVaultDao {
     """)
     fun observeOwnedRawPriceHistoryByProduct(ownerUid: String, source: String): Flow<List<OwnedPriceHistoryProjection>>
 
-    /** The private detail only needs each finish's first positive observation, not the chart. */
+    /** First positive observation within the selected history window, independently per finish. */
     @Query("""
         WITH owned(cardId) AS (
             SELECT DISTINCT COALESCE(linked.id, c.id)
@@ -346,13 +346,19 @@ interface CardVaultDao {
         SELECT o.cardId,
           (SELECT p.trendValueMinor FROM raw_price_snapshots p
            WHERE p.cardId = o.cardId AND p.source = :source AND p.trendValueMinor > 0
+             AND p.effectiveAtEpochMillis >= :windowStartEpochMillis
            ORDER BY p.effectiveAtEpochMillis ASC LIMIT 1) AS firstNormalTrendValueMinor,
           (SELECT p.holoTrendValueMinor FROM raw_price_snapshots p
            WHERE p.cardId = o.cardId AND p.source = :source AND p.holoTrendValueMinor > 0
+             AND p.effectiveAtEpochMillis >= :windowStartEpochMillis
            ORDER BY p.effectiveAtEpochMillis ASC LIMIT 1) AS firstReverseTrendValueMinor
         FROM owned o ORDER BY o.cardId
     """)
-    fun observeOwnedFirstPositivePrices(ownerUid: String, source: String): Flow<List<OwnedFirstPositivePriceProjection>>
+    fun observeOwnedFirstPositivePrices(
+        ownerUid: String,
+        source: String,
+        windowStartEpochMillis: Long = Long.MIN_VALUE,
+    ): Flow<List<OwnedFirstPositivePriceProjection>>
 
     /**
      * Conservative read-only chart fast path. Guard and arithmetic share this one SELECT snapshot.
@@ -458,6 +464,7 @@ interface CardVaultDao {
             :fallbackCardId
         )
           AND p.source = :source
+          AND p.effectiveAtEpochMillis >= :windowStartEpochMillis
           AND NOT EXISTS (
             SELECT 1 FROM collection_entries e JOIN catalog_cards c ON c.id = e.cardId
             WHERE e.id = :entryId AND e.ownerUid = :ownerUid AND e.deletedAtEpochMillis IS NULL
@@ -473,6 +480,7 @@ interface CardVaultDao {
         source: String,
         useHoloPrice: Boolean,
         ownerUid: String = GUEST_OWNER_UID,
+        windowStartEpochMillis: Long = Long.MIN_VALUE,
     ): Flow<List<CardPriceHistoryProjection>>
 
     @Query("""

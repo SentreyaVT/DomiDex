@@ -7,6 +7,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.lifecycleScope
 import com.dominik.cardvault.data.RoomCollectionRepository
+import com.dominik.cardvault.data.priceHistoryDisplayWindow
+import com.dominik.cardvault.model.PriceHistoryWindowPolicy
 import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
 import com.dominik.cardvault.data.local.CardVaultDatabase
 import com.dominik.cardvault.data.sync.CardmarketSyncScheduler
@@ -32,6 +34,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 
 class MainActivity : ComponentActivity() {
     private var collectionSession: FirebaseCollectionSession? = null
@@ -52,6 +56,11 @@ class MainActivity : ComponentActivity() {
             captureConflictSession = session::captureConflictSession,
             captureLocalSession = session::captureLocalDataSession,
             cloudState = session.cloudState,
+            historyWindowStart = priceHistoryDisplayWindow().stateIn(
+                lifecycleScope,
+                SharingStarted.WhileSubscribed(5_000L),
+                PriceHistoryWindowPolicy.startEpochMillis(System.currentTimeMillis()),
+            ),
         )
         val syncScheduler = CardmarketSyncScheduler(applicationContext)
         val contentUpdates = ContentUpdateCoordinator(applicationContext)
