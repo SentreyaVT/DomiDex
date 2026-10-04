@@ -1276,12 +1276,25 @@ class Release27RoomScaleInstrumentedTest {
 
     private fun postFixExplain(sql: SupportSQLiteDatabase, query: HistoryProbeSql): JSONArray {
         val result = JSONArray()
+        // Diagnostic transport limits, not a preferred query-plan shape. SQLite3.18
+        // expands this CTE into more than64 EQP rows. Retain the COMPLETE plan or
+        // fail: never truncate it or skip the subsequent model/integrity checks.
+        val maxRows = 1024
+        val maxPlanBytes = 256 * 1024
+        var encodedBytes = 2 // JSON array brackets; each following comma counted below.
         sql.query(androidx.sqlite.db.SimpleSQLiteQuery("EXPLAIN QUERY PLAN " + query.sql, query.bindings.toTypedArray())).use { cursor ->
             assertEquals(4, cursor.columnCount)
             while (cursor.moveToNext()) {
-                check(result.length() < 64)
-                result.put(JSONObject().put("id", cursor.getLong(0)).put("parent", cursor.getLong(1))
-                    .put("aux", cursor.getLong(2)).put("detail", cursor.getString(3)))
+                check(result.length() < maxRows) { "Complete EQP exceeds $maxRows diagnostic rows" }
+                val detail = checkNotNull(cursor.getString(3))
+                check(detail.isNotEmpty() && detail.toByteArray(Charsets.UTF_8).size <= 4096) {
+                    "EQP detail exceeds its UTF-8 diagnostic bound"
+                }
+                val row = JSONObject().put("id", cursor.getLong(0)).put("parent", cursor.getLong(1))
+                    .put("aux", cursor.getLong(2)).put("detail", detail)
+                encodedBytes += row.toString().toByteArray(Charsets.UTF_8).size + if (result.length() == 0) 0 else 1
+                check(encodedBytes <= maxPlanBytes) { "Complete EQP exceeds $maxPlanBytes diagnostic bytes" }
+                result.put(row)
             }
         }
         check(result.length() > 0)

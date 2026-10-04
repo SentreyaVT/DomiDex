@@ -37,6 +37,7 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
     private var captured: GuardedCall<*, *>? = null
     private var held = CountDownLatch(1)
     @Volatile private var knowledgeRevocationAudit: KnowledgeRevocationAudit? = null
+    @Volatile private var sessionAccessAudit: SessionAccessAudit? = null
     private val previous: Any?
     private val supplier = Supplier<ManagedChannelBuilder<*>> {
         check(!closed.get()) { "Demo gRPC gate is closed" }
@@ -158,6 +159,133 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
         }
     }
 
+    /** Passive only: temporary entitlement gets may come/go BEFORE sealing the live targets. */
+    fun observeSessionAccess(ownerUid: String = "sdk-proof-collection-knowledge-session-access"): SessionAccessAudit = synchronized(gateLock) {
+        check(!closed.get() && sessionAccessAudit == null && knowledgeRevocationAudit == null &&
+            armed == null && captured == null)
+        check(ownerUid in setOf("sdk-proof-collection-knowledge-session-access", "sdk-proof-collection-knowledge-deletion-workflow"))
+        SessionAccessAudit(ownerUid).also { sessionAccessAudit = it }
+    }
+
+    data class SessionAccessSnapshot(
+        val sealed: Boolean, val accessTarget: Int?, val knowledgeTarget: Int?,
+        val disabledDocuments: Int, val knowledgeDenials: Int, val error: String?,
+    )
+
+    class SessionAccessAudit internal constructor(ownerUid: String) {
+        private data class Key(val call: Any, val id: Int)
+        private data class Watch(val path: String, var current: Boolean = false)
+        private val lock = Any()
+        private val accessPath = "$DATABASE/documents/accountAccess/$ownerUid"
+        private val knowledgePath = "$DATABASE/documents/scanKnowledge/${"a".repeat(64)}"
+        private val watches = mutableMapOf<Key, Watch>()
+        private val currentTargets = CountDownLatch(1)
+        private val disabledTarget = CountDownLatch(1)
+        private var operations = 0
+        private var sealed = false
+        private var accessKey: Key? = null
+        private var knowledgeKey: Key? = null
+        private var disabledDocuments = 0
+        private var knowledgeDenials = 0
+        private var error: String? = null
+
+        internal fun outbound(call: Any, request: ListenRequest) = synchronized(lock) {
+            if (request.hasAddTarget()) {
+                val paths = request.addTarget.documents.documentsList
+                val path = paths.firstOrNull { it == accessPath || it == knowledgePath }
+                if (path != null) {
+                    operations++
+                    val key = Key(call, request.addTarget.targetId)
+                    if (operations > 32 || request.database != DATABASE || paths != listOf(path) ||
+                        key.id <= 0 || watches.containsKey(key) || sealed) {
+                        error = "unexpected-session-access-add"
+                    } else watches[key] = Watch(path)
+                }
+            }
+            val key = Key(call, request.removeTarget)
+            if (watches.containsKey(key)) {
+                if (sealed && key == accessKey) error = "sealed-access-target-client-removed"
+                watches.remove(key)
+            }
+        }
+
+        internal fun inbound(call: Any, response: ListenResponse) = synchronized(lock) {
+            when (response.responseTypeCase) {
+                ListenResponse.ResponseTypeCase.TARGET_CHANGE -> {
+                    val change = response.targetChange
+                    change.targetIdsList.forEach { id ->
+                        val key = Key(call, id)
+                        val watch = watches[key]
+                        when (change.targetChangeType) {
+                            TargetChange.TargetChangeType.CURRENT -> watch?.current = true
+                            TargetChange.TargetChangeType.REMOVE -> {
+                                if (sealed && key == accessKey) error = "sealed-access-target-server-removed"
+                                if (sealed && key == knowledgeKey && change.cause.code == 7) knowledgeDenials++
+                                watches.remove(key)
+                            }
+                            TargetChange.TargetChangeType.RESET -> {
+                                watch?.current = false
+                                if (sealed && (key == accessKey || key == knowledgeKey)) error = "sealed-target-reset"
+                            }
+                            else -> Unit
+                        }
+                    }
+                }
+                ListenResponse.ResponseTypeCase.DOCUMENT_CHANGE -> {
+                    val change = response.documentChange
+                    if (sealed && change.document.name == accessPath &&
+                        accessKey?.let { it.call === call && it.id in change.targetIdsList } == true) {
+                        val fields = change.document.fieldsMap
+                        if (fields.keys != setOf("disabled", "updatedAt") ||
+                            fields["disabled"]?.valueTypeCase != com.google.firestore.v1.Value.ValueTypeCase.BOOLEAN_VALUE ||
+                            fields["disabled"]?.booleanValue != true ||
+                            fields["updatedAt"]?.valueTypeCase != com.google.firestore.v1.Value.ValueTypeCase.INTEGER_VALUE ||
+                            fields["updatedAt"]?.integerValue != 1791115200000L ||
+                            checkNotNull(accessKey).id in change.removedTargetIdsList) {
+                            error = "unexpected-sealed-access-document"
+                        } else {
+                            disabledDocuments++
+                            disabledTarget.countDown()
+                        }
+                    }
+                }
+                ListenResponse.ResponseTypeCase.DOCUMENT_DELETE -> {
+                    if (sealed && response.documentDelete.document == accessPath) error = "sealed-access-document-deleted"
+                }
+                ListenResponse.ResponseTypeCase.DOCUMENT_REMOVE -> {
+                    if (sealed && response.documentRemove.document == accessPath) error = "sealed-access-document-removed"
+                }
+                else -> Unit
+            }
+            if (watches.values.count { it.path == accessPath && it.current } == 1 &&
+                watches.values.count { it.path == knowledgePath && it.current } == 1) currentTargets.countDown()
+        }
+
+        fun awaitCurrentTargets() {
+            check(currentTargets.await(20, TimeUnit.SECONDS)) { "Real access/knowledge CURRENT targets not observed" }
+        }
+        fun seal() = synchronized(lock) {
+            check(!sealed && error == null)
+            val access = watches.filterValues { it.path == accessPath }.entries.single()
+            val knowledge = watches.filterValues { it.path == knowledgePath }.entries.single()
+            check(access.value.current && knowledge.value.current)
+            accessKey = access.key; knowledgeKey = knowledge.key; sealed = true
+        }
+        /** Read-only pre-barrier check; real deletion can later alter Auth and target lifetimes. */
+        fun assertCurrentTargetsBeforeWorkflow() = synchronized(lock) {
+            check(!sealed && error == null)
+            check(watches.filterValues { it.path == accessPath }.values.single().current)
+            check(watches.filterValues { it.path == knowledgePath }.values.single().current)
+        }
+        fun awaitDisabledDocument() {
+            check(disabledTarget.await(20, TimeUnit.SECONDS)) { "No real disabled document on sealed access target" }
+        }
+        fun snapshot(): SessionAccessSnapshot = synchronized(lock) {
+            SessionAccessSnapshot(sealed, accessKey?.id, knowledgeKey?.id,
+                disabledDocuments, knowledgeDenials, error)
+        }
+    }
+
     /** Deterministic negative transport check: no delegate start, headers, or message for another DB. */
     fun verifyForeignDatabaseFailsBeforeStart() {
         var starts = 0
@@ -266,6 +394,7 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
                     override fun onMessage(message: RespT) {
                         if (method == LISTEN && message is ListenResponse) {
                             knowledgeRevocationAudit?.inbound(this@GuardedCall, message)
+                            sessionAccessAudit?.inbound(this@GuardedCall, message)
                         }
                         super.onMessage(message)
                     }
@@ -283,6 +412,7 @@ internal class PrivatePullDemoGrpcGate : ClientInterceptor, AutoCloseable {
                 if (!suspended) { suspended = true; capture(this) }
             } else {
                 if (method == LISTEN && message is ListenRequest) knowledgeRevocationAudit?.outbound(this, message)
+                if (method == LISTEN && message is ListenRequest) sessionAccessAudit?.outbound(this, message)
                 delegate.sendMessage(message)
             }
         }

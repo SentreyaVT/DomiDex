@@ -11,6 +11,7 @@ import com.dominik.cardvault.data.priceHistoryDisplayWindow
 import com.dominik.cardvault.model.PriceHistoryWindowPolicy
 import com.dominik.cardvault.data.catalog.PokemonVisualCatalog
 import com.dominik.cardvault.data.local.CardVaultDatabase
+import com.dominik.cardvault.data.local.PriceHistoryMaintenanceScheduler
 import com.dominik.cardvault.data.sync.CardmarketSyncScheduler
 import com.dominik.cardvault.data.sync.FirebaseCollectionSession
 import com.dominik.cardvault.data.knowledge.ScanKnowledgeScheduler
@@ -127,6 +128,10 @@ class MainActivity : ComponentActivity() {
                     // A restored, authenticated session needs no repeated account
                     // chooser or second confirmation; only presentation is completed.
                     if (showWelcome.value && auth.currentUser?.isAnonymous == false) finishWelcome(useGoogle = false)
+                    // Recovery is requested only after backup/settings/seed preparation succeeds.
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        PriceHistoryMaintenanceScheduler.recoverPendingAfterCommit(applicationContext, database)
+                    }
                     syncScheduler.schedule()
                     ScanKnowledgeScheduler.schedule(applicationContext)
                     lifecycleScope.launch { contentUpdates.refreshIfConfigured(syncScheduler::refresh) }

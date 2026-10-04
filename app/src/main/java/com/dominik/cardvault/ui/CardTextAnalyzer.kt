@@ -434,19 +434,33 @@ internal class CardTextAnalyzer(
         val resources = ScanTaskResources<Bitmap> { if (!it.isRecycled) it.recycle() }
         val readings = mutableMapOf<OcrReadKey, String>()
         private val metrics = metricsObserver?.let { CardTextMetricsRecorder() }
+        // Existing explicit test metrics seam only; no observer/capture data or release logging.
+        val timing = if (com.dominik.cardvault.BuildConfig.DEBUG && metricsObserver != null)
+            OcrTimingTrace(SystemClock::elapsedRealtimeNanos) else null
         // A timed-out recognizer must not retain an unbounded queue ahead of the next scan.
         val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
         private var recognizerCreated = false
-        private val timeout = Runnable { finish(Result.failure(TimeoutException("Die Kartenanalyse hat zu lange gedauert. Bitte erneut versuchen."))) }
+        private val timeout = Runnable {
+            timing?.record(OcrTimingEvent.SESSION_DEADLINE)
+            finish(Result.failure(TimeoutException("Die Kartenanalyse hat zu lange gedauert. Bitte erneut versuchen.")))
+        }
         private val completion = ScanTaskCompletion<Result<CardTextAnalysis>> { result ->
+            timing?.record(OcrTimingEvent.RESULT_COMMITTED)
             mainHandler.removeCallbacks(timeout)
             val measurement = metrics?.snapshot(result.exceptionOrNull()?.javaClass?.simpleName)
             // Cleanup is ordered after any currently running native preprocessing operation.
             // Active OCR inputs remain leased until ML Kit's actual completion callback.
             val cleanup = Runnable {
+                timing?.record(OcrTimingEvent.CLEANUP_STARTED)
                 resources.close(result.getOrNull()?.normalizedCard)
-                if (recognizerCreated) recognizer.close()
+                if (recognizerCreated) {
+                    timing?.record(OcrTimingEvent.NATIVE_CLOSE_REQUESTED)
+                    recognizer.close()
+                    // Void close() returned; this is NOT an SDK native-unload completion claim.
+                    timing?.record(OcrTimingEvent.NATIVE_CLOSE_RETURNED)
+                }
                 sessions.remove(this)
+                timing?.record(OcrTimingEvent.CLEANUP_RETURNED)
             }
             try { preprocessingExecutor.execute(cleanup) } catch (_: RejectedExecutionException) { cleanup.run() }
             mainHandler.post {
@@ -461,11 +475,15 @@ internal class CardTextAnalyzer(
         // cleanup before shutting down the worker. Otherwise its rejected cleanup could run
         // inline while native preprocessing still reads unleased bitmaps.
         @Synchronized fun finish(result: Result<CardTextAnalysis>) { completion.complete(result) }
-        fun execute(block: () -> Unit) {
-            if (isFinished) return
+        fun execute(timingCall: OcrTimingCall? = null, block: () -> Unit) {
+            if (isFinished) {
+                if (timingCall != null) timing?.record(OcrTimingEvent.LATE_IGNORED_BEFORE_QUEUE, timingCall)
+                return
+            }
             try {
                 preprocessingExecutor.execute {
                     if (!isFinished) try { block() } catch (error: Throwable) { finish(Result.failure(error)) }
+                    else if (timingCall != null) timing?.record(OcrTimingEvent.LATE_IGNORED_AT_WORKER, timingCall)
                 }
             } catch (error: RejectedExecutionException) { finish(Result.failure(error)) }
         }
@@ -484,7 +502,10 @@ internal class CardTextAnalyzer(
         }
         fun recordOcrCall() { metrics?.ocrCalls?.incrementAndGet() }
         fun recordCacheHits(count: Int) { metrics?.cacheHitInputs?.addAndGet(count.toLong()) }
-        override fun close() { finish(Result.failure(CancellationException("Kartenanalyse abgebrochen."))) }
+        override fun close() {
+            timing?.record(OcrTimingEvent.CANCEL_REQUEST)
+            finish(Result.failure(CancellationException("Kartenanalyse abgebrochen.")))
+        }
     }
 
     fun analyze(
@@ -566,7 +587,7 @@ internal class CardTextAnalyzer(
             variants.flatMap { buildOrientationProbeInputs(it, session::ownOcrBitmap) }
         }
         val probeOcrStarted = session.metricStart()
-        recognizeBatch(session, probeInputs, ORIENTATION_TIMEOUT_MILLIS) { probeBatch ->
+        recognizeBatch(session, probeInputs, ORIENTATION_TIMEOUT_MILLIS, orientationProbe = true) { probeBatch ->
             session.metricEnd("probe_ocr_wall", probeOcrStarted)
             try {
                 if (probeBatch.readings.isEmpty()) {
@@ -686,6 +707,7 @@ internal class CardTextAnalyzer(
         session: AnalysisSession,
         inputs: List<OcrInput>,
         timeoutMillis: Long,
+        orientationProbe: Boolean = false,
         onComplete: (OcrBatchResult) -> Unit,
     ) {
         if (inputs.isEmpty()) {
@@ -700,7 +722,7 @@ internal class CardTextAnalyzer(
         var running = 0
         // Keys include the exact ROI, preprocessing, dimensions and orientation. Preserve every
         // original evidence slot, but do not run ML Kit again on pixels already read by probes.
-        val pending = inputs.withIndex().groupBy { it.value.key }.values.filter { group ->
+        val uncached = inputs.withIndex().groupBy { it.value.key }.values.filter { group ->
             val cached = session.readings[group.first().value.key]
             if (cached != null) {
                 session.recordCacheHits(group.size)
@@ -714,17 +736,23 @@ internal class CardTextAnalyzer(
                 true
             }
         }
+        // Scheduling only: every group retains its original input indices, pixels and key.
+        // Both launchNext and timeout cleanup consume this same immutable ordered list.
+        val pending = orderPendingOcrGroups(uncached, orientationProbe)
         lateinit var timeout: Runnable
         fun deliver(failure: Throwable? = null) {
             if (delivered || session.isFinished) return
             delivered = true
+            session.timing?.record(OcrTimingEvent.BATCH_DELIVERED, probe = orientationProbe)
             mainHandler.removeCallbacks(timeout)
             pending.drop(next).forEach { it.first().value.bitmap?.let(session.resources::release) }
             val snapshot = if (results.isEmpty()) emptyMap() else mapOf(CardScript.LATIN to results.toMap())
             onComplete(OcrBatchResult(snapshot, failure))
         }
         timeout = Runnable {
+            session.timing?.record(OcrTimingEvent.BATCH_DEADLINE_POSTED, probe = orientationProbe)
             session.execute {
+                session.timing?.record(OcrTimingEvent.BATCH_DEADLINE_PROCESSED, probe = orientationProbe)
                 deliver(if (results.isEmpty()) TimeoutException("Lokale Texterkennung hat kein Ergebnis geliefert.") else null)
             }
         }
@@ -739,11 +767,27 @@ internal class CardTextAnalyzer(
                 val image = checkNotNull(input.image) { "Uncached OCR input has no image" }
                 if (!session.resources.lease(bitmap)) break
                 running += 1
+                val timingCall = session.timing?.newCall(orientationProbe, input.profileId, input.variantId,
+                    input.orientation?.degrees, input.regions.map { it.name }.sorted(),
+                    input.key.roi.let { listOf(it.left, it.top, it.right, it.bottom) })
+                session.timing?.record(OcrTimingEvent.CALL_CREATED, timingCall)
                 try {
                     session.recordOcrCall()
-                    session.recognizer().process(image).addOnCompleteListener(DIRECT_EXECUTOR) { task ->
+                    session.timing?.record(OcrTimingEvent.BEFORE_RECOGNIZER, timingCall)
+                    val recognizer = session.recognizer()
+                    session.timing?.record(OcrTimingEvent.RECOGNIZER_RETURNED, timingCall)
+                    session.timing?.record(OcrTimingEvent.BEFORE_PROCESS, timingCall)
+                    val requestTask = recognizer.process(image)
+                    session.timing?.record(OcrTimingEvent.PROCESS_RETURNED, timingCall)
+                    requestTask.addOnCompleteListener(DIRECT_EXECUTOR) { task ->
+                        session.timing?.record(OcrTimingEvent.TASK_COMPLETE, timingCall, outcome = when {
+                            task.isSuccessful -> OcrTimingOutcome.SUCCESS
+                            task.isCanceled -> OcrTimingOutcome.CANCELLED
+                            else -> OcrTimingOutcome.FAILURE
+                        })
                         session.resources.releaseLease(bitmap)
-                        session.execute {
+                        session.execute(timingCall) {
+                            session.timing?.record(OcrTimingEvent.SERIAL_PROCESSED, timingCall)
                             session.resources.release(bitmap)
                             running -= 1
                             if (!delivered) {
@@ -753,10 +797,11 @@ internal class CardTextAnalyzer(
                                     group.forEach { results[it.index] = reading }
                                 } else task.exception?.let(failures::add)
                                 launchNext()
-                            }
+                            } else session.timing?.record(OcrTimingEvent.LATE_IGNORED_AFTER_BATCH, timingCall)
                         }
                     }
                 } catch (error: Throwable) {
+                    session.timing?.record(OcrTimingEvent.SUBMISSION_THROWN, timingCall)
                     session.resources.releaseLease(bitmap)
                     session.resources.release(bitmap)
                     running -= 1

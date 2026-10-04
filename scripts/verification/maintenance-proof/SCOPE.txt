@@ -1,0 +1,98 @@
+Maintenance proof draft — not executed by the author.
+
+Everything is separate from the main checkout and its retained 13GiB receipts.
+The earlier 13GiB seed was deliberately stopped and its owned packages removed;
+it was not a product assertion failure. This harness never starts that proof.
+Only this worktree's new maintenance-proof scripts were authored. No app source,
+existing helper, normal APK, device, daemon, network setting or signing input is
+changed by preparation. The old API26 wrapper is NOT imported: it pins ordinary
+app identities and obsolete APK/source/profile hashes. Only the fully read pure
+android-regression validator is imported, with this worktree's actual byte hash.
+
+Root sequence after review, without starting any device implicitly:
+  python -B scripts/verification/maintenance-proof/test_contracts.py
+  python -B scripts/verification/maintenance-proof/build.py --build
+  python -B scripts/verification/maintenance-proof/run.py --build-dir <exact UUID directory> --profile-sha256 <fresh reviewed SHA256> --action check
+  same command with --action install, then --action run
+  explicit --action cleanup removes only the exact receipt-owned debug pair.
+Use the reviewed local Python executable. The 44-case variant passed in build
+9a1543d7cdab4ea3987b94136f8e5011; immutable runtime receipts remain under artifacts.
+The 39-case clock RED/GREEN pair is separate evidence. The first 40-case run
+failed the reclaim fixture's unverified assumption about the platform vacuum
+mode after its data/protection oracle succeeded; it is not a reclaim PASS.
+
+Only 44 explicit JUnit methods are allowed: 15 existing Retention, 3 Window,
+6 Import, 15 Maintenance, 2 owned-file Reclaim and 3 real WorkManager queue tests. The prior 41 identities
+and assertions remain unchanged. Each of the two reclaim tests creates 100002 real price rows
+and demands exact 2298 retained rows, protected data and actual file/block shrink.
+One explicitly creates a NONE auto-vacuum fixture before tables exist; the other
+records and checks the actual platform default. If default FULL already shrinks
+the file and allocated blocks, no redundant VACUUM is done. Otherwise explicit
+VACUUM runs only against its UUID fixture after its own Room connection closes.
+Neither case establishes automatic production compaction or OS-kill safety.
+All six test source files are copied byte-for-byte
+at build time and source/selector/APK hashes are checked again before execution.
+Reclaim and WorkManager queue sources live only in testSources, outside ordinary
+androidTest and outside the directly compiled proof runner directory. Their byte
+hashes and all 44 identities are unchanged by this source-set isolation fix.
+No scale class, dynamic method discovery, skip, assumption, failure, missing start
+or count substitution is accepted. The six Codec JVM methods are separate work
+and are not falsely counted as Android tests.
+
+Build: two offline normal-debug tasks, ordinary debug certificate, no release,
+signing credentials, AAB, install or connected task. All build output and project
+cache go to one fresh worktree artifacts UUID directory. Build log is 16MiB and
+Gradle deadline 20 minutes. Only that exact local child tree may be terminated.
+Android manifest is plain Application with no components, INTERNET or CAMERA.
+No Firebase/WorkManager normal application initialization or UI is launched.
+
+Device: emulator-5558 only; DomiDex_R27_Compatibility_API26, API26 x86_64,
+google_apis revision16, Android SDK built for x86_64, SQLite CLI3.18.2. Root must
+boot it and supply a NEW reviewed-profile.json at the maintenance output root.
+Never reuse the old boot ID. Required exact keys are in contracts.PROFILE_KEYS:
+schema1, serial, avd, model, fingerprint, api26, abi x86_64, imageRevision16,
+sqliteVersion3.18.2, bootId, avdIniSha256, avdConfigSha256, imagePackageSha256,
+imageSourcePropertiesSha256, ordinaryPackages mapping both ordinary app/test to
+their actual installed APK SHA256 or null. CLI must explicitly pin that file hash.
+The API26 AVD property is expected empty; exact read-only emu avd name is required.
+
+Every action checks genuine shell-v2 remote exit status, fixed target, boot,
+metadata, offline settings, no default network, no reverse mappings and global
+instrumentation idle. Existing ordinary packages are hash-preserved, never stopped,
+installed or cleared. UUID proof packages must be absent before first installation.
+Ownership intent is persisted before install/uninstall, and uncertain outcomes are
+reconciled only against the same exact package and APK bytes. Cleanup requires no
+active instrumentation, stops only the owned UUID pair, then proves PID absence
+and uninstalls it. It never upgrades a preceding failed runtime receipt.
+
+Run has a 20-minute whole-action deadline and bounded logs. Its genuine JUnit
+result is saved separately before strict post-idle checks. Root authorized a
+postterminal stop only after the complete 44/44 result, source/profile/APK ownership
+rechecks and global no-active-instrumentation check before each exact own package
+stop. This is recorded as terminalOwnedProcessStop and followed by real PID absence;
+it is assisted lifecycle cleanup, not natural shutdown or OS-kill evidence. Failed
+JUnit results remain FAIL and never reach this success-only cleanup. On active
+instrumentation after a timeout, explicit cleanup refuses; Root must assess it.
+
+Both source trees and standard APK/AAB/mapping/v26 output inventories are hashed
+before/after. The retained main 13GiB runtime artifacts are
+not rehashed or touched; no claim is made that every artifact on the host is frozen.
+
+Evidence scope: isolated Room transaction/rollback/cancellation/reopen semantics
+on API26, NOT OS process death, power loss, hardware coverage, migration of real
+user databases, full-scale storage clearance, release or deployment approval.
+
+The 3 queue tests use the existing locally cached work-testing:2.11.2 dependency
+only in this opt-in proof package. TestScheduler USE_TIME_BASED_SCHEDULING keeps
+real 30/60-second retry timing, while TestDriver supplies only battery/storage
+constraint readiness. An actual WorkInfo BLOCKED + dependency edge is required
+before releasing each predecessor. The explicit FAILURE control must poison the
+child; real production PAUSED_INVALID_TICKET / RETRY_EXHAUSTED transport success
+must unblock a child that processes a freshly committed actual import ticket.
+The per-instance nextBatch seam wraps the actual Room coordinator for INVALID
+and injects IOException only for the exhausted-retry transport case. Result
+mapping and attempts are never fabricated; no direct doWork invocation occurs.
+This does not prove JobScheduler delivery, reboot/process recovery, physical
+constraints, or ordinary application startup/import call-site wake-up behavior.
+Per-case bounded JSON receipts remain under the exact fresh proof UID cache;
+retain them before the explicit owned-pair cleanup. No VACUUM is added to Worker.

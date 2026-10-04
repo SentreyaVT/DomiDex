@@ -3774,6 +3774,15 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
     var contributionFailure by remember { mutableStateOf<StorageFailureReason?>(null) }
     val contributionStorage = remember(context) { FirebaseDomiDexStorageGateway(context) }
     val scanKnowledge = remember(context) { FirebaseScanKnowledge(context) }
+    val knowledgeSource = remember(scanKnowledge) {
+        object : ScannerKnowledgeSource {
+            override fun currentOwner() = canonicalCollectionOwnerUid(FirebaseAuth.getInstance().currentUser)
+            override fun cached(fingerprint: String) = scanKnowledge.cached(fingerprint)
+            override fun observe(fingerprint: String, update: (com.dominik.cardvault.data.knowledge.ScanKnowledgeRecord?) -> Unit) =
+                scanKnowledge.observeRelevant(fingerprint, update)
+        }
+    }
+    val knowledgeConsumer = rememberScannerKnowledgeConsumer(repository.cloudState, knowledgeSource)
     val scannerAppVersion = remember(context) {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }
@@ -4087,10 +4096,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 activeNormalizedCard = currentAnalysis.normalizedCard
                 val reportKnowledgeContext = scannerReportKnowledgeContext(currentAnalysis)
                 val knowledgeFingerprint = reportKnowledgeContext?.fingerprint
-                val latestKnowledge = AtomicReference(knowledgeFingerprint?.let(scanKnowledge::cached))
-                val knowledgeListener = knowledgeFingerprint?.let { fingerprint ->
-                    scanKnowledge.observeRelevant(fingerprint, latestKnowledge::set)
-                }
+                val knowledgeCapture = knowledgeConsumer.begin(knowledgeFingerprint)
                 val latestReviewedKnowledge = AtomicReference<com.dominik.cardvault.data.knowledge.ReviewedScanKnowledgeHint?>(null)
                 val reviewedKnowledgeListener = reportKnowledgeContext?.let { knowledgeContext ->
                     scanKnowledge.observeLabRelevant(knowledgeContext, latestReviewedKnowledge::set)
@@ -4186,7 +4192,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 val fused = ReviewedScanKnowledgeRanker.apply(
                     ScanKnowledgeCandidateRanker.apply(
                         HybridCandidateFusion.rank(currentAnalysis, resolution.candidates, artwork),
-                        latestKnowledge.get(),
+                        knowledgeCapture.current(),
                     ),
                     latestReviewedKnowledge.get(),
                     knowledgeFingerprint,
@@ -4264,7 +4270,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 )
                 } finally {
                     reviewedKnowledgeListener?.close()
-                    knowledgeListener?.close()
+                    knowledgeCapture.close()
                     currentAnalysis.normalizedCard?.let { bitmap ->
                         if (!bitmap.isRecycled) bitmap.recycle()
                     }

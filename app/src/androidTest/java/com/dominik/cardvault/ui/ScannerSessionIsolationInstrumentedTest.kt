@@ -366,12 +366,14 @@ class ScannerSessionIsolationInstrumentedTest {
                 assertFalse("Cancelled session must be removed after cleanup", sessions.any { it === handle })
                 assertTrue("All cancelled capture bitmaps must be recycled after native completion", requireNotNull(ownedAtCancellation).all(Bitmap::isRecycled))
 
-                analyzer.analyze(File(context.cacheDir, second.fileName)) {
+                val secondHandle = analyzer.analyze(File(context.cacheDir, second.fileName)) {
                     secondResult.set(it)
                     secondFinished.countDown()
                 }
                 assertTrue("The same analyzer must accept a subsequent capture", secondFinished.await(25, TimeUnit.SECONDS))
                 val analysis = secondResult.get().getOrThrow()
+                logCompletedProbeDiagnostics(second.fileName, analyzer, secondHandle, analysis, measurement.get(),
+                    previousTimingHandle = handle)
                 assertTrue("The subsequent capture must actually invoke ML Kit", measurement.get().ocrCalls > 0)
                 assertEquals(second.number, analysis.collectorNumber)
                 assertEquals(second.setCode, analysis.setIdentifier)
@@ -413,13 +415,14 @@ class ScannerSessionIsolationInstrumentedTest {
                 fun runFixture(fixture: SyntheticIdentity): CardTextAnalysis {
                     val completed = CountDownLatch(1)
                     val result = AtomicReference<Result<CardTextAnalysis>>()
-                    analyzer.analyze(File(context.cacheDir, fixture.fileName)) {
+                    val captureHandle = analyzer.analyze(File(context.cacheDir, fixture.fileName)) {
                         result.set(it)
                         completed.countDown()
                     }
                     assertTrue("Real OCR must complete within its existing deadline", completed.await(25, TimeUnit.SECONDS))
                     val analysis = result.get().getOrThrow()
                     retainedResults += analysis
+                    logCompletedProbeDiagnostics(fixture.fileName, analyzer, captureHandle, analysis, measurement.get())
                     assertTrue("Each capture must actually invoke ML Kit", measurement.get().ocrCalls > 0)
                     assertEquals("Fixture ${fixture.fileName}: ${analysis.lines}", fixture.number, analysis.collectorNumber)
                     assertEquals(fixture.setCode, analysis.setIdentifier)
@@ -451,6 +454,146 @@ class ScannerSessionIsolationInstrumentedTest {
             retainedResults.mapNotNull(CardTextAnalysis::normalizedCard).distinct().forEach {
                 if (!it.isRecycled) it.recycle()
             }
+        }
+    }
+
+    /**
+     * Read-only diagnostics after the genuine terminal callback, before unchanged assertions.
+     * No extra ML Kit call, new bitmap, modified timeout, callback replacement or warm-up.
+     * Absence is deliberately NOT classified as queued, running, failed or timed out.
+     */
+    private fun logCompletedProbeDiagnostics(
+        label: String,
+        analyzer: CardTextAnalyzer,
+        handle: AutoCloseable,
+        analysis: CardTextAnalysis,
+        metrics: CardTextAnalysisMetrics?,
+        previousTimingHandle: AutoCloseable? = null,
+    ) {
+        val tag = "DomiDexOcrTest"
+        try {
+            check(label in setOf("native-cancellation-B", "session-isolation-A", "session-isolation-B"))
+            val token = InstrumentationRegistry.getArguments().getString("domidexRegressionRunId")
+            check(token != null && token.matches(Regex("[a-f0-9]{32}")))
+            val measured = checkNotNull(metrics)
+            val executorField = CardTextAnalyzer::class.java.getDeclaredField("preprocessingExecutor").apply { isAccessible = true }
+            val executor = executorField.get(analyzer) as ExecutorService
+            val readingsField = handle.javaClass.getDeclaredField("readings").apply { isAccessible = true }
+            fun timingSnapshot(target: AutoCloseable): OcrTimingSnapshot {
+                val field = target.javaClass.getDeclaredField("timing").apply { isAccessible = true }
+                return checkNotNull(field.get(target) as OcrTimingTrace?).snapshot()
+            }
+            check(previousTimingHandle == null || label == "native-cancellation-B")
+            // The real map belongs to this exact AnalysisSession. Read it on its existing
+            // serial worker, after its completion/cleanup queue; do not race mutableMap.
+            // This bounded post-result observation does not extend any OCR deadline.
+            val (snapshot, timingSnapshots) = executor.submit(java.util.concurrent.Callable {
+                @Suppress("UNCHECKED_CAST")
+                val readings = (readingsField.get(handle) as Map<OcrReadKey, String>).toMap()
+                val timings = buildList {
+                    if (previousTimingHandle != null) add("native-cancellation-A" to timingSnapshot(previousTimingHandle))
+                    add(label to timingSnapshot(handle))
+                }
+                readings to timings
+            }).get(5, TimeUnit.SECONDS)
+            val modern = CardOcrRois.profiles.single { it.id == "modern" }
+            val strip = CardOcrRois.profiles.single { it.id == "full_art_left" }.number
+            val border = CardOcrRois.profiles.single { it.id == "extended_lower_border" }
+            val expected = mutableListOf<Pair<String, OcrReadKey>>()
+            fun slots(profile: String, roi: CardRoi, vararg variants: String) {
+                variants.forEach { variant ->
+                    expected += "$profile/$variant" to OcrReadKey(
+                        roi, variant, AnalysisOrientation.DEG_0,
+                        CardScanConfiguration.RECOGNITION_WIDTH, CardScanConfiguration.RECOGNITION_HEIGHT,
+                    )
+                }
+            }
+            // Same14 descriptors as the independently frozen probe-preparation test.
+            // No buildOrientationProbeInputs call: diagnostics allocate no OCR pixels.
+            slots("rc3_name", modern.name, "original", "enhanced")
+            slots("rc3_set", modern.set, "original", "enhanced", "inverted")
+            slots("rc3_number", modern.number, "original", "enhanced", "inverted")
+            slots("identity_strip", strip, "original", "enhanced")
+            slots("extended_border", border.set.union(border.number), "original", "enhanced")
+            slots("historical_name", historicalNameFallbackRoi, "original")
+            slots("historical_identity", historicalIdentityFallbackRoi, "original")
+            check(expected.size == 14 && expected.map { it.second }.toSet().size == 14)
+            fun base(event: String) = org.json.JSONObject().put("event", event)
+                .put("runToken", token).put("fixture", label)
+            fun emit(payload: org.json.JSONObject) {
+                val encoded = payload.toString()
+                check(encoded.toByteArray(Charsets.UTF_8).size <= 3_500)
+                android.util.Log.i(tag, encoded)
+            }
+            emit(base("completed_probe_summary")
+                .put("elapsedNanos", measured.elapsedNanos)
+                .put("stagesNanos", org.json.JSONObject(measured.stageDurationsNanos))
+                .put("ocrCalls", measured.ocrCalls).put("cacheHitInputs", measured.cacheHitInputs)
+                .put("preparedOcrBitmaps", measured.preparedOcrBitmaps)
+                .put("preparedOcrBitmapBytes", measured.preparedOcrBitmapBytes)
+                .put("failureType", measured.failureType ?: org.json.JSONObject.NULL)
+                .put("qualityReason", analysis.imageQuality.reason)
+                .put("orientation", analysis.analysisOrientation?.degrees ?: org.json.JSONObject.NULL)
+                .put("orientationScore", analysis.orientationScore).put("orientationMargin", analysis.orientationMargin)
+                .put("collectorNumber", analysis.collectorNumber ?: org.json.JSONObject.NULL)
+                .put("setIdentifier", analysis.setIdentifier ?: org.json.JSONObject.NULL)
+                .put("ocrDurationMillis", analysis.ocrDurationMillis)
+                .put("expectedProbeKeys", 14).put("allCompletedSessionKeys", snapshot.size)
+                .put("completedProbeKeys", expected.count { snapshot.containsKey(it.second) })
+                .put("scope", "terminal-session-cache; no per-ROI submission/failure/timing classification"))
+            expected.forEachIndexed { index, (slot, key) ->
+                val present = snapshot.containsKey(key)
+                val reading = snapshot[key]
+                val bytes = reading?.toByteArray(Charsets.UTF_8)
+                val entry = base("completed_probe_slot").put("index", index).put("slot", slot)
+                    .put("state", when { !present -> "not_completed"; reading!!.isBlank() -> "completed_blank"; else -> "completed_text" })
+                    .put("key", key.toString()).put("utf8Bytes", bytes?.size ?: org.json.JSONObject.NULL)
+                    .put("sha256", bytes?.let { value ->
+                        java.security.MessageDigest.getInstance("SHA-256").digest(value)
+                            .joinToString("") { "%02x".format(it) }
+                    } ?: org.json.JSONObject.NULL)
+                // Synthetic text only. Preserve state/length/hash, not a fabricated/truncated
+                // text value, if an unexpected recognizer result exceeds this log budget.
+                if (bytes != null && bytes.size <= 768) entry.put("text", reading)
+                else entry.put("text", org.json.JSONObject.NULL).put("textOmittedOversize", bytes != null)
+                emit(entry)
+            }
+            emit(base("completed_probe_end").put("slotRecords", 14))
+            // Supplementary test-only metadata on the already-collected Scanner tag. Existing
+            // DomiDexOcrTest's exact 16-record grammar is unchanged. Never emit recognized text.
+            timingSnapshots.forEach { (timingLabel, trace) ->
+                fun timingBase(event: String) = org.json.JSONObject().put("event", event)
+                    .put("runToken", token).put("fixture", timingLabel)
+                fun emitTiming(payload: org.json.JSONObject) {
+                    val encoded = payload.toString()
+                    check(encoded.toByteArray(Charsets.UTF_8).size <= 3_500)
+                    android.util.Log.i("DomiDexScanner", encoded)
+                }
+                emitTiming(timingBase("ocr_timing_summary").put("records", trace.entries.size)
+                    .put("observed", trace.observed).put("dropped", trace.dropped)
+                    .put("clockRegressed", trace.clockRegressed).put("clockFailures", trace.clockFailures)
+                    .put("scope", "snapshot-only; events after this read are not observed; close-return is not native-unload completion"))
+                trace.entries.forEach { entry ->
+                    val row = timingBase("ocr_timing_entry").put("ordinal", entry.ordinal)
+                        .put("elapsedNanos", entry.elapsedNanos).put("stage", entry.event.name)
+                        .put("probe", entry.probe ?: org.json.JSONObject.NULL)
+                        .put("outcome", entry.outcome?.name ?: org.json.JSONObject.NULL)
+                        .put("callId", entry.call?.id ?: org.json.JSONObject.NULL)
+                    entry.call?.let { call ->
+                        row.put("profile", call.profile).put("variant", call.variant)
+                            .put("orientation", call.orientation ?: org.json.JSONObject.NULL)
+                            .put("regions", org.json.JSONArray(call.regions)).put("roi", org.json.JSONArray(call.roi))
+                    }
+                    emitTiming(row)
+                }
+                emitTiming(timingBase("ocr_timing_end").put("records", trace.entries.size)
+                    .put("observed", trace.observed).put("dropped", trace.dropped))
+            }
+        } catch (failure: Exception) {
+            // A diagnostic failure never replaces or relaxes the original business assertion.
+            // This marker invalidates diagnostic completeness, not the original test contract.
+            android.util.Log.e(tag, "diagnostic_unavailable fixture=$label type=" + failure.javaClass.simpleName)
+            if (failure is InterruptedException) Thread.currentThread().interrupt()
         }
     }
 
