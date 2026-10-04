@@ -2,6 +2,180 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
 
+### Current test-track status and source-backup verification — 2026-10-04 after 21:54 Europe/Berlin
+
+The read-only Play Console follow-up now confirms **Closed Test - Alpha / Active /
+available to selected testers**, release `27 · Geschlossene Alpha · Preise & Stabilität`,
+one version code, published **04 October at 21:54**. Publishing overview confirms
+the published app update with no pending changes. No publish control was activated
+during that follow-up. This supersedes the pending-review status in the historical
+21:50 checkpoint below; the immutable AAB, signature and version remain unchanged.
+
+The source-backup follow-up rechecked GitHub directly: Android remote engineering
+branch matched local `6ea94e258c6ff8edffabbc0960ba6095b8917c99`; the final deployment
+documentation and three reviewed Web production changes were not yet committed.
+The Web remote is named `github`, not `origin`, and its `main` is not the current
+engineering branch. Git backup completion must not be confused with deployment,
+a default-branch replacement, a new GitHub Release, or all-gates approval.
+
+Web backup is now pushed and independently confirmed at
+`77b37a145dbd5aacdc018124a2251637ce63f991` on GitHub
+`nandedomi/DomiDex-Web`, branch `codex/release-27-hardening`. The remote `main`
+remains `d169c9e1ecf6d728a58d2fa55ead59adcf7a1716`. Separate reviewed commits are
+`f2c7704` (Docker/root headers), `2cf0bc9` (deletion access fence), `a6dc6b5`
+(isolated proof harnesses), and `77b37a1` (current handoff). No GitHub Release,
+tag, PR or default-branch merge was created. GitHub reports zero repository
+webhooks/workflows; Cloud Build trigger listings for global/europe-west1 are empty.
+Targeted high-confidence secret patterns found no matches in the72 pre-helper
+outgoing commit trees or final staged proof helpers; this is not a comprehensive
+secret-detection guarantee. Private environment/key/release files and experimental
+`backend/market-data` were not included. Android source already matched remote
+`6ea94e2`; this documentation checkpoint adds the latest deployment/readback facts
+to that same engineering branch. Existing untracked hardware-proof work is excluded.
+
+Fresh isolated Web regression: **1,299/1,299 tests in 79 files**, no failures/skips,
+24.45s, report `DomiDex-Web/outputs/release-local/2026-10-04T20-07-35-687Z-21596.{json,log}`.
+Typecheck passed. Existing React-act/JSDOM-canvas diagnostic warnings remain.
+The separate host-helper selection initially passed 102/102. Broader scoped lint
+found unawaited node:test registrations and missing explicit sort comparators in
+new proof helpers; these are not a new product/SDK failure or a reason to waive lint.
+The ordinary whole-workspace lint also still includes unrelated experimental
+`backend/market-data`, excluded from the deployed source and source-backup commits.
+
+The scoped lint findings are now corrected only in the new proof helpers:
+33 explicit top-level awaits and six explicit UTF-16 comparators, preserving
+assertions, ordering and deadlines. Final scoped lint and typecheck pass;
+92 SDK host controls plus10 selection cases pass **102/102**,10.035s, no skips.
+No fresh SDK/device run was claimed from these host-only edits; the original
+lock-only RED and historical exact-input receipts remain unchanged.
+
+Important evidence limits: live `338/348` counts priced **copies**, not unique
+card identities. Private-binder positions6/7 already displayed unavailable before
+this deployment; the placeholder represents missing/conflicting collection-entry
+placement identity, not a demonstrated image404. Their precise cause remains open.
+The six unresolved artwork identities and six missing native vendor symbols are
+separate issues. Full-Sync stays enabled, Delta disabled. No new Android build,
+signing, device installation, deployment or Play mutation is part of this follow-up.
+
+### Authorized test-track and Web deployment — 2026-10-04 21:50 Europe/Berlin
+
+**Current outcome:** immutable Android27 is INTERNAL-live and submitted to the
+closed Alpha review (Google approval/publish still pending). Reviewed Web/backend
+and Rules are now live; replacement Web version`334fdfd6961039a1` was published at
+21:47:30 and pinned to`domidex-web-r27-20261004d`. No production-track Android
+release, tester-list change, new Android build/signature or device install.
+This deployment does not turn the historically scoped/unfinished engineering
+gates into blanket PASS. Full-Sync remains R27; Delta stays disabled.
+
+The human-authorized follow-up in the DomiDex architecture chat explicitly requested
+the existing signed27 AAB in the intended test track plus its reviewed Web/backend.
+The root agent read the actual human turn before production writes. This is not a
+new Android build, a production-track rollout or a claim that all earlier gates passed.
+
+Google Play accepted the immutable AAB hash documented below, automatically recognized
+its embedded R8 mapping, and accepted the existing exact partial native-symbol ZIP.
+The INTERNAL track `4701419545030527814` now reports **Active / available to internal
+testers**, release `27 · Geschlossene Alpha · Preise & Stabilität`, published
+04 October at21:04, code27/name`1.0-closed-alpha.6`. At that checkpoint the separate
+Closed Alpha track had not been changed. Tester lists, signing, Android dependencies
+and devices were not changed. The review
+showed no warnings and zero newly unsupported devices; that does NOT change the
+actual one-of-seven native-symbol coverage. Six unavailable vendor originals remain.
+Proof: `artifacts/release27-engineering-20261004/deployment-web-r27/play-r27-internal-live.jpg`.
+
+The user subsequently explicitly requested R27 in the closed Alpha. The existing
+R27 draft in track`4698265943442511200`, release`9`, already referenced the same
+code27 AAB, embedded mapping and attached symbols. It was reviewed, saved with100%
+Alpha rollout and submitted as the sole pending change. Publishing overview now
+lists **Closed Test - Alpha / 27 / changes being reviewed**, with preliminary checks
+still running (UI estimate up to14minutes). This is NOT an Alpha-live confirmation.
+Managed publishing remains enabled; after Google approval the publication step is
+still required. No production-track release or tester-list change was made.
+Proof: `artifacts/release27-engineering-20261004/deployment-web-r27/play-r27-alpha-submitted.jpg`.
+At21:35 the preliminary checks had finished; the UI explicitly said the changes
+are now being reviewed. Proof: `play-r27-alpha-in-review.jpg` in the same directory.
+
+The Web candidate uses an isolated allowlisted source stage; unreviewed untracked
+`backend/market-data` and private environment files are excluded. A first candidate
+failed because installed vinext's `/:path*` header matcher excludes `/`. An explicit
+root rule fixes that, with a real matcher regression (1295PASS/1FAIL before,
+1296/1296 after). Candidate b passed32 HTTP/header/asset/auth checks, but the final
+visual check revealed missing global CSS: server-layout CSS was absent from emitted
+client assets. Hosting was promptly restored to original version`c71089a842d591bc`.
+The earlier32-check PASS is therefore not a visual or overall deployment PASS.
+The stronger smoke reproduces the CSS failure and is retained as
+`candidate-b-style-regression-red.json`; no failed receipt was overwritten.
+
+The reviewed Firestore and Storage Rules were deployed and read back byte-identical
+(receipt `rules-after-ccaed9dc9d0243728001da6eb205c187/rules-after.json`). Functions,
+IAM, account grants, server limits and public access settings were not changed.
+The candidate runtime stable-configuration hash matches the baseline. Initial
+price-listener interruption cleared after explicit retry; another full reload then
+loaded348cards/345variants/10sets and connected without retry. Private binders and
+ten existing shares loaded read-only. Two unavailable slots on private-binder page1
+were independently present on the restored old version too, not introduced by R27.
+
+The attempted null-client `GlobalStyles` bridge passed local typecheck/scoped lint
+and1296/1296 tests but FAILED the actual candidate-c production smoke: global CSS
+was still absent and rendered HTML lacked the root html/body wrapper. The attempt
+was therefore reverted; candidate c was never published to Hosting. Its failed
+receipt remains `candidate-c-smoke.json`. Last full test before reverting the
+ineffective bridge: Web `outputs/release-local/2026-10-04T19-08-20-061Z-19952.{json,log}`.
+The actual immutable candidate-c server bundle was extracted read-only in Cloud
+Build`571ac264-5223-42e5-8402-8c4a0ea92dab` and downloaded as
+`server-c-audit.tar.gz` for a concrete root-layout diagnosis. The old functioning
+Hosting version remains live; the reviewed R27 Web/backend is not yet live.
+The actual server bundle proves root `/` and `/app` load the SAME page chunk and
+both root/nested layout loaders resolve to AuthProvider alone. Discovery retained
+both loaders, so the failure is import aliasing, not missing source files. Vinext
+emits absolute `/app/app/...` imports without `/@fs/`; Vite8 passes root/asSrc to
+its native resolver. The actual `/app` build root permits those imports to be
+shadowed by existing `app/app/...` files. The targeted Docker correction changes
+only the dependencies/builder WORKDIR to `/srv/domidex` and its two COPY sources;
+runtime remains `/app`, same dependencies/settings. Real filesystem regression:
+1FAIL/2PASS before,3PASS after, including retained counterfactual collision control.
+Full suite afterward:79files/1299PASS,0FAIL/0SKIP,21.91s,
+Web`outputs/release-local/2026-10-04T19-34-24-604Z-18520.{json,log}`.
+Typecheck passed. A new-test-only unnecessary regex escape was removed after lint
+reported it; focused lint and the unchanged3assertions then passed again.
+Candidate d build`a5cceaa9-ea8f-4fef-9b72-d648ff477d4d` is running; actual server,
+HTML/root CSS and visual checks remain necessary before Hosting publication.
+
+**Completed d validation (21:50):** Cloud Build succeeded21:43:07; exact image
+digest`4ac5de98703c567cef2ec07fdad1c77f60a1654849965a6dc25eff61cf9af4e8`.
+The exported server proves distinct root/app pages and distinct RootLayout versus
+AuthProvider wrapper; actual RootLayout renders html/lang=de/body and binds global
+CSS. The exported client contains158 files; all311 original stage inputs remain
+unchanged. The extraction reviewer's first CSS parser missed an adjacent block;
+this diagnostic-only failure and its read-only corrected validation are retained
+in`stage-d1a6bcea285348ac8231d9ce5b9617e4/client-extraction.json`. No product/test
+assertion was relaxed. A separate selection registration test first failed22vs21;
+the count and explicit new-file assertion were updated, then10/10 passed.
+
+Both tagged-candidate and live GET-only checks pass45/45: root document wrappers,
+distinct landing/app pages, exact built JS/CSS bytes, global CSS first, security
+headers and401 denial on three private APIs. Receipts:`candidate-d-smoke.json`
+and`live-d-smoke.json`. Actual browser screenshots/computed styles confirm the
+landing and guest-app design before publication, then the authenticated live page:
+Geist,body margin0,expected responsive layout,348cards/345variants/10sets,
+600.28EUR,338/348priced,connected sync without retry. Private binders,three pages
+and ten existing shares load read-only. Existing unavailable slots6/7 remain as
+observed on the old version; no collection/binder/price-choice/share write was made.
+Proof images:`candidate-d-home.jpg`,`candidate-d-app.jpg`,`live-d-app.jpg`.
+
+Runtime baseline hash remains`e078d24140bf14ed015045aceb8789ee7619b8870f132d3ec821916684e59be8`
+(`run-after-d.json`); no changed identity/env/limits. The fixed6-GET metadata read
+`live-metadata-minimal-review/read-a697c17c41564c9fb4d2896ff11a2e69/result.json`
+in the retained storage worktree confirms Hosting334fdfd6961039a1→tagr27-20261004d
+→revisiondomidex-web-r27-20261004d with equal start/end reads; SHA256
+`9722e767f0c2556376473e6673628477840c8bde54c323f284fa363d7b72522b`.
+Default Run traffic remains on its existing revision; Hosting uses the exact tag.
+Production Cloud Functions, IAM/AppCheck enforcement and scaling were not changed.
+The exact R27 AAB hash was rechecked after the Alpha submission and is unchanged.
+Whole-workspace lint includes excluded experimental market-data failures; the exact
+deployable source scope passed under the unchanged repository ignore policy
+(185source files,61regularly ignored,124eligible). No claim of whole-workspace green.
+
 ### Signed local R27 candidate — 2026-10-04 20:15 Europe/Berlin
 
 **Local artifact verification PASS; not a blanket rollout approval.** The reviewed
@@ -3517,17 +3691,17 @@ environment, root dist/config integrity unchanged). No deployment was performed.
 | 2 API security | PASS (authenticated write scope) | 773 non-emulator + 30 emulator tests; public IP/token limits remain Gate 6, source-configured limits and deployment limits explicit |
 | 3 App Check | PASS (local disabled-rollout preparation) | 15 new JVM + 2 startup emulator tests; 52 backend tests; real enabled attestation/latency and worker ordering remain manual, no live enforcement |
 | 4 Collection/binder sync | IN PROGRESS, FULL retained | Current collection/binder SDK cases pass, including durable offline retry, separate-client stale-base convergence and1001-binder FULL/Room-reopen/idempotence (latest18.436s). Whole SDK run remains17/18 RED for the separate Gate9 lock-only case. Actual WorkManager retry1/1 and automatic large-budget continuation1/1 retain isolated-package scopes; exact4WorkSpecs/two cycles/complete local-remote integrity.18/18 focused Room controls remain dated. UI/OS/process delivery, simultaneous physical devices and broader mixed scale remain open. Delta is deferred; see SYNC.md |
-| 5 Pricing/catalog | IN PROGRESS | Bounded parser/Room import and verified mappings retain scope. API26 isolated46/46 proves catalog INSERT FULL plus real ERROR-status FULL, exact15-table preservation/reopen/recovery and retained failed Result. Three original JVM assertions reproduced, narrowly fixed,11/11 focused GREEN. Fresh full JVM/lint and final current-pair regression next. No complete provider price-coverage or central-cache production claim. |
+| 5 Pricing/catalog | IN PROGRESS | Bounded parser/Room import and verified mappings retain scope. API26 isolated46/46 proves catalog INSERT FULL plus real ERROR-status FULL, exact15-table preservation/reopen/recovery and retained failed Result. Three original JVM assertions reproduced, narrowly fixed,11/11 focused GREEN; subsequent full JVM1062PASS/one existing live skip and Android371/371 now passed. No complete provider price-coverage or central-cache production claim. Live338/348 counts priced copies; exact missing entry identities remain to classify. |
 | 6 Shared binder scale | IN PROGRESS | in-flight deletion/ownership, bounded public cache and exact persisted-price/supplement parity tested; per-card body cap/cancellation14/14, cache/package83/83. Missing-trend DTO resolves once instead of twice, full parity verified. O(N) placement reads, total fan-out and trusted-ingress public IP/token limits remain |
 | 7 Camera stability | PARTIAL (emulator functional evidence) | Prior virtual rotation/CameraX fresh-JPEG tests retain their scopes. Actual MainActivity PreviewView STREAMING->CREATED/IDLE held1s->RESUMED/STREAMING passes twice13.144/12.801s without capture/queue/upload. New actual recreation/old-view retirement/new-view STREAMING test has1/1 JUnitPASS13.581s with protected-state checks. Overall wrapper failures for cached test-process idle are retained; separately verified owned cleanup is not retroactive whole-run PASS. Physical camera, HOME/OS-death, permission revocation and broader background matrix remain open |
 | 8 Recognition | IN PROGRESS (limited replay PASS) | Historical replays retain their scope. Latest owner-confirmed queue triple: Nidorina MEP101 read correctly3times, correct suggestions, two candidates each,4.2–4.7s active plus burst queue delay. Earlier sequential no-candidate observations have unknown ground truth and are not Nidorina failures. No automatic-printing, speedup vs26 or full hardware claim; quality checks unchanged |
 | 9 Community knowledge | IN PROGRESS; separate lock-only RED retained | Original18-case SDK suite remains17/18 because lock-only lacks listener denial within unchanged30s. Independent Session NO_ACCESS-to-consumer proof passes1/1. Fresh actual deletion-request/Auth/Firestore/Storage/Android workflow now passes1/1,2.257s, plus92 host controls and complete fixture/input cleanup. No listener SLA, legacy-job repair, final purge, Eventarc/load or live-consent claim. |
-| 10 Privacy/lifecycle | IN PROGRESS (fresh local deletion fence PASS) | Real local deletion-service suite36/36 and overall Web1295/1295 pass; fresh jobs atomically retain minimal disabled accountAccess through controlled65-minute session-expiry wait. Existing jobs whose access document was previously removed are not migrated; stalled/review-required jobs need operator continuation. Complete provider purge/expiry/retention workflow remains open. Seven-day Storage soft delete is not live-object TTL; no production change. |
-| 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Hosting live versionc71089a842d591bc now read-only bound to sharing-layout-repair-20260925 tag/revision with consistent start/end reads; actual limits2instances/40concurrency/60s/1CPU/512Mi. This does not prove IP provenance or load. Live metrics/alerts/billing and complete retention inventories remain unverified. |
+| 10 Privacy/lifecycle | IN PROGRESS (fresh local deletion fence PASS; reviewed service deployed) | Real local deletion-service suite36/36 and latest Web1299/1299 pass; fresh jobs atomically retain minimal disabled accountAccess through controlled65-minute session-expiry wait. Existing jobs whose access document was previously removed are not migrated; stalled/review-required jobs need operator continuation. Complete provider purge/expiry/retention workflow remains open. Seven-day Storage soft delete is not live-object TTL. Reviewed service is in the explicitly authorized04October Web deployment; no live deletion was tested. |
+| 11 Observability/cost | PARTIAL | Safe-log inventory and hypothetical model retained. Current Hosting334fdfd6961039a1 is read-only bound to r27-20261004d tag/revision with consistent metadata reads; priorc71089a842d591bc remains a historical rollback anchor. Actual limits unchanged:2instances/40concurrency/60s/1CPU/512Mi. This does not prove IP provenance or load. Live metrics/alerts/billing and complete retention inventories remain unverified. |
 | 12 Load/scale | PARTIAL; bounded history and local maintenance verified | Prior matched58/87-sample and complete-model/SQL/private-data proofs remain dated; portfolio improvement is not private-binder speedup. API26 complete113-row annual plan now passes. User-approved12-month collection-only retention preserves every local owner/pending/tombstone and unowned latest price. Actual isolated44+SQLiteFull45, file reclamation, two-process recovery and OS-triggered same-child continuation pass. No physical ENOSPC/WAL/power-loss/OEM proof;13GiB test explicitly withdrawn, not a blocker to restart. O(N) sharing/fan-out and production load remain open. |
-| 13 Full regression | Current local regression PASS; release verification pending | Latest app64170e3c/test5da0d817 passes371/371, zero skips/failures,310.127s with source/diagnostic checks. Full JVM1062PASS/one unchanged opt-in skip; debug lint0errors/144warnings. Native46 and actual deletion workflow separately PASS. Historical368/371 and370/371 remain; intermittent OCR cause unresolved. Web1295/private36 retain dated scopes. Final physical/live/minified-packaged evidence is not inferred from debug PASS. |
+| 13 Full regression | Current local regression and signed artifact verification PASS in stated scopes | Latest app64170e3c/test5da0d817 passes371/371, zero skips/failures,310.127s with source/diagnostic checks. Full JVM1062PASS/one unchanged opt-in skip; debug lint0errors/144warnings, release lint0errors/170warnings. Native46 and actual deletion workflow separately PASS. Historical368/371 and370/371 remain; intermittent OCR cause unresolved. Latest Web1299/private36 retain scopes. Gate15 records signed static verification; final physical/live/minified runtime evidence is not inferred from debug or artifact PASS. |
 | 14 Database migration | BASELINE PASS | current 12→13 on 1k/5k/20k with all old columns preserved; rerun if later schema changes |
-| 15 Release engineering | Local signed candidate verified; no rollout approval | Immutable releases/v27: actual code27/name, pinned upload signature, 688 signed payloads, bundletool validation, exact embedded R8 mapping and partial1/7 native-symbol coverage verified. Earlier hardware/live/privacy/load and backend-deployment boundaries remain; no Play upload or stable publication. |
+| 15 Release engineering | Verified signed candidate; explicitly authorized test deployment | Immutable releases/v27: actual code27/name, pinned upload signature,688 signed payloads, bundletool validation, embedded R8 mapping and partial1/7 native-symbol coverage verified. INTERNAL active; same27 now confirmed Closed Alpha-live, published04October21:54. Reviewed Rules deployed/read back; Web334fdfd6961039a1/tagr27-20261004d is live after45/45 candidate/live checks and actual visual/authenticated read-only checks. Earlier hardware/live/privacy/load boundaries remain; no production-track or blanket all-gates approval. See dated deployment checkpoints above. |
 | RC final validation | NOT READY | complete technical report and final explicit recommendation |
 
 ## Initial findings (historical; later checkpoints document resolved items)

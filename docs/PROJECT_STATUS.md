@@ -1,6 +1,6 @@
 # DomiDex – technischer Projektstatus
 
-Stand: **2026-10-01**, Europe/Berlin. Ausgangsbefunde des ursprünglichen
+Stand: **2026-10-04**, Europe/Berlin. Ausgangsbefunde des ursprünglichen
 Dokumentationsaudits: lokaler Checkout, Git-Historie, GitHub und Google Play
 Console lesend. Die anschließenden lokalen Änderungen und Teststände sind im
 [Release-27-Ledger](RELEASE_27.md) maßgeblich dokumentiert; kein Gesamt-Gate-Pass
@@ -19,6 +19,55 @@ Live-/Datenschutz-Betriebs- und Release-Nachweise sind weiterhin offen. Gate15
 bleibt gesperrt; genaue Artefakte und Grenzen im aktuellen Release-27-Ledger.
 
 ## Unterschiedliche Projektstände
+
+**Aktueller Stand 04.10.2026, nach 21:54:** Die geschlossene Alpha ist inzwischen
+auch tatsächlich live: Die Play Console zeigt „Aktiv“, „Für ausgewählte Tester
+verfügbar“, Release „27 · Geschlossene Alpha · Preise & Stabilität“ und
+„Veröffentlicht am 4. Okt. 21:54“. Die Veröffentlichungsübersicht bestätigt das
+veröffentlichte Update. Diese Nachprüfung war ausschließlich lesend; dabei wurde
+keine weitere Veröffentlichung ausgelöst. Der frühere Prüfstatus unten ist
+historisch. Das signierte AAB und Versionscode 27 sind unverändert.
+
+Die Web-Regression wurde um 22:07 erneut ausgeführt: **1.299/1.299 bestanden**,
+79 Dateien, keine Fehler oder übersprungenen Tests. Typecheck bestanden. Das ist
+keine vollständige technische Gesamtfreigabe: Der Lock-only-30s-Nachweis bleibt
+rot, ebenso bleiben die dokumentierten Hardware-/Mehrgeräte-/Betriebsgrenzen,
+offenen Datenschutzabläufe und sechs fehlenden Herstellersymbole bestehen.
+Die Anzeige 338/348 zählt bepreiste Exemplare, nicht verschiedene Karten-IDs.
+Zwei bereits vor dem Deployment vorhandene nicht auflösbare Binder-Plätze sind
+noch nicht ursächlich geklärt; sie belegen nicht automatisch fehlende Bilddateien.
+
+**Git-Sicherung:** Android-R27-Quellstand `6ea94e2` war direkt auf GitHub bestätigt;
+die neueren Release-Nachweise werden mit diesem Dokumentationscheckpoint ergänzt.
+Web einschließlich der letzten geprüften Produktfixes und Testhelfer ist jetzt
+ebenfalls gepusht und remote bestätigt: `77b37a1`, Repository `DomiDex-Web`.
+Beide verwenden `codex/release-27-hardening`; Hauptbranches bleiben unverändert.
+Ungeprüftes `backend/market-data` und vorhandene untracked Hardware-Helfer bleiben
+lokal. Ein Branch-Push ist kein neuer GitHub-Release und keine technische Gesamtfreigabe.
+
+**Ergänzung 04.10.2026, 21:50:** R27 ist im INTERNAL-Test aktiv und im geschlossenen
+Alpha-Test zur Google-Überprüfung eingereicht, nicht bereits Alpha-live. Verwaltete
+Veröffentlichung bleibt aktiv. Das exakte signierte AAB wurde nicht geändert.
+Der konkrete Web-Buildpfadfehler ist behoben: RootLayout/Startseite und Unter-App
+werden jetzt nachweislich getrennt gebündelt. 1.299 lokale Tests und45/45 jeweilige
+Candidate-/Live-Prüfungen bestanden; tatsächliche Browserkontrolle bestätigt Design,
+angemeldete348Karten, verbundene Synchronisierung, private Binder und10Freigaben.
+Web/Backend sind unter Hosting334fdfd6961039a1/tagr27-20261004d veröffentlicht,
+Firebase-Regeln sind bytegleich verifiziert. Keine Testerdaten/Rechte/Geräte verändert.
+Historische Einschränkungen und fehlende sechs Herstellersymbole bleiben im Ledger.
+
+**Ergänzung 04.10.2026, 21:29:** Das unveränderte signierte R27-AAB ist nach
+ausdrücklicher Nutzerfreigabe im INTERNAL-Test aktiv. Auf die zusätzliche direkte
+Nutzeranfrage wurde der bestehende R27-Entwurf im geschlossenen Alpha-Test als
+einzige Änderung zur Google-Prüfung eingereicht. Alpha ist noch nicht als live
+bestätigt; Vorabprüfungen laufen und verwaltete Veröffentlichung bleibt aktiviert.
+Testerlisten, Geräte, Signing und Produktionskanal blieben unverändert.
+Die überprüften Firebase-Regeln sind veröffentlicht und bytegleich zurückgelesen.
+Der neue Web-Kandidat zeigte trotz bestandener HTTP-Checks einen echten Rootlayout-/
+CSS-Fehler und wurde sofort auf die bisher funktionierende Hosting-Version
+zurückgesetzt. Eine erste CSS-Brücke wurde durch den Produktionscheck widerlegt
+und entfernt. Web-Deployment bleibt offen, keine pauschale Gesamt-Gate-Freigabe.
+Nachweise und verbleibende Grenzen stehen im aktuellen Release-27-Ledger.
 
 **Ergänzung 04.10.2026, 20:15:** Der lokale signierte R27-Kandidat ist gebaut und
 verifiziert: `releases/v27/DomiDex-v27.aab`, Versionscode27,

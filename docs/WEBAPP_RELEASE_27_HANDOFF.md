@@ -1,6 +1,25 @@
 # Release 27: Android / Web backend handoff
 
-Updated 2026-10-02. This is a development handoff, not deployment authorization.
+Updated 2026-10-04. This handoff does not itself authorize a deployment.
+
+## Current deployment checkpoint
+
+The user's separate explicit deployment authorization was executed on 2026-10-04.
+Reviewed Web/backend source is live as Hosting version `334fdfd6961039a1`, pinned
+to tag/revision `domidex-web-r27-20261004d` (published21:47:30 Europe/Berlin).
+Firestore/Storage Rules were independently read back byte-identical. Candidate and
+live checks each passed45/45, followed by actual visual/authenticated read-only
+checks. Fresh Web regression passed1,299/1,299 in79 files. The root-layout build-path
+collision and missing root security headers were reproduced and narrowly fixed.
+Unreviewed `backend/market-data` was excluded. Functions, IAM, access grants and
+device installations were not changed by this deployment. Historical "not deployed"
+phrases below describe earlier checkpoints, not the current Web deployment state.
+
+Android27 is also confirmed available in Closed Alpha, published21:54, with the
+same verified signed AAB. This is not blanket completion of the engineering gates:
+the lock-only SDK timeout, six unavailable vendor symbols, hardware/multidevice,
+privacy lifecycle, production-load and other scoped limitations remain in
+[the engineering ledger](RELEASE_27.md). Full-Sync remains; Delta is not enabled.
 
 The Web application and backend remain in the separate sibling repository
 `DomiDex-Web`. Its detailed handoff is `docs/WEBAPP_RELEASE_27_HANDOFF.md` there.
