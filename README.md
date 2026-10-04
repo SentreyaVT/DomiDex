@@ -8,28 +8,37 @@ ein eigenes Grading-System gehören nicht zum aktuellen Funktionsumfang.
 
 ## Projektstand: geschlossene Alpha
 
-**Stand: 1. Oktober 2026.** Die folgende Release-/Git-Zuordnung stammt aus der
-ursprünglichen Bestandsaufnahme. Anschließend begann der lokale Release-27-
-Engineeringlauf auf `codex/release-27-hardening`: geprüfte Änderungen, einzelne
-Testnachweise und offene Gates stehen im [Release-27-Ledger](docs/RELEASE_27.md).
-Version 27 bleibt **unveröffentlicht und nicht zur Signierung freigegeben**.
+**Stand: 4. Oktober 2026.** Version **27 / `1.0-closed-alpha.6`** ist signiert und
+im internen sowie geschlossenen Alpha-Test von Google Play verfügbar; Alpha-live
+wurde am 04.10. um **21:54 Europe/Berlin** bestätigt. Das ist keine Veröffentlichung
+im Produktions-Track und kein pauschales PASS aller technischen Gates.
 
 | Stand | Nachweis |
 | --- | --- |
-| Google Play | **26 / `1.0-closed-alpha.5`**, am 01.10.2026 lesend bestätigt: aktiver geschlossener Alpha-Test **und** aktiver interner Test, jeweils vollständiger Roll-out |
-| Lokale Entwicklung | **27 / `1.0-closed-alpha.6`**, bereits vor diesem Audit konfiguriert; kein abgeschlossener signierter v27-Build belegt |
-| Lokaler Quellcode-Commit vor Audit | `096aa35` auf `codex/ui-v3`, Konfiguration darin noch Build 21; zahlreiche zusätzliche unveröffentlichte Änderungen |
-| GitHub-Quellcode vor Audit | Standardbranch `master`: Build 16 (`9bbe7bc`); `codex/ui-v3`: Build 19 (`77b76cf`) |
+| Android-Quellen | `codex/release-27-hardening`; remote bestätigter Sicherungscheckpoint `06190b2` |
+| Signiertes Android-Bundle | Unverändertes `releases/v27/DomiDex-v27.aab`; Build-Quellcommit `a3c7aa7`, Hash und Provenienz in [Build/Release](docs/BUILD_AND_RELEASE.md) |
+| Web/Backend | Separates Repository `DomiDex-Web`, Engineeringcheckpoint `77b37a1`; Hosting `334fdfd6961039a1`, Revision `domidex-web-r27-20261004d` live |
+| Standardbranches | README-Einstiege per Docs-only-PR aktualisiert: Android `master` (`b2e41ee`), Web `main` (`eb75501`). Der R27-Produktcode wurde nicht dorthin gemergt. |
 
-**Wichtig für einen neuen Checkout:** Der Dokumentationsstand beschreibt auch den
-geprüften lokalen Entwicklungsstand, nicht nur den älteren Code auf GitHub.
-Der damalige reine Dokumentations-Push übernahm keine unveröffentlichten
-Code-Commits. Der spätere Engineeringstand ist lokal gesichert; ein Clone des
-Standardbranches ist **nicht** der Quellnachweis für
-die signierte Play-Version 26 oder die lokale Entwicklung 27. Einzelheiten und
-offene Reproduzierbarkeit: [Projektstatus](docs/PROJECT_STATUS.md).
+**Entwicklereinstieg:** Den Engineeringbranch ausdrücklich auswählen; ein normaler
+Clone des Standardbranches zeigt weiterhin ältere Produktquellen; sein README
+verweist jetzt auf den richtigen R27-Einstieg. Zuerst die
+[Entwicklerübergabe R27](docs/DEVELOPER_HANDOFF_R27.md), dann
+[Build/Release](docs/BUILD_AND_RELEASE.md) und das
+[Release-27-Ledger](docs/RELEASE_27.md) lesen. Das Ledger trennt aktuelle Nachweise
+von historischen Fehlversuchen und weiterhin offenen Gates.
 
 ## Releases und Downloads
+
+Das bestehende R27-Bundle ist in Play als Testrelease und seit **04.10.2026,
+22:47:21 Europe/Berlin** im
+[GitHub-Binärarchiv R27](https://github.com/nandedomi/DomiDex/releases/tag/archive/v27-1.0-closed-alpha.6)
+verfügbar. Das Archiv ist eine **Vorabversion, kein Entwurf** und verweist auf
+Build-Quellcommit `a3c7aa7`. Die sechs Assets (AAB, Mapping, partielle Symbol-ZIP,
+Prüfsummen, Release Notes und Toolchain-Hinweise) wurden mit passenden Hashes
+hochgeladen; kein Neubau oder erneutes Signieren. Ein automatisches GitHub-Source-ZIP
+beweist trotzdem keine bytegenaue Reproduzierbarkeit des AAB; private Konfiguration,
+Toolchain und Signing gehören nicht vollständig zum Git-Checkout.
 
 Das vorhandene signierte **Release 26** ist zusätzlich als
 [GitHub-Binärarchiv](https://github.com/nandedomi/DomiDex/releases/tag/archive/v26-1.0-closed-alpha.5)
@@ -58,9 +67,10 @@ Historische Testreleases bleiben als Archiv/Vorabversion erhalten.
 - **Scanner-Feedback:** lokaler Editor, separat freiwilliges bildfreies
   Community-Knowledge und manuell bestätigter ScanLab-Fotoversand.
 
-Die neue Auswahl einer geprüften Preisalternative **nur bei fehlendem Trendpreis**,
-ihr Sync-Sidecar und weitere Scanner-/Sharing-Änderungen gehören zum lokalen
-Engineeringstand. Daraus folgt keine Freigabe oder Veröffentlichung von Version 27.
+Die Auswahl einer geprüften Preisalternative **nur bei fehlendem Trendpreis** und
+ihr Sync-Sidecar gehören zum R27-Stand. Full-Sync bleibt aktiv, Delta-Sync bleibt
+deaktiviert. Vollständige Preis-, Hardware- oder Betriebsabdeckung wird dadurch
+nicht behauptet.
 
 ## Scanner in Kürze
 
@@ -104,33 +114,51 @@ OpenCV, Coil und Firebase. Im lokalen Audit: minSdk 26, compile/targetSdk 37,
 Gradle 9.5.0, AGP 9.3.1, Gradle-Daemon-JDK 25, Java-Bytecode-Ziel 11.
 Deklarierte und tatsächlich aufgelöste Library-Versionen können sich unterscheiden.
 
-1. Zuerst Branch und [Build-/Release-Dokumentation](docs/BUILD_AND_RELEASE.md)
-   prüfen; die aktuelle Entwicklung ist nicht vollständig auf GitHub.
+Für einen neuen Checkout des gesicherten R27-Quellstands:
+
+```powershell
+git clone --branch codex/release-27-hardening https://github.com/nandedomi/DomiDex.git
+cd DomiDex
+```
+
+1. Branch, konkreten Commit und [Entwicklerübergabe](docs/DEVELOPER_HANDOFF_R27.md)
+   prüfen; `master` ist nicht der aktuelle R27-Quellstand.
 2. Passendes Android SDK/JDK und Android Studio verwenden; `local.properties`
    und Firebase-Clientkonfiguration separat lokal bereitstellen.
 3. Keine Upload-Schlüssel, Service-Account-Dateien oder Passwörter einchecken.
    Eine ignorierte `app/google-services.json` gehört nicht zu einem frischen Clone.
-4. Für reine JVM-Prüfung: `./gradlew :app:testDebugUnitTest` bzw.
-   `.\gradlew.bat :app:testDebugUnitTest`. Das erzeugt keine APK/AAB.
+4. Für JVM-Tests und Debug-Lint: `./gradlew :app:testDebugUnitTest :app:lintDebug`
+   bzw. `.\gradlew.bat :app:testDebugUnitTest :app:lintDebug`. Das erzeugt keine APK/AAB.
+   Geräte-/Emulatorprüfungen brauchen die jeweils dokumentierten isolierten
+   Profile; sie sind kein automatischer Bestandteil dieses Befehls.
 
 Ein Release-Build, Signierung, Deployment oder Google-Play-Upload ist ein separater
 freizugebender Vorgang. Keine automatisierte Release-Pipeline ist auf GitHub aktiv.
 
 ## Test- und Sicherheitsstand
 
-Beim ursprünglichen Dokumentationsaudit am 01.10.2026: **630 JVM-Tests,
-629 bestanden, 1 optionaler Live-Test übersprungen, keine Fehler**. Ergänzende
-Offline-Tests und historische Emulatornachweise stehen in [TESTING](docs/TESTING.md).
-Dieser ursprüngliche Audit enthielt keine Geräteinstallation und keinen neuen
-Kamera-Endtest. Die späteren lokalen JVM-/Emulatorprüfungen stehen getrennt im
-[Release-27-Ledger](docs/RELEASE_27.md); sie sind keine Freigabe für reale Geräte.
+Aktueller R27-Nachweis: **1.063 JVM-Fälle, 1.062 PASS, ein unveränderter optionaler
+Live-Skip**, keine Fehler; **371/371** in der dokumentierten Android-17-
+Emulatorregression und **46/46** isolierte Datenbank-Fehlerfälle. Die signierte
+Pipeline bestand 39 Prüfungen; Release-Lint hatte keine Fehler, aber 170 Warnungen
+und vier Hinweise. Exakte Eingaben, Geräteprofile und Geltungsgrenzen stehen im
+[Release-27-Ledger](docs/RELEASE_27.md), ältere Nachweise in [TESTING](docs/TESTING.md).
 
-R8-Mapping und eine **partielle** Native-Symbol-ZIP sind Version 26 in Play
+R8-Mapping und eine **partielle** Native-Symbol-ZIP sind Version 27 in Play
 zugeordnet. Nur `libc++_shared.so` ist exakt symbolisch abgedeckt; sechs
 Drittanbieterbibliotheken bleiben offen. App Check ist inzwischen im lokalen
 Entwicklungsstand implementiert, aber standardmäßig **ausgeschaltet**; produktives
 Enforcement ist nicht nachgewiesen. [Vertrag und Aktivierungsgrenzen](docs/RELEASE_27_APP_CHECK.md).
 Weitere Grenzen: [Security](docs/security-entitlements.md).
+
+**Bekannte offene Punkte:** Der ursprüngliche Lock-only-Listenernachweis bleibt
+rot; separate erfolgreiche NO_ACCESS-/Löschworkflow-Tests ersetzen ihn nicht.
+Hardware-/Mehrgeräte-, Last-/Betriebs- und Datenschutznachweise sind nicht pauschal
+abgeschlossen. Zwei private Binderplätze sind noch nicht ursächlich geklärt.
+Am 04.10.2026 um **20:32 UTC** trat in der live betriebenen Web-Sammlung beim
+Scrollen zusätzlich **React-Fehler 185** auf; zum Stand dieser Dokumentation ist
+er nicht behoben. Frühere Web-Test- und Deployment-PASS zählen nicht als Beleg
+gegen diesen neu beobachteten Fehler.
 
 ## Nächste Schritte und Produktgrenzen
 

@@ -3,11 +3,14 @@
 Stand: **2026-10-04**, Europe/Berlin. Ausgangsbefunde des ursprünglichen
 Dokumentationsaudits: lokaler Checkout, Git-Historie, GitHub und Google Play
 Console lesend. Die anschließenden lokalen Änderungen und Teststände sind im
-[Release-27-Ledger](RELEASE_27.md) maßgeblich dokumentiert; kein Gesamt-Gate-Pass
-und keine produktive Veröffentlichung. Der Engineeringbranch heißt
+[Release-27-Ledger](RELEASE_27.md) maßgeblich dokumentiert; kein Gesamt-Gate-Pass.
+R27 ist inzwischen ausdrücklich freigegeben in der geschlossenen Alpha verfügbar,
+Web/Backend sind veröffentlicht; dies ist kein öffentlicher Android-Produktionsrollout.
+Der [Entwickler-Einstieg](DEVELOPER_HANDOFF_R27.md) trennt Release, Quellcode und
+offene Nachweise. Der Engineeringbranch heißt
 `codex/release-27-hardening`; sein Ausgangscheckpoint ist `53b4e40d`.
 
-**Fortschreibung 02.10.2026:** Full-Sync bleibt für R27 aktiv, Delta bleibt
+**Historische Fortschreibung 02.10.2026:** Full-Sync bleibt für R27 aktiv, Delta bleibt
 deaktiviert. Der nachgewiesene große History-Engpass wurde eng ohne Schema- oder
 Aufbewahrungsänderung verbessert. Dieselbe aktuelle Debug-APK ist ausdrücklich
 freigegeben auf dem Redmi installiert und besteht lokal371 Regressionen,18
@@ -19,6 +22,22 @@ Live-/Datenschutz-Betriebs- und Release-Nachweise sind weiterhin offen. Gate15
 bleibt gesperrt; genaue Artefakte und Grenzen im aktuellen Release-27-Ledger.
 
 ## Unterschiedliche Projektstände
+
+**GitHub-Übergabe 04.10.2026, 22:47:** Das bestehende R27-Binärarchiv ist nun
+[veröffentlicht](https://github.com/nandedomi/DomiDex/releases/tag/archive/v27-1.0-closed-alpha.6)
+(Vorabversion, kein Entwurf); sechs Anhänge und ihre Hashes sind remote verifiziert.
+Beide Standard-READMEs wurden über je PR1 aktualisiert: Android `master` jetzt
+`b2e41ee`, Web `main` `eb75501`, jeweils ausschließlich Dokumentation. Der ältere
+Produktcode auf den Defaults wurde nicht still durch den Engineeringstand ersetzt.
+Die Startseiten nennen ausdrücklich den R27-Branch und Developer-Handoff.
+Das supersediert die früheren „kein GitHub Release/kein PR“-Sicherungscheckpoints unten.
+
+**Nachtrag 04.10.2026, 22:32:** Beim Sprung ans Ende der Live-Web-Sammlung wurde
+ein React-185-Absturz nachgewiesen. Der Stack zeigt auf den synchronen Messpfad
+des `WindowedCollectionGrid`; variable sichtbare Kartenhöhen können Fenster und
+Messung wiederholt verändern. Noch kein Fix oder Regressionstest abgeschlossen.
+Die frühere 1.299-Test-Regression deckte diesen Fall nicht ab. Der Entwickler-
+Handoff führt ihn ausdrücklich als offen; diese GitHub-Aufbereitung deployt nichts.
 
 **Aktueller Stand 04.10.2026, nach 21:54:** Die geschlossene Alpha ist inzwischen
 auch tatsächlich live: Die Play Console zeigt „Aktiv“, „Für ausgewählte Tester

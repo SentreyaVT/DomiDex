@@ -1,13 +1,43 @@
 # Versionshistorie und Google-Play-Status
 
-Stand **01.10.2026**. Rekonstruktion aus Git, tatsächlichen lokalen Artefakten,
-historischen Prüfberichten und einer aktuellen **nur lesenden** Play-Console-Prüfung.
-Der ursprüngliche Audit erzeugte keine Version, Tags, GitHub-Releases oder Play-Uploads.
-Im anschließend separat freigegebenen GitHub-Aufräumauftrag wurde ausschließlich
-das bestehende Release-26-AAB als Binärarchiv hinterlegt; siehe unten. Kein neuer
-App-Build, keine neue Signierung und keine Änderung in Google Play.
+Stand **04.10.2026**. Aktuelle Release-/Git-Nachweise stehen zuerst; die datierten
+Ausgangsbefunde vom 01.10. bleiben darunter erhalten. Der ursprüngliche Audit
+erzeugte keine App-Version; anschließend wurden getrennt freigegebene Builds,
+Testtrack- und Web-Veröffentlichungen durchgeführt. Diese Dokumentation führt
+keine dieser Aktionen erneut aus.
 
 ## Aktuell belegbarer Stand
+
+- **Android 27 / `1.0-closed-alpha.6`** ist im internen und geschlossenen Alpha-Test
+  verfügbar; Alpha-live am 04.10. um **21:54 Europe/Berlin** bestätigt. Kein
+  Produktions-Track und keine pauschale technische Gesamtfreigabe.
+- Unverändertes signiertes AAB: `releases/v27/DomiDex-v27.aab`, SHA-256
+  `2c3fe33bb84c47fda4525297a8134859f44fd727dabf268bade401d36f276cc7`.
+  Build-Quellcommit `a3c7aa7ddef8987faa285bebf1bd8779313baae4`; Mapping und
+  partielle Native-Symbole in Play zugeordnet. Abdeckung **1/7**, sechs
+  Herstelleroriginale fehlen weiterhin.
+- Android-Engineeringbranch `codex/release-27-hardening`: remote bestätigter
+  Sicherungscheckpoint `06190b2`. Standardbranch `master` steht separat auf
+  `b2e41ee`: Sein README-Einstieg wurde per Docs-only-PR aktualisiert, der
+  R27-Produktcode wurde nicht dorthin gemergt.
+- Separates Webrepo: Engineeringcheckpoint `77b37a1`; Web/Backend live unter
+  Hosting `334fdfd6961039a1`, Revision `domidex-web-r27-20261004d`. Web-`main`
+  erhielt ebenfalls nur den README-Einstieg (`eb75501`), keinen R27-Produktcode-
+  Merge. Neuer bekannter Fehler vom 04.10., **20:32 UTC**:
+  React-Fehler 185 beim Scrollen der live betriebenen Sammlung; noch nicht behoben.
+- [GitHub-Binärarchiv R27](https://github.com/nandedomi/DomiDex/releases/tag/archive/v27-1.0-closed-alpha.6)
+  am 04.10. um **22:47:21 Europe/Berlin** als Vorabversion veröffentlicht, kein
+  Entwurf; Zielcommit `a3c7aa7`, sechs Assets mit abgeglichenen Hashes. Branch-Push,
+  Binärarchiv und Docs-only-PR sind getrennte Aktionen. Kein automatisches
+  Source-ZIP als Beweis eines bytegenau reproduzierbaren AAB ausgeben.
+
+[Entwicklerübergabe](DEVELOPER_HANDOFF_R27.md) · [Build-/Artefaktdetails](BUILD_AND_RELEASE.md)
+· [Aktuelle Nachweise, Fehlversuche und offene Gates](RELEASE_27.md).
+Full-Sync bleibt aktiv, Delta deaktiviert.
+
+## Historische Bestandsaufnahme vom 01.10.2026
+
+Die folgenden Aussagen galten vor dem späteren R27-Abschluss:
 
 - **Projektphase: geschlossene Alpha.** Das ist nicht automatisch der Name eines Play-Tracks.
 - **Google Play: Version 26 / `1.0-closed-alpha.5` aktiv in beiden Test-Tracks.**
@@ -24,9 +54,9 @@ App-Build, keine neue Signierung und keine Änderung in Google Play.
   Vorbereitung abgebrochen, kein abgeschlossener signierter Release 27.
 
 Die vorher widersprüchlichen Trackangaben werden nicht rückwirkend umgeschrieben:
-Die aktuelle Console bestätigt **beide** mit 26. Keine schnell veraltenden Testerzahlen.
+Die damalige Console bestätigte **beide** mit 26. Keine schnell veraltenden Testerzahlen.
 
-## Git und veröffentlichter Quellstand
+## Historischer Git- und Quellstand am Auditbeginn
 
 | Referenz am Auditbeginn | Tatsächliche Bedeutung |
 |---|---|
@@ -41,8 +71,9 @@ Beim Auditbeginn war der jüngste GitHub-Release `v1.0.0-pre-beta` vom
 **01.09.2026**; das „Latest“-Label zeigte damals auf `v1.0.5-rc7`.
 Die anschließende Bereinigung kennzeichnet alle historischen internen Builds als
 Archiv/Vorabversion. Label, Tag, Android-Versionscode und Play-Status dürfen nicht
-gleichgesetzt werden. Die Dokumentationsaktualisierung übernimmt keine vier
-lokalen Produktcommits und stellt Release 26 nicht als aus Git exakt reproduzierbar dar.
+gleichgesetzt werden. Die damalige Dokumentationsaktualisierung übernahm die vier
+lokalen Produktcommits nicht und stellte Release 26 nicht als aus Git exakt
+reproduzierbar dar. Der spätere R27-Engineering-Push ist davon getrennt.
 
 ### GitHub-Binärarchiv 26 – Nachtrag vom 01.10.2026
 
@@ -57,7 +88,25 @@ Downloads sind **nicht** der exakt zugehörige v26-Quellstand. Der Eintrag ist e
 Vorabversion, keine neue stabile Veröffentlichung. Bestehende 14 Releases,
 ihre Tags, Downloads und Veröffentlichungsdaten bleiben erhalten; Titel,
 historische Hinweise und fehlerhafte Zeilenumbrüche wurden aufgeräumt.
-Die AAB-Archive 18–25 wurden dabei nicht zusätzlich hochgeladen; 27 bleibt unfertig.
+Die AAB-Archive 18–25 wurden dabei nicht zusätzlich hochgeladen; 27 war zu diesem
+Zeitpunkt noch unfertig. Sein Abschluss am 04.10. steht oben.
+
+### GitHub-Binärarchiv 27 – veröffentlicht am 04.10.2026
+
+[archive/v27-1.0-closed-alpha.6](https://github.com/nandedomi/DomiDex/releases/tag/archive/v27-1.0-closed-alpha.6)
+ist seit 22:47:21 Europe/Berlin veröffentlicht, als Vorabversion und nicht als
+Entwurf. Ziel ist `a3c7aa7`. AAB, Mapping, partielle Native-Symbol-ZIP, Prüfsummen,
+Release Notes und Toolchain-Hinweise sind hochgeladen; alle sechs Hashes stimmen
+mit den vorhandenen Dateien überein. Kein Neubau, erneutes Signieren oder weiterer
+Play-Upload fand dadurch statt.
+
+638 geprüfte Quell-Dateihashes stimmen exakt mit `a3c7aa7` überein, dessen
+versionierte Quellen sauber waren. Die archivierte Dirty-Markierung erklärt sich
+durch zehn inventarisierte untracked `hardware-proof`-Dateien außerhalb des
+gewöhnlichen Builds, nicht durch nachgewiesene ungeprüfte App-Code-Änderungen.
+Der Archiv-Tag und seine automatischen Source-code-Downloads belegen dennoch
+keinen bytegenau reproduzierbaren AAB-Build einschließlich privater lokaler
+Konfiguration, Toolchain und Signing.
 
 ## Rekonstruierte Entwicklung
 
@@ -78,7 +127,7 @@ Die AAB-Archive 18–25 wurden dabei nicht zusätzlich hochgeladen; 27 bleibt un
 | 25 | `1.0-pre-beta.5` | Signiertes lokales AAB 23.09.; SAR-/Preiszuordnung und priorisierte Sync-Arbeit |
 | 25, verworfener Ersatz | `1.0-closed-alpha.5` | Separater R8-Vorbereitungsbuild 23.09.; wegen bereits verwendetem Code ausdrücklich überholt |
 | 26 | `1.0-closed-alpha.5` | Signiertes AAB 23.09.; konservatives R8, danach passende libc++-Originalsymbole ergänzt |
-| 27, unvollendet | `1.0-closed-alpha.6` | Lokale Vorbereitung 25.09.; nicht abgeschlossen/signiert/hochgeladen |
+| 27 | `1.0-closed-alpha.6` | Frühe Vorbereitung 25.09.; signiert und in beiden Play-Testtracks live am 04.10., Alpha um 21:54 Europe/Berlin; keine Gesamt-Gate-Freigabe |
 
 Datei- oder Commitdatum ist kein Beweis des damaligen Play-Roll-outs. Lokale
 Release-Unterlagen belegen die Vorbereitung; aktueller Play-Status steht separat oben.
@@ -88,16 +137,19 @@ Die zwei unterschiedlichen lokalen Code-25-AABs niemals als austauschbar behande
 
 Die lokalen Archive liegen unter `releases/` und sind bewusst Git-ignoriert:
 `google-play-internal-2026-09-04` bis `google-play-internal-2026-09-21`, danach
-`google-play-v22-2026-09-22` bis `google-play-v26-closed-alpha-2026-09-23`.
-Sie sind keine Git-Quelldateien. Release 26 ist inzwischen zusätzlich im oben
-genannten GitHub-Binärarchiv verfügbar; die übrigen lokalen AABs nicht pauschal.
+`google-play-v22-2026-09-22` bis `google-play-v26-closed-alpha-2026-09-23`,
+außerdem das am 04.10. abgeschlossene `releases/v27/`.
+Sie sind keine Git-Quelldateien. Release 26 und 27 sind zusätzlich in den oben
+genannten GitHub-Binärarchiven verfügbar; die übrigen lokalen AABs nicht pauschal.
 
-Version-26-Hashes und native Zuordnung stehen in [Build und Release](BUILD_AND_RELEASE.md).
-Die aktuelle Build-Ausgabe `app/build/outputs/bundle/release/app-release.aab` ist
-weiterhin bytegleich zum archivierten v26-AAB. Das vorhandene v27-Log unter
-`artifacts/release27-development/signed-release-build.log` endet vor erfolgreichem
-Bundle-/Archivabschluss; es gibt kein fertiges `releases/v27`-Archiv. Keine
-Rückschlüsse aus bloßem `validateSigningRelease UP-TO-DATE` auf ein signiertes v27 ziehen.
+Version-26-/27-Hashes und native Zuordnung stehen in [Build und Release](BUILD_AND_RELEASE.md).
+Beim Audit am 01.10. war die damalige Build-Ausgabe noch bytegleich zu v26. Das
+frühe Log `artifacts/release27-development/signed-release-build.log` endete vor
+dem Bundle-/Archivabschluss und bleibt als solcher Fehlversuch erhalten. Es wird
+nicht nachträglich zum erfolgreichen R27-Build erklärt. Der spätere erfolgreiche
+Lauf liegt unter `artifacts/release27-engineering-20261004/final-candidate/`;
+sein konkreter Beleg und das fertige `releases/v27/` sind im Ledger gebunden.
+Bloßes `validateSigningRelease UP-TO-DATE` bleibt kein Signierungsnachweis.
 
 ## Historische Unterlagen richtig lesen
 
@@ -112,10 +164,13 @@ als kostenlos, ausdrücklich ohne dauerhafte Gratiszusage. Die langfristige
 Monetarisierung wird angesichts laufender Kosten neu bewertet; kein neues Modell,
 Preis, Abo, Werbe- oder Testerzahlungsversprechen wird hier festgelegt.
 
-## Nächster Entwicklungszyklus: kein Release durch diese Aufgabe
+## Verbleibende Grenzen nach dem Testrelease
 
-Release 27 bleibt separat abzunehmen; lokale Arbeiten sind keine Veröffentlichung
-oder allgemeine Freigabe. Scanner/Performance, Preise und Sync benötigen gezielte
-Regressionen sowie reale Kamera-/Thermal-/Lichttests nach Emulatorprüfungen.
+R27 ist als Testrelease veröffentlicht, aber nicht pauschal technisch abgenommen.
+Der ursprüngliche Lock-only-Listenernachweis bleibt rot; erfolgreiche separate
+NO_ACCESS-/Löschworkflow-Fälle ersetzen ihn nicht. Scanner/Performance, Preise und
+Sync behalten die dokumentierten Hardware-/Mehrgeräte- und Betriebsgrenzen;
+der neue Web-Scrollfehler ist ebenfalls offen. Keine allgemeine Freigabe aus
+Emulator-/JVM-PASS oder dem vorhandenen Play-Testtrack ableiten.
 R8 und passende Originalsymbole bleiben Prüfpunkte, ohne für die sechs fehlenden
 Herstellersymbole eine Lösung vorzutäuschen.

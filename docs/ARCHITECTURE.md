@@ -4,6 +4,12 @@ Prüfstand: 1. Oktober 2026. Dieses Dokument beschreibt den gelesenen Android-Qu
 
 ## Standgrenzen
 
+Aktuelle Übergabe vom 04.10.2026: [R27-Entwickler-Einstieg](DEVELOPER_HANDOFF_R27.md).
+R27 ist im geschlossenen Test verfügbar; die folgenden Auditstände sind historische
+Quellcodebeobachtungen, keine unverändert aktuellen Release-/Betriebsaussagen.
+Full-Sync bleibt die R27-Lösung, Delta deaktiviert. Die spätere ausdrücklich
+autorisierte zwölfmonatige Preisverlaufs-Aufbewahrung ist im Ledger dokumentiert.
+
 - Ausgangs-HEAD des früheren Dokumentationsaudits war `096aa35` vom 22. September 2026.
 - Die damals teils unversionierten Weiterentwicklungen für Release 27 sind inzwischen im lokalen Engineeringcheckpoint `53b4e40d` gesichert. Weitere gezielte Änderungen werden auf `codex/release-27-hardening` geprüft; keine Veröffentlichungsfreigabe.
 - Die lokale Room-Konfiguration verwendet Schema **13**; der damalige Audit-HEAD `096aa35` enthielt Schema **12**. Die Preisalternativen-Tabelle gehört zur lokalen Erweiterung; im anschließenden Engineeringlauf wurde das Schema nicht erhöht.

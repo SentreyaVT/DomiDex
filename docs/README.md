@@ -1,15 +1,24 @@
 # Dokumentationsindex
 
-Stand: 2026-10-01. **Für den laufenden Engineeringstand zuerst das Release-27-Ledger
-lesen; der Projektstatus dokumentiert die Ausgangsbefunde.** Ältere Release-Berichte
-sind keine aktuellen Freigaben. Lokaler Entwicklungscode und GitHub-Quellstand
-sind unterschiedlich; die Texte kennzeichnen diese Grenze.
+Stand: **2026-10-04**. **Für neue Entwickler zuerst die R27-Übergabe lesen.** Der
+Engineeringbranch `codex/release-27-hardening` ist auf GitHub gesichert; der
+Standardbranch `master` hat jetzt einen aktualisierten README-Einstieg, aber
+weiterhin ältere Produktquellen: Der Docs-only-PR ist kein R27-Code-Merge.
+Android 27 ist im internen
+und geschlossenen Alpha-Test verfügbar, das zugehörige Web/Backend ist deployed.
+Diese Veröffentlichung bedeutet nicht, dass alle technischen Gates bestanden sind.
+Aktuelle Nachweise und bekannte Fehler stehen oben im Ledger; datierte ältere
+Abschnitte bleiben historische Belege. Das
+[R27-GitHub-Binärarchiv](https://github.com/nandedomi/DomiDex/releases/tag/archive/v27-1.0-closed-alpha.6)
+ist seit 04.10. um 22:47:21 Europe/Berlin als Vorabversion veröffentlicht;
+sechs vorhandene Assets sind hashverifiziert, kein Neubau.
 
 | Frage | Dokument |
 | --- | --- |
 | Was ist DomiDex? | [Haupt-README](../README.md) |
+| Welcher Branch, wie lokal entwickeln und was bleibt offen? | [Entwicklerübergabe R27](DEVELOPER_HANDOFF_R27.md) |
 | Laufende Release-27-Arbeit, Nachweise und offene Gates | [Release-27-Ledger](RELEASE_27.md) |
-| Ausgangsstand und Release-/Git-Zuordnung | [PROJECT_STATUS](PROJECT_STATUS.md) |
+| Aktueller Status, Ausgangsbefunde und Release-/Git-Zuordnung | [PROJECT_STATUS](PROJECT_STATUS.md) |
 | Aufbau, Daten und Featuregrenzen | [Architektur](ARCHITECTURE.md) |
 | Scanner, Editor, Knowledge, Offline | [Scanner](scanner-architecture.md) |
 | Identität, Preise und Portfolio | [Preisarchitektur](cardmarket-import.md) |
@@ -36,8 +45,9 @@ Die beim ursprünglichen Audit noch unversionierten
 Berichte `catalog-30th-*.md`, `scanner-v27-performance-20260924.md`,
 `release27-price-sync-validation-20260925.md` und
 `native-symbol-release-pipeline.md` sind inzwischen im lokalen Engineeringcheckpoint
-gesichert. Ihre damaligen Ergebnisse bleiben historische Nachweise, keine aktuelle
-Releasefreigabe. Die relevanten Befunde sind in den aktuellen Seiten zusammengefasst.
+gesichert und über den Engineeringbranch verfügbar. Ihre damaligen Ergebnisse
+bleiben historische Nachweise, keine aktuelle Gesamtfreigabe. Die relevanten
+Befunde sind in den aktuellen Seiten zusammengefasst.
 
 Die Web-App ist ein separates Repository. Diese Android-Dokumentation ist keine
 Behauptung über seinen jeweils aktuellen Deployment-/Rechts-/Frontendstand.

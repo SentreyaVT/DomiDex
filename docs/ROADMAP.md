@@ -5,7 +5,14 @@ Stand: 2026-10-03. Ausgangspunkt ist der ursprüngliche Audit in
 vollständig unerledigter Implementierungen: anschließende lokale Teilkorrekturen,
 Tests und offene Gates stehen im [Release-27-Ledger](RELEASE_27.md).
 
-## Vor dem nächsten Release
+## Verbleibendes Hardening nach dem R27-Testrollout
+
+Fortschreibung 04.10.2026: R27 ist inzwischen in der geschlossenen Alpha und
+Web/Backend sind live. Das schließt nicht alle früheren Engineering-Gates.
+Der [Entwickler-Einstieg](DEVELOPER_HANDOFF_R27.md) enthält die aktuellen Grenzen.
+Vorrang hat jetzt der neu nachgewiesene Web-Collection-Scroll-Absturz (React185),
+danach die offenen Binder-Verknüpfungs- und Entzugsnachweise. Unten genannte
+frühere Messungen bleiben historische Ergebnisse, keine aktuelle Geräte-SLA.
 
 1. **Quellstand nachvollziehbar sichern:** lokale Entwicklung, GitHub und
    Release-Provenienz getrennt prüfen; der lokale Ausgangsstand ist inzwischen
@@ -39,7 +46,8 @@ Tests und offene Gates stehen im [Release-27-Ledger](RELEASE_27.md).
    nachgewiesene Native-Symbol-Abdeckung, ehrlicher Hersteller-Blocker; finaler
    Geräte- und Google-Play-Kompatibilitätstest nach separatem Go.
 
-Version 27 ist dabei ein Entwicklungsziel, nicht das Ergebnis dieses Audits.
+Die ursprüngliche Roadmap behandelte Version27 als Entwicklungsziel; der spätere
+autorisierte Testrollout und die verbliebenen technischen Grenzen sind oben ergänzt.
 Keine neue Version, kein Tag, kein Build, keine Signierung und kein Deployment
 werden durch diese Roadmap freigegeben.
 

@@ -1,21 +1,69 @@
 # Build, Signierung und native Diagnose
 
-Technische Bestandsaufnahme vom **01.10.2026**. Kein neuer App-Build, keine
-Signierung und kein Play-Upload in diesem Dokumentationsauftrag.
-Die [Versionshistorie](RELEASE_HISTORY.md) trennt lokale Quellen, Git und Play.
+Stand **04.10.2026**. Das vorhandene R27-AAB ist signiert und im internen sowie
+geschlossenen Alpha-Test verfügbar. Diese Dokumentationsfortschreibung baut,
+signiert oder veröffentlicht nichts erneut. Die [Entwicklerübergabe](DEVELOPER_HANDOFF_R27.md)
+und [Versionshistorie](RELEASE_HISTORY.md) trennen Branch, Buildquellen, Binärarchiv
+und Play-Status. Offene Gates bleiben im [Ledger](RELEASE_27.md) maßgeblich.
 
 ## Unterschiedliche Quell-/Release-Stände
 
 | Ebene | Nachgewiesener Stand |
 |---|---|
+| Aktueller Engineeringbranch | `codex/release-27-hardening`, remote bestätigter Sicherungscheckpoint `06190b2` vor dieser Docs-Fortschreibung |
+| Build-Quellcommit des R27-AAB | `a3c7aa7ddef8987faa285bebf1bd8779313baae4`; Eingabesnapshot vor/nach Build gleich |
+| Signiertes Bundle / Play-Testtracks | Code **27** / **`1.0-closed-alpha.6`**, INTERNAL und Closed Alpha live; Alpha am 04.10. um 21:54 Europe/Berlin bestätigt |
+| GitHub-Standardbranch `master` | `b2e41ee`, aktualisierter README-Einstieg per Docs-only-PR; enthält den aktuellen R27-Produktstand nicht |
+| GitHub-Binärarchiv R27 | [archive/v27-1.0-closed-alpha.6](https://github.com/nandedomi/DomiDex/releases/tag/archive/v27-1.0-closed-alpha.6), veröffentlicht 04.10. um 22:47:21 Europe/Berlin; Vorabversion, kein Entwurf; Zielcommit `a3c7aa7` |
+
+Der unabhängige Quellenabgleich bestätigt **638 Quell-Dateihashes** exakt gegen
+`a3c7aa7`, bei sauberen versionierten Quellen. `source_dirty_at_archive=true`
+bezieht sich auf zehn ausdrücklich inventarisierte untracked `hardware-proof`-
+Dateien, die nicht in den gewöhnlichen Build eingehen; das ist kein Beleg für
+ungeprüfte Änderungen am App-Code. Private lokale Konfiguration, Toolchain und
+Signing bleiben außerhalb einer vollständigen Git-Reproduzierbarkeitsgarantie.
+
+### Historischer Ausgangsstand am 01.10.2026
+
+Die folgenden Befunde erklären die damalige Diskrepanz und werden nicht als
+aktueller Signierungs- oder Veröffentlichungsstatus fortgeführt:
+
+| Ebene beim ursprünglichen Audit | Damaliger Stand |
+|---|---|
 | GitHub-Standardbranch `master` | `9bbe7bc`, App-Code 16 / `1.0-beta` |
 | GitHub-Branch `codex/ui-v3` vor Dokumentationsabgleich | `77b76cf`, Code 19 / `1.0-pre-beta` |
 | Lokaler Produkt-HEAD `096aa35` | Code 21 / `1.0-pre-beta.1` in der committed Konfiguration |
 | Lokaler, bereits vorher veränderter Arbeitsstand | Code **27** / **`1.0-closed-alpha.6`**, nicht als signiertes Release abgeschlossen |
-| Letztes geprüftes signiertes AAB / aktuell in Play | Code **26** / **`1.0-closed-alpha.5`** |
+| Damals letztes geprüftes signiertes AAB / Play | Code **26** / **`1.0-closed-alpha.5`** |
 
-Die Konfiguration beschreibt den **lokalen Arbeitsstand**, nicht automatisch einen
-GitHub-Checkout. Dieser Auftrag übernimmt keinen Produktcode und erhöht keine Version.
+Der R27-Engineeringbranch ist inzwischen gesichert. Ein Clone von `master` oder ein
+automatisches Source-ZIP eines Archiv-Tags ersetzt weder den Build-Eingabesnapshot
+noch den Nachweis eines bytegenau reproduzierbaren AAB. Version und Originaldateien
+werden durch diese Dokumentation nicht verändert.
+
+## Lokaler Entwicklereinstieg
+
+Den Branch ausdrücklich auswählen und lokale Voraussetzungen bereitstellen:
+
+```powershell
+git clone --branch codex/release-27-hardening https://github.com/nandedomi/DomiDex.git
+cd DomiDex
+.\gradlew.bat :app:testDebugUnitTest :app:lintDebug
+```
+
+Vor dem Gradle-Aufruf müssen passendes JDK/Android SDK, `local.properties` und die
+berechtigt bereitgestellte `app/google-services.json` vorhanden sein. Keine
+Signing-Zugangsdaten sind für diesen JVM-/Debug-Lint-Aufruf erforderlich. Unter
+POSIX wird derselbe Taskaufruf mit `./gradlew` gestartet. Er installiert nichts und
+erzeugt kein AAB. Testberichte liegen unter `app/build/test-results/testDebugUnitTest/`,
+Debug-Lint unter `app/build/reports/lint-results-debug.xml`; vorhandene Berichte
+allein beweisen keinen frischen Testlauf.
+
+Ein gewöhnlicher Debug-Build verwendet `.\gradlew.bat :app:assembleDebug` und
+erzeugt eine APK, installiert sie aber nicht. Für Instrumentation gelten die
+einzeln dokumentierten Emulator-/Hardwareprofile und Schutzregeln; keine pauschale
+Freigabe für Tests auf einem angemeldeten Benutzergerät. Vollständiger Ablauf und
+aktuelle Grenzen: [Entwicklerübergabe](DEVELOPER_HANDOFF_R27.md).
 
 ## Android-Konfiguration
 
@@ -43,7 +91,10 @@ Aufgelöste Werte wurden am **01.10.2026** mit Gradles Offline-Dependencybericht
 für `releaseRuntimeClasspath` erneut bestätigt. Zusätzlich liegt der Metadatenexport
 vom 24.09.2026 unter `app/build/outputs/release-archive/metadata.json` vor.
 Beides beschreibt den jeweiligen Checkout, nicht eine vollständige historische
-Quellprovenienz von Release 26. Keine Dependency wurde aktualisiert oder neu heruntergeladen.
+Quellprovenienz von Release 26. Diese historische Tabelle ist keine neue vollständige
+Auflösung aller R27-Testabhängigkeiten; beispielsweise wurde Espresso für den
+Android-17-Nachweis inzwischen auf 3.7.0 aktualisiert. Maßgeblich sind die gepinnten
+Eingaben des jeweiligen Laufs und die aktuelle Versionsdatei.
 
 | Bereich | Deklaration / belegte Auflösung |
 |---|---|
@@ -84,7 +135,7 @@ Upload-Zertifikat und Google-Play-App-Signing-Zertifikat sind unterschiedliche R
 
 ## R8: behoben, aber bewusst konservativ
 
-Im lokalen Arbeitsstand und im geprüften Release 26 ist R8 aktiv. Die echte
+In Release 27 und im früher geprüften Release 26 ist R8 aktiv. Die echte
 Zuordnung liegt im AAB unter
 `BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map`.
 `-dontshrink`, `-dontoptimize` und deaktiviertes Resource Shrinking erhalten den
@@ -94,14 +145,17 @@ Nicht als vollständige Größen-/Performanceoptimierung beschreiben.
 
 Die Play-Detailansicht von Version 26 zeigte am 01.10.2026: **0 % Optimierung,
 0 % Shrinking, 96 % Obfuscation** sowie eine vorhandene `mapping.txt` (Anzeige 104 MB).
-Die lokale `app/src/release/keepRules/release.keep` ist noch nicht versioniert;
-der committed Produktstand hat diese R8-Lösung nicht vollständig übernommen.
+Das war eine damalige Console-Anzeige, keine neu gemessene R27-Prozentzahl.
+`app/src/release/keepRules/release.keep` ist inzwischen versioniert. Das echte
+R27-Mapping wurde eingebettet, im Archiv abgeglichen und in Play erkannt.
 
 ## Native Symbole: genau ein verifiziertes Original von sieben
 
-Für alle sieben ARM64-Dateien wurden die Original-AAR-Bytes erneut mit dem
-Release-26-AAB verglichen: **7/7 identisch**. Bereits die Anbieterdateien sind
-gestrippt, ohne `.symtab` und DWARF. DomiDex hat diese Informationen nicht entfernt.
+Beim historischen Release-26-Audit wurden alle sieben ARM64-Dateien mit den
+Original-AAR-Bytes verglichen: **7/7 identisch**. Bereits die Anbieterdateien waren
+gestrippt, ohne `.symtab` und DWARF. Für R27 wurde die partielle libc++-Zuordnung
+erneut gegen das tatsächlich signierte Bundle geprüft; die sechs fehlenden
+Herstelleroriginale bleiben offen. Play-Annahme der ZIP bedeutet keine Vollabdeckung.
 
 | Datei | Herkunft | Passende zusätzliche Symbole |
 |---|---|---|
@@ -121,7 +175,30 @@ entfernten Herstellerdaten. Fehlende öffentliche Originale sind kein Beweis,
 dass der Hersteller intern keine Symbole besitzt. Ein beliebiger Source-Rebuild
 oder bloß gleicher Dateiname ist kein zulässiger Ersatz für dasselbe Linkergebnis.
 
-### Identität der unveränderten Release-26-Artefakte
+### Identität der unveränderten Release-27-Artefakte
+
+Archivbasis: `releases/v27/` (lokal, Git-ignoriert). Dieselben vorhandenen Bytes
+sind im [GitHub-Binärarchiv R27](https://github.com/nandedomi/DomiDex/releases/tag/archive/v27-1.0-closed-alpha.6)
+veröffentlicht; alle sechs hochgeladenen Assets wurden per Hash abgeglichen:
+
+| Artefakt | SHA-256 |
+|---|---|
+| `DomiDex-v27.aab` | `2c3fe33bb84c47fda4525297a8134859f44fd727dabf268bade401d36f276cc7` |
+| `mapping.txt` | `8900194e5eaa4042f46e4043eba099062d30d60f7974d533cee7868649448c8e` |
+| `native-debug-symbols.zip` | `cbef5ac45ae8c7c870d40cc8ea77fa75da8b9bfe1c8d7a556be65f776e30e687` |
+
+Zusätzlich enthält das Archiv Prüfsummen, Release Notes und Toolchain-Hinweise.
+Es wurde kein neuer Build erstellt und keine Datei erneut signiert.
+
+AAB: 52.705.225 Bytes, nicht debuggable, `arm64-v8a`, minSdk26/targetSdk37.
+Bestehendes Upload-Zertifikat, Bundle-Struktur und eingebettetes Mapping wurden
+verifiziert; die partielle ZIP wurde diesem AAB in Play zugeordnet. Die Pipeline
+bestand 39 Prüfungen. JVM: 1.062 PASS und ein unveränderter optionaler Live-Skip;
+Release-Lint: keine Fehler, 170 Warnungen und vier Hinweise. Details, Herkunft und
+Eingabesnapshots stehen im [R27-Ledger](RELEASE_27.md). Das ist kein Nachweis eines
+neuen physischen ARM64-/minifizierten End-to-End-Laufs oder aller Release-Gates.
+
+### Historische Identität der unveränderten Release-26-Artefakte
 
 Archivbasis: `releases/google-play-v26-closed-alpha-2026-09-23/` (lokal, Git-ignoriert).
 
@@ -145,9 +222,16 @@ vorhandene Archive, startet Tests, erstellt Release-/Debug-Artefakte und prüft 
 Signatur, Mapping, Herkunft, ELF-Identität und Lizenzen. Es veröffentlicht nicht in Play.
 **Nicht als Dokumentationstest starten:** Der Helfer baut und signiert ausdrücklich.
 
-Die Erweiterung, `archive_release.py`, ELF-/Lizenzprüfer, Registry, Init-Skript und
-Tests sind teilweise noch uncommitted/untracked. Ein Docs-only-Push überträgt sie
-nicht. Die vorhandene lokale Pipeline-Dokumentation vom 24.09.2026 ist ein
-Entwicklungsnachweis, keine Zusage eines fertigen GitHub-Releaseworkflows.
-Neue Release-Freigabe erfordert später getrennte Prüfung des vollständigen
-Quellstands, unbenutzten Versionscodes, Tests und zugehörigen Artefakte.
+`Build-SignedBundle.ps1`, `archive_release.py`, ELF-/Lizenzprüfer, Registry,
+Init-Skript und zugehörige Tests sind inzwischen im Engineeringbranch versioniert.
+Der erfolgreiche R27-Lauf ist im Ledger dokumentiert. Die Pipeline wird nicht
+automatisch durch einen GitHub-Push ausgeführt; ein Binärarchiv ist eine getrennte
+Veröffentlichung vorhandener Dateien. Vorhandene untracked `hardware-proof`-
+Helfer gehören nicht zum gewöhnlichen R27-Build und bleiben davon getrennt.
+
+Ein weiterer Release-Build braucht eine eigene Prüfung und Freigabe; vorhandene
+Archive und bereits verwendete Versionscodes dürfen nicht überschrieben werden.
+Das aktuelle Testrelease ist keine Behauptung, dass Hardware-/Mehrgeräte-,
+Betriebs-/Datenschutz- und alle Known-Issue-Gates geschlossen sind. Insbesondere
+der am 04.10. um 20:32 UTC beobachtete Web-React-Fehler 185 beim Sammlungsscrollen
+ist noch offen; ein neues Android-Bundle würde diesen Webfehler nicht beheben.

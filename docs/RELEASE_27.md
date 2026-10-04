@@ -2,6 +2,37 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
 
+### Developer handoff and newly observed Web failure — 2026-10-04 after 22:32 Europe/Berlin
+
+The [developer entry point](DEVELOPER_HANDOFF_R27.md) distinguishes the immutable
+published test-track AAB from the evolving engineering source and incomplete gates.
+GitHub default-branch documentation and the existing R27 binary archive are now
+published separately; no new build, signature, Play change or production deployment.
+
+GitHub readback: `archive/v27-1.0-closed-alpha.6` published20:47:21Z, draft=false,
+prerelease=true, tag exactly at build-provenance commit`a3c7aa7`. All six uploaded
+asset digests/sizes match local files: unchanged AAB, mapping, partial native ZIP,
+checksums, release notes, and original NDK NOTICE. The61-entry local archive
+manifest was freshly verified without mismatch; embedded AAB mapping matches too.
+The source receipt qualifies the dirty flag:638 source hashes unchanged, no tracked
+changes;10 explicitly allowed untracked hardware-proof files are outside the normal
+build. Local configuration/toolchain/signing are still additional reproducibility inputs.
+
+Developer portals were reviewed and merged via documentation-only PR1 in each
+repository: Android master`b2e41ee22ecf24e6834b93b3f39bcf9a622b597c`, Web
+main`eb75501376921b1f1c95ad4a1678d07388ec0ce8`. Each changes README.md only. They link
+directly to the R27 engineering branches and current documents, state that default
+source code remains older, and expose the archive and open issues. No blind code
+merge, workflow, force-push, secret upload or new claim of all-gates PASS.
+
+A read-only live Collection navigation to the end triggered React error185 at
+20:32:11Z. The captured production stack maps to WindowedCollectionGrid's synchronous
+layout measurement/setMetrics. Measuring the maximum of only the visible cards can
+change row stride/window start, then change that maximum again. Existing constant-
+geometry tests did not cover this case. No fix or new PASS is claimed yet. This
+new finding limits the prior1299-test and happy-path browser evidence; preserve both.
+No user account, binder, collection entry or production data was changed by that check.
+
 ### Current test-track status and source-backup verification — 2026-10-04 after 21:54 Europe/Berlin
 
 The read-only Play Console follow-up now confirms **Closed Test - Alpha / Active /
