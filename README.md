@@ -15,9 +15,9 @@ im Produktions-Track und kein pauschales PASS aller technischen Gates.
 
 | Stand | Nachweis |
 | --- | --- |
-| Android-Quellen | `codex/release-27-hardening`; remote bestätigter Sicherungscheckpoint `06190b2` |
+| Android-Quellen | `codex/release-27-hardening`; vor diesem Nachweis-Update remote bestätigter Sicherungscheckpoint `5af2ab5` |
 | Signiertes Android-Bundle | Unverändertes `releases/v27/DomiDex-v27.aab`; Build-Quellcommit `a3c7aa7`, Hash und Provenienz in [Build/Release](docs/BUILD_AND_RELEASE.md) |
-| Web/Backend | Separates Repository `DomiDex-Web`, Engineeringcheckpoint `77b37a1`; Hosting `334fdfd6961039a1`, Revision `domidex-web-r27-20261004d` live |
+| Web/Backend | Separates Repository `DomiDex-Web`, Produktquellstand `39742dd`; Hosting `5719d197695f2e1c`, Revision `domidex-web-r27-20261004e` seit 23:42:33 live |
 | Standardbranches | README-Einstiege per Docs-only-PR aktualisiert: Android `master` (`b2e41ee`), Web `main` (`eb75501`). Der R27-Produktcode wurde nicht dorthin gemergt. |
 
 **Entwicklereinstieg:** Den Engineeringbranch ausdrücklich auswählen; ein normaler
@@ -153,12 +153,16 @@ Weitere Grenzen: [Security](docs/security-entitlements.md).
 
 **Bekannte offene Punkte:** Der ursprüngliche Lock-only-Listenernachweis bleibt
 rot; separate erfolgreiche NO_ACCESS-/Löschworkflow-Tests ersetzen ihn nicht.
+Der zusätzliche echte Legacy-SDK-Test vom 04.10. bleibt ebenfalls rot: ohne
+Access-Sperrdokument wurde der aktive Consumer im 30s-Test nicht invalidiert.
+Lokale Daten blieben exakt erhalten; Test-Fixtures wurden kontrolliert bereinigt.
 Hardware-/Mehrgeräte-, Last-/Betriebs- und Datenschutznachweise sind nicht pauschal
 abgeschlossen. Zwei private Binderplätze sind noch nicht ursächlich geklärt.
 Am 04.10.2026 um **20:32 UTC** trat in der live betriebenen Web-Sammlung beim
-Scrollen zusätzlich **React-Fehler 185** auf. Der Fix ist inzwischen lokal mit
-1.306 Webtests und einer minifizierten Browserfixture abgesichert, **noch nicht
-deployed**. Frühere Deployment-PASS zählen nicht als Beleg gegen den Livefehler.
+Scrollen zusätzlich **React-Fehler 185** auf. Der mit 1.306 Webtests abgesicherte
+Fix ist seit **23:42:33 Europe/Berlin veröffentlicht**: Kandidat/Live je45/45,
+angemeldete End/Home- und Breitenwechselprüfung ohne Fehler oder Kartenüberlappung.
+Das schließt diesen geprüften Fehlerpfad, nicht die übrigen offenen Gates.
 
 ## Nächste Schritte und Produktgrenzen
 

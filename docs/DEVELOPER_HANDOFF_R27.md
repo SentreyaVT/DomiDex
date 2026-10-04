@@ -18,8 +18,8 @@ Die Standardbranches enthalten einen sichtbaren Übergabeeinstieg. Das ist kein
 stiller Merge des gesamten R27-Produktcodes. Ein Update von `master`/`main` ist
 getrennt zu reviewen; die Android-Historien sind divergiert. Kein Force-Push.
 
-Vor dieser Dokumentationskorrektur remote bestätigt: Android `06190b2`, Web
-`77b37a1`. Neuere reine Dokumentationscommits ändern das vorhandene AAB nicht.
+Vor diesem Nachweis-Update remote bestätigt: Android `5af2ab5`, Web
+`39742dd`. Neuere Test-/Dokumentationscommits ändern das vorhandene AAB nicht.
 Private Konfigurationen, Schlüssel, persönliche Daten und lokale Belegordner
 werden nicht automatisch mitgeklont. Zugriff darauf kontrolliert beim Betreiber
 anfordern, niemals Credentials in Issues oder Chats einfügen.
@@ -33,7 +33,7 @@ anfordern, niemals Credentials in Issues oder Chats einfügen.
 | Unverändertes AAB | `DomiDex-v27.aab`, 52.705.225 Bytes; SHA-256 `2c3fe33bb84c47fda4525297a8134859f44fd727dabf268bade401d36f276cc7` |
 | R8-Mapping | Vorhanden, dem exakten AAB zugeordnet; SHA-256 `8900194e5eaa4042f46e4043eba099062d30d60f7974d533cee7868649448c8e` |
 | Native-Symbole | Nur **1 von 7** Libraries exakt abgedeckt (`libc++_shared.so`); ZIP-SHA-256 `cbef5ac45ae8c7c870d40cc8ea77fa75da8b9bfe1c8d7a556be65f776e30e687` |
-| Web/Backend | Hosting `334fdfd6961039a1`, Cloud-Run-Revision `domidex-web-r27-20261004d`, veröffentlicht 04.10.2026 um 21:47:30 |
+| Web/Backend | Hosting `5719d197695f2e1c`, Cloud-Run-Revision `domidex-web-r27-20261004e`, veröffentlicht 04.10.2026 um 23:42:33; Produktquellen `39742dd` |
 | Sync-Entscheidung | **Full-Sync bleibt aktiv, Delta bleibt deaktiviert.** |
 
 Das [R27-Binärarchiv](https://github.com/nandedomi/DomiDex/releases/tag/archive/v27-1.0-closed-alpha.6)
@@ -74,24 +74,30 @@ Der isolierte Release-Runner liest keine privaten `.env`-Werte und ersetzt weder
 einen echten SDK-/Geräte-Endtest noch einen Produktionslasttest. Die speziellen
 Emulator-Runner und ihre README-Dateien beachten; keine Testdaten gegen Produktion.
 
-## Offene Aufgaben – nicht als erledigt übernehmen
+## Aktuelle Nachweise und offene Aufgaben
 
 1. **Web-Sammlung, neu nachgewiesener Fehler:** Am 04.10.2026 um 22:32 führte der
    Sprung ans Listenende live zu React #185 (Maximum update depth). Produktionsstack
    verweist auf `WindowedCollectionGrid`: die Maximalhöhe nur sichtbarer Karten
    kann das virtuelle Fenster und damit erneut die gemessene Höhe ändern.
-   Der Fehler ist inzwischen **lokal behoben, noch nicht deployed**: Geometrie-
+   Der Fehler ist inzwischen **behoben und live nachgeprüft**: Geometrie-
    Highwater und vorab gemessenes Tastatur-Zielfenster. Neue Gegenbeispiele sind
    abgesichert; finale Web-Regression1.306/1.306, Typecheck/Lint und minifizierter
    Browserfall mit351/10.000 synthetischen Einträgen bestehen. Die früheren1.299
-   Tests deckten den variierenden Geometriefall nicht ab. Vor produktiver Freigabe
-   bleibt die Liveversion betroffen; lokale PASS ersetzen kein Deployment.
+   Tests deckten den variierenden Geometriefall nicht ab. Der freigegebene Hotfix
+   ist seit23:42:33 live; Kandidat und Live je45/45, angemeldete End/Home- und
+   Desktop-/Mobil-Breitenwechselprüfung ohne Fehler/Überlappungen. Nur diese
+   Produktdatei unterscheidet sich vom bisherigen Deployment.
 2. **Private Binder:** Zwei nicht auflösbare Platzierungen wurden schon vor dem
    Web-Deployment beobachtet. Exakte Owner-/Entry-Verknüpfung prüfen; nicht durch
    Löschen, falsche Karten oder angenommene Bild-URLs kaschieren.
 3. **Berechtigungsentzug:** Der ursprüngliche Lock-only-Listener-Nachweis bleibt
    17/18 RED, mit unverändertem 30s-Ziel. Der gesondert bestandene frische
-   Account-Deletion-/Session-Consumer-Fall ersetzt ihn nicht. Legacy-Jobs gesondert prüfen.
+   Account-Deletion-/Session-Consumer-Fall ersetzt ihn nicht. Der zusätzliche echte
+   Legacy-SDK-Test ist nun ebenfalls RED: echter Lock + Auth-disable/revoke,
+   fehlende Access-Fence, nach30s weiter aktiver Consumer. Alle lokalen Daten
+   erhalten, exakte Test-Fixtures bereinigt. Kein Nachweis fremder Datenzugriffe.
+   Eine jobgebundene Legacy-Reparatur benötigt gesonderte Freigabe und SDK-Nachweis.
 4. **Weitere Nachweise:** Physische/OEM-Sync-Wiederaufnahme und gleichzeitige
    Mehrgeräte-/Kameramatrix, operative Datenschutz-/Löschprozesse und belastbare
    Live-/Last-/Kostenmessung nicht pauschal als vollständig abgeschlossen behandeln.
@@ -102,9 +108,9 @@ Emulator-Runner und ihre README-Dateien beachten; keine Testdaten gegen Produkti
    nicht erreicht. Sechs fehlende Hersteller-Native-Symbole bleiben separat offen;
    eine warnungsfreie Play-Oberfläche ist keine vollständige Symbolabdeckung.
 
-Priorität: Den lokal abgesicherten Web-Crash-Fix nach ausdrücklicher Freigabe
-isoliert produktiv bauen/veröffentlichen und live nachprüfen; danach die konkreten
-offenen Auth-/Binder-/Gerätenachweise schließen. Drei neue Operator-Privacy-Fälle
+Priorität: Den nachgewiesenen Legacy-Sperrfall gezielt absichern; anschließend die
+konkreten offenen Binder-/Gerätenachweise schließen. Der Collection-Web-Hotfix
+ist bereits isoliert veröffentlicht und live geprüft. Drei neue Operator-Privacy-Fälle
 sind jetzt Teil der bestandenen39/39 lokalen Emulatorprüfungen, keine pauschale
 Datenschutz-Betriebsfreigabe. Keine zusätzliche Sync-Architekturänderung.
 Details, frühere Fehlversuche und Nachweisgrenzen bleiben im

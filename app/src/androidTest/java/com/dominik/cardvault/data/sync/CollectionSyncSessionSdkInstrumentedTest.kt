@@ -1497,6 +1497,248 @@ class CollectionSyncSessionSdkInstrumentedTest {
         }
     }
 
+    /** Additive legacy-shaped fixture, not a replay of the current deletionRequest workflow. */
+    @Test fun legacyDeletionLockWithoutAccessFenceInvalidatesSharedKnowledgeConsumer() = runBlocking(Dispatchers.IO) {
+        withTimeout(90_000) {
+            check(scenario == "knowledge-legacy-lock" && owner == "sdk-proof-collection-knowledge-legacy-lock")
+            val access = control.firestore.document("accountAccess/$owner").get(Source.SERVER).bounded()
+            assertFalse(access.metadata.isFromCache); assertFalse(access.metadata.hasPendingWrites())
+            assertFalse("Legacy fixture starts WITHOUT an accountAccess document", access.exists())
+            requireActualEntitlement() // Actual appAccess token fallback, not an injected entitlement.
+            val token = checkNotNull(subject.auth.currentUser).getIdToken(false).bounded()
+            assertTrue("The pre-revocation token must outlive the complete observation window",
+                token.expirationTimestamp * 1_000 > System.currentTimeMillis() + 90_000)
+            val fingerprint = "a".repeat(64)
+            val foreign = "b".repeat(64)
+            val remote = control.firestore.document("scanKnowledge/$fingerprint").get(Source.SERVER).bounded()
+            assertTrue(remote.exists()); assertFalse(remote.metadata.isFromCache)
+            assertFalse(remote.metadata.hasPendingWrites())
+            val stamp = checkNotNull(remote.getTimestamp("lastUpdatedAt"))
+            assertEquals(mapOf<String, Any>(
+                "fingerprint" to fingerprint, "cardId" to "sdk-knowledge-$runId-legacy-lock-server",
+                "sourceSetId" to "synthetic-server-set", "cardNumber" to "101/202",
+                "status" to "STABLE", "confidence" to 91L, "confirmations" to 7L,
+                "corrections" to 2L, "knowledgeVersion" to 1L, "lastUpdatedAt" to stamp,
+            ), remote.data)
+            val expected = ScanKnowledgeRecord(fingerprint, "sdk-knowledge-$runId-legacy-lock-server",
+                "synthetic-server-set", "101/202", ScanKnowledgeStatus.STABLE, 91, 7, 2, 1, stamp.toDate().time)
+            val now = System.currentTimeMillis()
+            assertTrue(expected.updatedAtEpochMillis > 0 && expected.updatedAtEpochMillis <= now &&
+                now - expected.updatedAtEpochMillis < SCAN_KNOWLEDGE_MAX_AGE_MILLIS)
+            val fixture = SessionAccessKnowledgeFixture("legacyDeletionLockWithoutAccessFenceInvalidatesSharedKnowledgeConsumer").also {
+                sessionAccessKnowledgeFixture = it; it.assertEmptyPreferencesNotAdopted(); it.initialize()
+            }
+            fixture.assertExistingFixtureNotAdopted()
+            val store = ScanKnowledgeStore(fixture.isolated)
+            val consent = ScanKnowledgeConsent(fixture.isolated)
+            consent.setEnabled(owner, true); consent.setEnabled(OTHER_OWNER, false)
+            val receipt = ScanKnowledgeEvidence(fingerprint = fingerprint,
+                confirmedCardId = "sdk-knowledge-$runId-legacy-lock-owner-receipt",
+                sourceSetId = "synthetic-local-set", cardNumber = "9/9", setCode = "SYNTHETIC",
+                ocrTokens = listOf("synthetic"), visualFingerprint = null,
+                candidateIds = listOf("sdk-knowledge-$runId-legacy-lock-owner-receipt"),
+                originalConfidence = 22, corrected = false, scannerVersion = "sdk-local-fixture", observedAtClient = now - 1_000)
+            val otherReceipt = receipt.copy(confirmedCardId = "sdk-knowledge-$runId-legacy-lock-other-receipt")
+            val pending = receipt.copy(confirmedCardId = "sdk-knowledge-$runId-legacy-lock-owner-pending", corrected = true)
+            val otherPending = otherReceipt.copy(confirmedCardId = "sdk-knowledge-$runId-legacy-lock-other-pending", corrected = true)
+            listOf(Triple(owner, receipt, pending), Triple(OTHER_OWNER, otherReceipt, otherPending)).forEach { (uid, done, queued) ->
+                assertTrue(store.enqueue(uid, done)); store.markUploaded(uid, done); assertTrue(store.enqueue(uid, queued))
+                assertEquals(listOf(queued), store.pending(uid)); assertEquals(done.confirmedCardId, store.lastUploadedCardId(uid, fingerprint))
+            }
+            val local = expected.copy(cardId = "sdk-knowledge-$runId-legacy-lock-local",
+                status = ScanKnowledgeStatus.CANDIDATE, confidence = 22, confirmations = 1, corrections = 0,
+                updatedAtEpochMillis = now - 1_000)
+            val untouched = local.copy(fingerprint = foreign, cardId = "sdk-knowledge-$runId-legacy-lock-foreign")
+            store.put(local); store.put(untouched)
+            val initialFiles = fixture.fileSnapshot()
+            val preferencesBefore = fixture.preferences.all.toMap()
+            val directoriesBefore = fixture.directorySnapshot()
+            assertEquals(7, initialFiles.size)
+            val ready = AtomicBoolean(false)
+            val authSignedOutAt = AtomicReference<Long?>()
+            val changed = Channel<Unit>(Channel.CONFLATED)
+            val trace = mutableListOf<String>()
+            fun observed(kind: String, value: String) {
+                synchronized(trace) {
+                    check(trace.size < 96) { "Unexpected legacy proof callback storm" }
+                    trace += "${SystemClock.elapsedRealtime()}|$kind|$value"
+                }
+                changed.trySend(Unit)
+            }
+            val authEpoch = AtomicInteger(0)
+            val authEvents = Channel<String?>(Channel.UNLIMITED)
+            val authMonitor = FirebaseAuth.AuthStateListener {
+                val uid = canonicalCollectionOwnerUid(it.currentUser)
+                authEpoch.incrementAndGet()
+                if (ready.get() && uid == null) authSignedOutAt.set(SystemClock.elapsedRealtime())
+                observed("auth", "$uid")
+                check(authEvents.trySend(uid).isSuccess)
+            }
+            knowledgeObservations += AutoCloseable { subject.auth.removeAuthStateListener(authMonitor) }
+            subject.auth.addAuthStateListener(authMonitor)
+            assertEquals(owner, withTimeout(20_000) { authEvents.receive() })
+            val effects = SessionEffectRecorder()
+            val session = newDiagnosticSession(effects)
+            val tokenEvents = Channel<String?>(Channel.UNLIMITED)
+            val tokenEpoch = AtomicInteger(0)
+            val tokenMonitor = FirebaseAuth.IdTokenListener {
+                val uid = canonicalCollectionOwnerUid(it.currentUser)
+                tokenEpoch.incrementAndGet(); observed("id-token", "$uid")
+                check(tokenEvents.trySend(uid).isSuccess)
+            }
+            knowledgeObservations += AutoCloseable { subject.auth.removeIdTokenListener(tokenMonitor) }
+            startWithInitialAuthCallbackFence(session, tokenMonitor, tokenEvents)
+            awaitDiagnosticActivation(session, effects)
+            // ACTIVE can only follow the real Session collection listener's confirmed SERVER snapshot.
+            // Seed pending Room data AFTER this witness, so PENDING cannot hide the initial server state.
+            val serverState = withTimeout(20_000) {
+                session.cloudState.first { it == CollectionCloudState(CollectionCloudStatus.ACTIVE, owner, true) }
+            }
+            seedLocalPendingMutation()
+            withTimeout(20_000) {
+                session.cloudState.first { it == CollectionCloudState(CollectionCloudStatus.PENDING, owner, true) }
+            }
+            val roomBefore = sessionAccessRoomSnapshot()
+            val knowledge = FirebaseScanKnowledge(fixture.isolated, subject.auth, subject.firestore)
+            val cachedCalls = AtomicInteger(0)
+            val observeCalls = AtomicInteger(0)
+            val closeCalls = AtomicInteger(0)
+            val hints = Channel<ScanKnowledgeRecord?>(Channel.UNLIMITED)
+            val source = object : ScannerKnowledgeSource {
+                override fun currentOwner() = canonicalCollectionOwnerUid(subject.auth.currentUser)
+                override fun cached(fingerprint: String): ScanKnowledgeRecord? {
+                    cachedCalls.incrementAndGet(); return knowledge.cached(fingerprint)
+                }
+                override fun observe(fingerprint: String, update: (ScanKnowledgeRecord?) -> Unit): AutoCloseable {
+                    observeCalls.incrementAndGet()
+                    val handle = knowledge.observeRelevant(fingerprint) { hint ->
+                        update(hint); observed("knowledge", hint?.cardId ?: "null")
+                        check(hints.trySend(hint).isSuccess)
+                    }
+                    return AutoCloseable { closeCalls.incrementAndGet(); handle.close(); observed("consumer-close", "${closeCalls.get()}") }
+                }
+            }
+            val consumer = ScannerKnowledgeConsumer(source)
+            knowledgeObservations += consumer
+            val active = AtomicReference<ScannerKnowledgeConsumer.Capture?>()
+            val terminal = AtomicReference<LegacyLockConsumerWitness?>()
+            val forwarding = launch {
+                session.cloudState.collect { state ->
+                    val before = active.get()?.current()
+                    consumer.onCloudState(state)
+                    if ((state.status == CollectionCloudStatus.NO_ACCESS && state.ownerUid == owner) ||
+                        state.status == CollectionCloudStatus.SIGNED_OUT) {
+                        check(ready.get()) { "Legacy fixture lost access before the host barrier" }
+                        terminal.set(LegacyLockConsumerWitness(state, before, checkNotNull(active.get()).current(),
+                            closeCalls.get(), source.currentOwner(), SystemClock.elapsedRealtime()))
+                    }
+                    observed("session", "$state")
+                }
+            }
+            try {
+                val capture = consumer.begin(fingerprint).also(active::set)
+                assertEquals(local, hints.receive()); awaitKnowledgeHint(hints, expected, local)
+                assertEquals(expected, capture.current()); assertEquals(expected, store.get(fingerprint))
+                fun sessionField(name: String): Any? = FirebaseCollectionSession::class.java.getDeclaredField(name).let {
+                    it.isAccessible = true; it.get(session)
+                }
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                assertEquals(owner, source.currentOwner())
+                assertEquals(CollectionCloudState(CollectionCloudStatus.PENDING, owner, true), session.cloudState.value)
+                assertEquals(true, sessionField("serverSnapshot"))
+                assertNotNull(sessionField("remoteListener")); assertNotNull(sessionField("accessListener"))
+                assertEquals(0, closeCalls.get()); assertEquals(1, cachedCalls.get()); assertEquals(1, observeCalls.get())
+                val effectsBefore = effects.snapshot()
+                val protectedFiles = fixture.fileSnapshot()
+                assertEquals(initialFiles - fixture.positiveCachePath, protectedFiles - fixture.positiveCachePath)
+                assertEquals(preferencesBefore, fixture.preferences.all)
+                assertEquals(directoriesBefore, fixture.directorySnapshot()); assertEquals(roomBefore, sessionAccessRoomSnapshot())
+                val readyState = session.cloudState.value
+                val readyAt = SystemClock.elapsedRealtime()
+                ready.set(true)
+                val expectedFiles = protectedFiles + fixture.publishReady()
+                assertEquals(expectedFiles, fixture.fileSnapshot())
+                // Only genuine callback delivery below. No get/poll/token refresh, bounce, manual sync,
+                // re-listen, fabricated NO_ACCESS, cache eviction or control SDK request after ready.
+                val witness = withTimeoutOrNull(30_000) {
+                    var accepted: LegacyLockConsumerWitness? = null
+                    while (accepted == null) {
+                        val candidate = terminal.get()
+                        if (candidate != null && candidate.observedAt <= readyAt + 30_000 &&
+                            candidate.after == null && candidate.closes == 1 &&
+                            ((candidate.state == CollectionCloudState(CollectionCloudStatus.NO_ACCESS, owner) && candidate.owner == owner) ||
+                                (candidate.state == CollectionCloudState(CollectionCloudStatus.SIGNED_OUT) && candidate.owner == null &&
+                                    authSignedOutAt.get()?.let { it <= readyAt + 30_000 } == true && source.currentOwner() == null))) accepted = candidate
+                        else changed.receive()
+                    }
+                    accepted
+                }
+                currentCoroutineContext().ensureActive()
+                // Capture the original deadline state BEFORE any new capture or teardown. Preserve it
+                // in the terminal instrumentation result on RED too, without extra status events.
+                val roomAfter = sessionAccessRoomSnapshot()
+                val filesAfter = fixture.fileSnapshot()
+                val consumerLock = ScannerKnowledgeConsumer::class.java.getDeclaredField("lock").let {
+                    it.isAccessible = true; checkNotNull(it.get(consumer))
+                }
+                val captureFields = synchronized(consumerLock) {
+                    listOf("invalid", "registration", "value").associateWith { name ->
+                        val value = capture.javaClass.getDeclaredField(name).let { it.isAccessible = true; it.get(capture) }
+                        if (name == "registration") value != null else value
+                    }
+                }
+                val fileInventory = filesAfter.mapValues { (_, bytes) ->
+                    "${bytes.size}:" + java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(bytes.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+                }
+                val summary = "legacy-shaped-only; source=actual-session-${witness?.state?.status ?: "NONE"}; " +
+                    "elapsedMs=${SystemClock.elapsedRealtime() - readyAt}; serverBefore=$serverState; readyState=$readyState; " +
+                    "state=${session.cloudState.value}; owner=${source.currentOwner()}; authEvents=${authEpoch.get()}; " +
+                    "idTokenEvents=${tokenEpoch.get()}; authSignedOutAt=${authSignedOutAt.get()}; generation=${diagnosticGeneration(session)}; " +
+                    "serverSnapshot=${sessionField("serverSnapshot")}; remoteListener=${sessionField("remoteListener") != null}; " +
+                    "accessListener=${sessionField("accessListener") != null}; hint=${capture.current()}; " +
+                    "cached=${cachedCalls.get()}; observed=${observeCalls.get()}; closes=${closeCalls.get()}; captureFields=$captureFields; witness=$witness; " +
+                    "roomUnchanged=${roomBefore == roomAfter}; filesUnchanged=${expectedFiles == filesAfter}; " +
+                    "preferencesUnchanged=${preferencesBefore == fixture.preferences.all}; " +
+                    "directoriesUnchanged=${directoriesBefore == fixture.directorySnapshot()}; room=$roomAfter; files=$fileInventory; " +
+                    "preferences=${fixture.preferences.all}; directories=${fixture.directorySnapshot()}; effects=${effects.snapshot()}; " +
+                    "trace=${synchronized(trace) { trace.toList() }}"
+                InstrumentationRegistry.getInstrumentation().addResults(android.os.Bundle().apply { putString("legacyG9Snapshot", summary) })
+                // Preservation is required on timeout as well; never disguise a lost local mutation.
+                assertEquals(summary, roomBefore, roomAfter); assertEquals(summary, expectedFiles, filesAfter)
+                assertEquals(summary, preferencesBefore, fixture.preferences.all)
+                assertEquals(summary, directoriesBefore, fixture.directorySnapshot())
+                val reopened = ScanKnowledgeStore(fixture.isolated)
+                assertEquals(expected, reopened.get(fingerprint)); assertEquals(untouched, reopened.get(foreign))
+                assertEquals(listOf(pending), reopened.pending(owner)); assertEquals(listOf(otherPending), reopened.pending(OTHER_OWNER))
+                assertEquals(receipt.confirmedCardId, reopened.lastUploadedCardId(owner, fingerprint))
+                assertEquals(otherReceipt.confirmedCardId, reopened.lastUploadedCardId(OTHER_OWNER, fingerprint))
+                assertTrue(consent.isEnabled(owner)); assertFalse(consent.isEnabled(OTHER_OWNER))
+                assertNotNull("No actual Session/Consumer revocation within the unchanged 30s; $summary", witness)
+                assertNull(summary, capture.current())
+                assertNull("Actual denied/signed-out Session must detach its collection listener; $summary", sessionField("remoteListener"))
+                consumer.begin(fingerprint).use { assertNull(it.current()) }
+                assertEquals("A denied capture must not read cache; $summary", 1, cachedCalls.get())
+                assertEquals("A denied capture must not register a listener; $summary", 1, observeCalls.get())
+                assertEquals(1, closeCalls.get())
+                val effectsAfter = effects.snapshot()
+                assertEquals(effectsBefore, effectsAfter.take(effectsBefore.size))
+                assertTrue(effectsAfter.drop(effectsBefore.size).all {
+                    it == SessionEffect("cancel-periodic", owner) || it == SessionEffect("cancel-all-periodic")
+                })
+                assertEquals(expectedFiles, fixture.fileSnapshot()); assertEquals(roomBefore, sessionAccessRoomSnapshot())
+            } finally {
+                forwarding.cancelAndJoin(); consumer.close()
+                // The unchanged @After owns Session/SDK teardown and exact marked fixture removal.
+            }
+        }
+    }
+
+    private data class LegacyLockConsumerWitness(
+        val state: CollectionCloudState, val before: ScanKnowledgeRecord?, val after: ScanKnowledgeRecord?,
+        val closes: Int, val owner: String?, val observedAt: Long,
+    )
+
     private data class DeletionWorkflowConsumerWitness(
         val state: CollectionCloudState, val before: ScanKnowledgeRecord?, val after: ScanKnowledgeRecord?,
         val closes: Int, val owner: String?,
@@ -1548,6 +1790,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
         private val proofPrefix = when (proofMethod) {
             "sessionAccessDisabledInvalidatesSharedKnowledgeConsumerWithoutPolling" -> "session-access"
             "deletionRequestWorkflowInvalidatesSharedKnowledgeConsumer" -> "deletion-workflow"
+            "legacyDeletionLockWithoutAccessFenceInvalidatesSharedKnowledgeConsumer" -> "legacy-lock"
             else -> error("Unreviewed knowledge fixture method")
         }
         private val name = "domidex-knowledge-$proofPrefix-sdk-$runId"
@@ -2193,6 +2436,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             "largePrivateFullPullContinuesAfterBudgetAndRoomReopen" -> "private-full-budget"
             "sessionAccessDisabledInvalidatesSharedKnowledgeConsumerWithoutPolling" -> "knowledge-session-access"
             "deletionRequestWorkflowInvalidatesSharedKnowledgeConsumer" -> "knowledge-deletion-workflow"
+            "legacyDeletionLockWithoutAccessFenceInvalidatesSharedKnowledgeConsumer" -> "knowledge-legacy-lock"
             else -> error("Unreviewed collection-session proof method")
         }
         owner = "sdk-proof-collection-$scenario"
@@ -2216,7 +2460,7 @@ class CollectionSyncSessionSdkInstrumentedTest {
             control = client("control")
             signIn(subject.auth, owner)
             signIn(control.auth, owner)
-            if (scenario in setOf("knowledge-session-access", "knowledge-deletion-workflow")) return@withTimeout
+            if (scenario in setOf("knowledge-session-access", "knowledge-deletion-workflow", "knowledge-legacy-lock")) return@withTimeout
             if (scenario in setOf("knowledge-listener", "knowledge-malformed", "knowledge-revoked", "knowledge-revoked-on-data-change", "private-full-budget")) return@withTimeout
             if (scenario == "private-two-client") {
                 assertDiagnosticServerEmpty()

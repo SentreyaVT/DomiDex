@@ -2,6 +2,78 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
 
+### Authorized Web hotfix and actual Legacy G9 result — 2026-10-04 23:48 Europe/Berlin
+
+The separately authorized Collection fix is now **LIVE**, not merely local.
+Hosting `5719d197695f2e1c`, released23:42:33 Europe/Berlin, pins
+`domidex-web-r27-20261004e`; immutable image digest
+`sha256:eda5084e7d99600b282c6e3580c000aeec7017f5321792d381d094bda7015f8b`.
+Cloud Build `aaa33c4d-1a3f-4db1-9631-2777c7c3c45a` succeeded from frozen Web
+commit`39742dd9a3aba5eacf7126d4c7248c295cc0a661`. All309 production files were
+compared with the prior deployed stage: **only windowed-collection-grid.tsx changed**.
+Untracked market-data and new test harnesses were excluded. Actual-image client
+and server archives passed bounded safe extraction and Cloud Build manifest hashes.
+Candidate and live GET checks both passed45/45, including exact client assets,
+root/app separation, global CSS, security headers and anonymous API rejection.
+Runtime configuration, IAM and default Cloud Run percentage traffic stayed equal;
+Hosting uses the verified new revision pin. No Rules, Functions or access-grant
+deployment, Android release build/signing, Play action or physical-device change.
+
+Authenticated browser readback shows351 copies/348 distinct saved entries. The
+previously failing End jump, Home/repeated End and width changes were exercised.
+At1280x720, final entry347 was focused and visible with23 mounted tiles; at390x844,
+10 mounted tiles, the same visible target. Both settled geometries had zero tile
+overlaps; no captured browser warnings/errors. Empty-search recovery also worked.
+These are bounded real-account navigation checks, not universal correctness or
+price coverage: existing unpriced entries remain explicitly visible. No collection
+record was written. Evidence: ignored `artifacts/r27-grid-hotfix-20261004/`,
+including `browser-live.json` and three actual screenshots. Receipt SHA256:
+`f40839086b7693bed4e7eeb69ad092f50254abf0fd49b2077a2dd7b1adac7fee`.
+Search and temporary viewport overrides were reset after the checks.
+The earlier1306/1306 source regression and historical REDs remain separately dated.
+
+The new, independently reviewed **Legacy G9 SDK singleton is RED**. Evidence in
+Web`outputs/collection-sync-session-legacy-local/2026-10-04T21-45-30-197Z-7b40a84aa021497b858f9cca5a55d201/`:
+one JUnit failure,32.057s, unchanged30s observation from Android Ready (30034ms
+diagnostic elapsed). A synthetic legacy STARTED job/lock was atomically created;
+actual Auth-disable and revoke were each acknowledged once while the test ran.
+Host timings UTC: create21:45:50.166–.172, disable.442–.447, revoke.807–.811.
+The window does **not** restart at Auth-revoke; no exact cross-clock offset was
+recorded. No access-fence document or Knowledge data/updateTime was changed.
+The genuine prior SERVER-positive Session remained PENDING/accessConfirmed=true,
+same UID, only initial Auth/token events, both Session listeners present. The
+actual consumer remained valid with its positive hint and zero listener closes.
+No refresh, new control read, re-listen or synthetic denial was injected.
+
+All14 entity tables plus sqlite_sequence, eight fixture files, preferences,
+directories, local pending mutations and owner/foreign receipts stayed exact.
+After the failed assertion, the host removed only its eight known documents in
+one acknowledged CAS batch and its two synthetic Auth accounts; final inventories
+were empty. Ports, reverse mappings and instrumentation were clear, offline AVD
+identity preserved, all199 pinned inputs independently rehashed unchanged.
+The manifest correctly retains exit1/serverVerified=false; cleanup is not PASS.
+The original18-case registry and17/18 lock-only RED are unchanged. Pure host
+validators passed 112/112; after semantically equivalent sort typing, all 112
+cases passed again (10.379s, zero skips), with scoped lint. Those are not
+substitute SDK evidence.
+
+Root built only Debug app/test APKs (final build43s) and installed them solely on
+owned offline`emulator-5556 / DomiDex_R27_Regression_API36`. Installed hashes:
+app`64170e3ccffb821dabb886826fcaf20b7372e4cac2e7b952a6540630c160c9b9`,
+test`ef62043a2aeafc7e68e9ebeab93d3ff2d78c150452ec1ec79acfbbc1089bd8b7`.
+The immutable signed27 AAB remains`2c3fe33bb84c47fda4525297a8134859f44fd727dabf268bade401d36f276cc7`.
+
+Diagnosis: missing accountAccess permits the existing claims fallback; without
+an actual listener-denial/Auth event, the Consumer receives no invalidation signal.
+Fresh deletion requests already create the disabled fence; legacy retries do not
+reconstruct an absent fence. This proves a bounded stale active-consumer case,
+not cross-user data access or successful new unauthorized requests. A narrowly
+job/UID/lock/lease-bound, idempotent legacy repair needs separate authorization
+and its own real SDK proof; no blind migration or production backfill was performed.
+Full-Sync remains; Delta stays off. Other binder, hardware/multidevice, operational
+privacy/load/cost, coverage and original-vendor-symbol limitations remain open.
+**This is not all-gates completion.**
+
 ### Local Web crash fix and operator evidence — 2026-10-04 23:16 Europe/Berlin
 
 The actual Web Collection React185 failure now has a deterministic RED regression:

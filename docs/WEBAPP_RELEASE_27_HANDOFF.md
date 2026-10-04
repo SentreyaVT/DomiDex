@@ -4,6 +4,16 @@ Updated 2026-10-04. This handoff does not itself authorize a deployment.
 
 ## Current deployment checkpoint
 
+Follow-up hotfix, explicitly authorized on2026-10-04: Hosting
+`5719d197695f2e1c` now pins`domidex-web-r27-20261004e`, released23:42:33
+Europe/Berlin. Frozen Web source`39742dd` differs from the prior309-file production
+stage only in`components/windowed-collection-grid.tsx`. Candidate/live45/45 and
+authenticated desktop/mobile End/Home checks passed. Runtime/IAM/default percentage
+traffic unchanged; no Rules/Functions deployment or physical-device change.
+The earlier deployment below is historical. The new Legacy G9 SDK test is genuinely
+RED at30s despite acknowledged lock/Auth revocation; all local data and exact
+fixture cleanup verified. See the newest ledger checkpoint; no all-gates approval.
+
 The user's separate explicit deployment authorization was executed on 2026-10-04.
 Reviewed Web/backend source is live as Hosting version `334fdfd6961039a1`, pinned
 to tag/revision `domidex-web-r27-20261004d` (published21:47:30 Europe/Berlin).
