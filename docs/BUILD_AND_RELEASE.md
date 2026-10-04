@@ -234,4 +234,5 @@ Archive und bereits verwendete Versionscodes dürfen nicht überschrieben werden
 Das aktuelle Testrelease ist keine Behauptung, dass Hardware-/Mehrgeräte-,
 Betriebs-/Datenschutz- und alle Known-Issue-Gates geschlossen sind. Insbesondere
 der am 04.10. um 20:32 UTC beobachtete Web-React-Fehler 185 beim Sammlungsscrollen
-ist noch offen; ein neues Android-Bundle würde diesen Webfehler nicht beheben.
+ist lokal abgesichert behoben, aber noch nicht produktiv veröffentlicht; ein neues
+Android-Bundle würde diesen Webfehler nicht beheben.

@@ -156,9 +156,9 @@ rot; separate erfolgreiche NO_ACCESS-/Löschworkflow-Tests ersetzen ihn nicht.
 Hardware-/Mehrgeräte-, Last-/Betriebs- und Datenschutznachweise sind nicht pauschal
 abgeschlossen. Zwei private Binderplätze sind noch nicht ursächlich geklärt.
 Am 04.10.2026 um **20:32 UTC** trat in der live betriebenen Web-Sammlung beim
-Scrollen zusätzlich **React-Fehler 185** auf; zum Stand dieser Dokumentation ist
-er nicht behoben. Frühere Web-Test- und Deployment-PASS zählen nicht als Beleg
-gegen diesen neu beobachteten Fehler.
+Scrollen zusätzlich **React-Fehler 185** auf. Der Fix ist inzwischen lokal mit
+1.306 Webtests und einer minifizierten Browserfixture abgesichert, **noch nicht
+deployed**. Frühere Deployment-PASS zählen nicht als Beleg gegen den Livefehler.
 
 ## Nächste Schritte und Produktgrenzen
 

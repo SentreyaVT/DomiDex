@@ -80,23 +80,33 @@ Emulator-Runner und ihre README-Dateien beachten; keine Testdaten gegen Produkti
    Sprung ans Listenende live zu React #185 (Maximum update depth). Produktionsstack
    verweist auf `WindowedCollectionGrid`: die Maximalhöhe nur sichtbarer Karten
    kann das virtuelle Fenster und damit erneut die gemessene Höhe ändern.
-   Regression und Fix stehen noch aus. Die bisherigen 1.299 bestandenen Webtests
-   deckten diesen variierenden Geometriefall nicht ab.
+   Der Fehler ist inzwischen **lokal behoben, noch nicht deployed**: Geometrie-
+   Highwater und vorab gemessenes Tastatur-Zielfenster. Neue Gegenbeispiele sind
+   abgesichert; finale Web-Regression1.306/1.306, Typecheck/Lint und minifizierter
+   Browserfall mit351/10.000 synthetischen Einträgen bestehen. Die früheren1.299
+   Tests deckten den variierenden Geometriefall nicht ab. Vor produktiver Freigabe
+   bleibt die Liveversion betroffen; lokale PASS ersetzen kein Deployment.
 2. **Private Binder:** Zwei nicht auflösbare Platzierungen wurden schon vor dem
    Web-Deployment beobachtet. Exakte Owner-/Entry-Verknüpfung prüfen; nicht durch
    Löschen, falsche Karten oder angenommene Bild-URLs kaschieren.
 3. **Berechtigungsentzug:** Der ursprüngliche Lock-only-Listener-Nachweis bleibt
    17/18 RED, mit unverändertem 30s-Ziel. Der gesondert bestandene frische
    Account-Deletion-/Session-Consumer-Fall ersetzt ihn nicht. Legacy-Jobs gesondert prüfen.
-4. **Weitere Nachweise:** OS-/WorkManager-Hintergrundzustellung, physische
+4. **Weitere Nachweise:** Physische/OEM-Sync-Wiederaufnahme und gleichzeitige
    Mehrgeräte-/Kameramatrix, operative Datenschutz-/Löschprozesse und belastbare
    Live-/Last-/Kostenmessung nicht pauschal als vollständig abgeschlossen behandeln.
+   Echte WorkManager-Retry-/1001-Binder-Fortsetzung und die separate Wartungs-
+   OS-Weckung mit neuem Prozess und demselben Child sind bereits belegt; diese
+   bestandenen Teilnachweise nicht erneut pauschal als fehlend behandeln.
 5. **Katalog/Preise/Symbole:** Vollständige Anbieterpreis- und Bildabdeckung ist
    nicht erreicht. Sechs fehlende Hersteller-Native-Symbole bleiben separat offen;
    eine warnungsfreie Play-Oberfläche ist keine vollständige Symbolabdeckung.
 
-Priorität: Web-Crash reproduzierbar absichern, gezielt beheben und bestehende
-Regressionen erneut ausführen. Keine zusätzliche Sync-Architekturänderung.
+Priorität: Den lokal abgesicherten Web-Crash-Fix nach ausdrücklicher Freigabe
+isoliert produktiv bauen/veröffentlichen und live nachprüfen; danach die konkreten
+offenen Auth-/Binder-/Gerätenachweise schließen. Drei neue Operator-Privacy-Fälle
+sind jetzt Teil der bestandenen39/39 lokalen Emulatorprüfungen, keine pauschale
+Datenschutz-Betriebsfreigabe. Keine zusätzliche Sync-Architekturänderung.
 Details, frühere Fehlversuche und Nachweisgrenzen bleiben im
 [Engineering-Ledger](RELEASE_27.md) erhalten; neuere Checkpoints haben Vorrang
 vor ausdrücklich historischen Zwischenständen. Der Ledger enthält Verweise auf

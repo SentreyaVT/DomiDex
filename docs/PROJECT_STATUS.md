@@ -35,9 +35,11 @@ Das supersediert die früheren „kein GitHub Release/kein PR“-Sicherungscheck
 **Nachtrag 04.10.2026, 22:32:** Beim Sprung ans Ende der Live-Web-Sammlung wurde
 ein React-185-Absturz nachgewiesen. Der Stack zeigt auf den synchronen Messpfad
 des `WindowedCollectionGrid`; variable sichtbare Kartenhöhen können Fenster und
-Messung wiederholt verändern. Noch kein Fix oder Regressionstest abgeschlossen.
-Die frühere 1.299-Test-Regression deckte diesen Fall nicht ab. Der Entwickler-
-Handoff führt ihn ausdrücklich als offen; diese GitHub-Aufbereitung deployt nichts.
+Messung wiederholt verändern. Nachtrag23:16: gezielter Fix und Gegenbeispiele sind
+lokal abgeschlossen:1.306/1.306 Webtests, Typecheck/Lint und minifizierte351/10.000-
+Karten-Browserfixture bestehen. Die frühere1.299-Test-Regression deckte den Fall
+nicht ab. **Noch nicht deployed**; der produktive Fehler bleibt bis zur gesonderten
+Freigabe offen. Zusätzlich sind39/39 lokale Private-Operations-Fälle bestanden.
 
 **Aktueller Stand 04.10.2026, nach 21:54:** Die geschlossene Alpha ist inzwischen
 auch tatsächlich live: Die Play Console zeigt „Aktiv“, „Für ausgewählte Tester

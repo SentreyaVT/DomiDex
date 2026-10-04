@@ -10,8 +10,9 @@ Tests und offene Gates stehen im [Release-27-Ledger](RELEASE_27.md).
 Fortschreibung 04.10.2026: R27 ist inzwischen in der geschlossenen Alpha und
 Web/Backend sind live. Das schließt nicht alle früheren Engineering-Gates.
 Der [Entwickler-Einstieg](DEVELOPER_HANDOFF_R27.md) enthält die aktuellen Grenzen.
-Vorrang hat jetzt der neu nachgewiesene Web-Collection-Scroll-Absturz (React185),
-danach die offenen Binder-Verknüpfungs- und Entzugsnachweise. Unten genannte
+Vorrang hat die ausdrücklich freizugebende Veröffentlichung des inzwischen lokal
+abgesicherten Web-Collection-Scroll-Fixes (React185), danach die offenen
+Binder-Verknüpfungs- und Entzugsnachweise. Unten genannte
 frühere Messungen bleiben historische Ergebnisse, keine aktuelle Geräte-SLA.
 
 1. **Quellstand nachvollziehbar sichern:** lokale Entwicklung, GitHub und

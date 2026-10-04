@@ -2,6 +2,48 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
 
+### Local Web crash fix and operator evidence — 2026-10-04 23:16 Europe/Berlin
+
+The actual Web Collection React185 failure now has a deterministic RED regression:
+varying visible tile maxima oscillated the row stride/window synchronously.
+Original run1299PASS/1FAIL is preserved under the Web repository's
+`outputs/release-local/2026-10-04T20-55-25-131Z-9108.{json,log}`.
+The narrow Web fix retains a high-water height per grid geometry, waits for the
+new inline width before resize measurement, observes every mounted tile and
+measures the keyboard target window/neighbours before scrolling. Repeated keyboard
+requests also get a commit. No change to card identity, prices, sync or data access.
+The known tradeoff is retained whitespace after shorter text at unchanged geometry.
+
+Independent review identified repeated-End and taller-destination-neighbour cases.
+The latter was genuinely reproduced in a minified browser fixture (target outside
+viewport), then corrected rather than dismissed. Final isolated Web regression:
+**1306/1306 in79 files**,23.13s, zero failures/skips;13 collection cases, typecheck
+and scoped lint PASS. Web report`outputs/release-local/2026-10-04T21-13-27-372Z-23092`.
+Browser fixture uses actual grid/CSS with synthetic351/10000 entries, desktop1280×720
+and mobile390×844: settled End target visible, no overlapping tile rectangles,
+bounded DOM, filters and exact-ID selection verified. Source/procedure/limits:
+[Web fixture](https://github.com/nandedomi/DomiDex-Web/blob/codex/release-27-hardening/tests/collection-grid-browser/README.md).
+This is not logged-in Firebase/live acceptance, a physical device or a full Web
+production build. Existing unit act/Canvas warnings remain recorded.
+
+The previously pending three operator privacy cases now pass in the isolated real
+Auth/Firestore/Storage demo: **39/39**,0skip,exit0,unchanged inputs,ports free before
+and after. Web manifest`outputs/private-operations-local/2026-10-04T20-55-49-732Z-1c8432ed/manifest.json`;
+separate launcher safety17/17. Historical stored timestamps are explicit fixtures,
+not65minutes actually elapsed or an old-token revocation proof. A new named SDK
+client is not an OS process restart; service calls are not HTTP route coverage;
+emulator Storage metadata is not provider-level purge evidence.
+
+**Local code/test and engineering-branch backup only; NOT DEPLOYED.** The immutable
+Android27 AAB, active Hosting revision, Rules, Google Play, signing and physical
+devices are untouched. Full-Sync stays; Delta remains disabled. Original17/18
+lock-only SDK RED, two private-binder references, physical multi-device/WorkManager,
+operational privacy/load/cost evidence and unavailable vendor symbols remain open.
+Here WorkManager means missing physical/OEM sync lifecycle coverage, not the
+already-passed real retry/1001-binder continuation or maintenance OS-wake/new-process
+same-child proof. Those earlier narrowly scoped successes remain valid.
+Do not read older "fix pending" paragraphs as a claim about this newer local fix.
+
 ### Developer handoff and newly observed Web failure — 2026-10-04 after 22:32 Europe/Berlin
 
 The [developer entry point](DEVELOPER_HANDOFF_R27.md) distinguishes the immutable

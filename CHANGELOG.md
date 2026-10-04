@@ -24,7 +24,8 @@ belegte Releases. Sie ersetzt weder Git-Historie noch Google Play Console.
 - Separates Web/Backend (`77b37a1`) unter Hosting `334fdfd6961039a1` und Revision
   `domidex-web-r27-20261004d` veröffentlicht; Regeln bytegleich zurückgelesen.
   Neu am 04.10. um 20:32 UTC: React-Fehler 185 beim Scrollen der live betriebenen
-  Web-Sammlung, noch nicht behoben. Der frühere Deployment-PASS wird nicht umgedeutet.
+  Web-Sammlung. Inzwischen lokal behoben, noch nicht deployed;1.306 Webtests und
+  minifizierte Browserfälle bestehen. Der frühere Deployment-PASS bleibt historisch.
 - [GitHub-Binärarchiv R27](https://github.com/nandedomi/DomiDex/releases/tag/archive/v27-1.0-closed-alpha.6)
   am 04.10. um 22:47:21 Europe/Berlin als Vorabversion veröffentlicht, kein Entwurf;
   Zielcommit `a3c7aa7`. Sechs vorhandene Assets hochgeladen, sämtliche Hashes
