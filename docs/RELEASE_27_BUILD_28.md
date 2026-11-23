@@ -1,8 +1,8 @@
 # DomiDex Release 27 – Build 28 release receipt
 
-**Status:** signed candidate for Internal and Closed testing. This receipt records
-the local release evidence only. It does not authorize Production or a Firebase,
-Hosting, Rules or Functions deployment.
+**Status:** signed and uploaded for Internal testing; the Closed Alpha submission
+is with Google Play for review. This receipt does not authorize Production or a
+Firebase, Hosting, Rules or Functions deployment.
 
 ## Identity
 
@@ -74,5 +74,21 @@ Hosting, Rules or Functions deployment.
 - The large 13 GiB storage stress procedure remains a separate, documented
   non-release proof and was not run on a normal emulator.
 - Full Sync remains the R27 data path. Delta Sync is deliberately inactive.
-- Play track receipt and tester availability are appended only after Play Console
-  validation; no Production release is permitted.
+- The hardware-specific proof and the large-storage stress procedure remain
+  separate evidence activities. They did not block the already-completed local
+  release validation or the selected Play test-track submission.
+
+## Google Play test-track receipt
+
+- **Internal test:** Release `27 · Alpha · Katalog & Preisstabilität`, version
+  code `28`, was published on 23 November 2026 at 14:32 (Europe/Berlin) and is
+  marked by Play Console as available to internal testers.
+- **Closed test – Alpha:** the exact same library bundle, version code `28`, was
+  saved without changing countries, tester groups or tester membership and was
+  submitted to Google Play for review on 23 November 2026. At submission time,
+  Google Play reported its automated pre-checks as still running (up to 14 min)
+  and displayed the closed-alpha change under “changes being reviewed”.
+- **Play warning:** the only release warning was the documented native-symbol
+  recommendation for stripped third-party libraries. It is non-blocking; the
+  R8/Deobfuscation warning is not present for version code 28.
+- **Production:** not created, selected, submitted or published.
