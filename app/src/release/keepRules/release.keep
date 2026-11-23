@@ -1,8 +1,6 @@
-# Conservative first R8 rollout for the closed alpha. Identifier minification
-# remains enabled and produces the genuine mapping bundled for Google Play.
-# Defer code deletion/inlining and resource shrinking to a separate tested pass.
--dontshrink
--dontoptimize
+# Release R8 rules. Shrinking and optimisation deliberately remain enabled so
+# Google Play can verify a genuinely optimised bundle. Keep rules below are
+# restricted to code with a verified runtime-name/JNI requirement.
 
 # OpenCV's prebuilt JNI library resolves this exception by its Java class name.
 # Its AAR has no consumer keep rules; native method names are covered by AGP.

@@ -41,6 +41,18 @@ class CardPriceSelectionTest {
         }
     }
 
+    @Test fun priceStatusDistinguishesVerifiedStaleMissingAndConflictingEvidence() {
+        val now = 10L * 24L * 60L * 60L * 1_000L
+        assertEquals(CardPriceStatus.VERIFIED, card.copy(currentValueEur = 7.5, priceUpdatedAtEpochMillis = now - 60_000L).priceStatus(now))
+        assertEquals(CardPriceStatus.STALE, card.copy(currentValueEur = 7.5, priceUpdatedAtEpochMillis = now - 8L * 24L * 60L * 60L * 1_000L).priceStatus(now))
+        assertEquals(CardPriceStatus.NO_TREND_PRICE, card.priceStatus(now))
+        assertEquals(CardPriceStatus.SOURCE_MISSING, card.copy(externalProductId = null).priceStatus(now))
+        assertEquals(
+            CardPriceStatus.CONFLICTING_MAPPING,
+            card.copy(sourceCardId = "sv03-062", externalProductId = 781858L).priceStatus(now),
+        )
+    }
+
     @Test fun allIdentityDimensionsMustMatchIncludingPrintedDenominator() {
         assertTrue(selection.copy(collectorNumber = "90/88").matches(card))
         listOf(

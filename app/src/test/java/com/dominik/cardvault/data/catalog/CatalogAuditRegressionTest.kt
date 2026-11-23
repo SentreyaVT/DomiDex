@@ -73,6 +73,21 @@ class CatalogAuditRegressionTest {
         assertEquals(12345L, variants.getValue("verified-stamped").cardmarketProductId)
     }
 
+    @Test fun unreviewedCardLevelProductNeverLinksADeltaPrintingWithoutExactVariantEvidence() = runBlocking {
+        val catalog = PokemonVisualCatalog(PokemonCatalogMetadataCache()) { _ -> Buffer().writeUtf8("""{
+            "thirdParty":{"cardmarket":918810},
+            "pricing":{"cardmarket":{"idProduct":918810}},
+            "variants_detailed":[
+              {"variantId":"normal","type":"normal","size":"Standard"},
+              {"variantId":"event","type":"holo","size":"Standard","stamp":["Event"]}
+            ]
+        }""") }
+        val card = visual("me06-001", "").copy(set = set.copy(id = "me06"))
+        val variants = catalog.withDeclaredPrintVariants(card).printVariants.associateBy { it.id }
+        assertNull(variants.getValue("normal").cardmarketProductId)
+        assertNull(variants.getValue("event").cardmarketProductId)
+    }
+
     private fun visual(id: String, image: String) = PokemonVisualCard(
         id, "Deutscher Kartenname", id.substringAfterLast('-'), null, image, image,
         set.copy(id = id.substringBeforeLast('-')), sourceLocalId = id.substringAfterLast('-'),

@@ -2,6 +2,21 @@ package com.dominik.cardvault.model
 
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * Display state for a market value.  These states deliberately describe the
+ * evidence available for a physical printing; they never manufacture a value.
+ * Wire/persistence stays unchanged so existing collections remain compatible.
+ */
+enum class CardPriceStatus(val label: String) {
+    VERIFIED("Verifiziert"),
+    NO_TREND_PRICE("Kein Trendpreis verfügbar"),
+    SOURCE_MISSING("Quelle fehlt"),
+    CONFLICTING_MAPPING("Zuordnung widersprüchlich"),
+    STALE("Preis veraltet"),
+}
+
+private const val PRICE_STALE_AFTER_MILLIS = 7L * 24L * 60L * 60L * 1_000L
+
 
 data class CollectionCard(
     val entryId: Long, val id: String, val name: String, val set: String, val number: String,
@@ -32,6 +47,25 @@ data class CollectionCard(
     val activePriceSelection get() = priceSelection?.takeIf { it.matches(this) && trendValueEur == null }
     val effectiveValueEur: Double? get() = trendValueEur ?: activePriceSelection?.valueEur
     val usesPriceSelection get() = activePriceSelection != null
+    /**
+     * A stale value remains visible as an explicitly old Cardmarket observation;
+     * this does not silently turn a known card into a zero-value card.
+     */
+    fun priceStatus(nowEpochMillis: Long = System.currentTimeMillis()): CardPriceStatus {
+        val linkedProduct = externalProductId
+        if (linkedProduct != null && com.dominik.cardvault.data.catalog.isQuarantinedCardmarketIdentity(sourceCardId ?: id, linkedProduct)) {
+            return CardPriceStatus.CONFLICTING_MAPPING
+        }
+        val updatedAt = priceUpdatedAtEpochMillis
+        if (trendValueEur != null) {
+            return if (updatedAt != null && nowEpochMillis >= updatedAt && nowEpochMillis - updatedAt > PRICE_STALE_AFTER_MILLIS) {
+                CardPriceStatus.STALE
+            } else {
+                CardPriceStatus.VERIFIED
+            }
+        }
+        return if (linkedProduct != null) CardPriceStatus.NO_TREND_PRICE else CardPriceStatus.SOURCE_MISSING
+    }
     val valuationLabel get() = if (trendValueEur != null) "Cardmarket-Trendpreis"
         else activePriceSelection?.let { "Gewählter Vergleichswert · ${it.metric.label}" } ?: "Preis nicht verfügbar"
 }

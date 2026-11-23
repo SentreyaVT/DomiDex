@@ -14,6 +14,7 @@ internal enum class BinderOverviewTab(val storageValue: String) {
 
 internal enum class BinderSortOption(val storageValue: String, val label: String) {
     MOST_CARDS("most_cards", "Meiste Karten"),
+    HIGHEST_VALUE("highest_value", "Höchster Sammlungswert"),
     HIGHEST_PROGRESS("highest_progress", "Höchster Fortschritt"),
     LOWEST_PROGRESS("lowest_progress", "Niedrigster Fortschritt"),
     A_TO_Z("a_to_z", "A–Z"),
@@ -88,6 +89,7 @@ internal fun orderBinderOverview(
     val nameThenId = compareBy<BinderOverviewRecord>({ it.name.lowercase() }, { it.id })
     val primary = when (sort) {
         BinderSortOption.MOST_CARDS -> compareByDescending<BinderOverviewRecord> { it.ownedCards }
+        BinderSortOption.HIGHEST_VALUE -> compareByDescending<BinderOverviewRecord> { it.marketValueEur }
         BinderSortOption.HIGHEST_PROGRESS -> compareByDescending<BinderOverviewRecord> { it.progress ?: -1.0 }
         BinderSortOption.LOWEST_PROGRESS -> compareBy<BinderOverviewRecord> { it.progress ?: Double.MAX_VALUE }
         BinderSortOption.A_TO_Z -> nameThenId

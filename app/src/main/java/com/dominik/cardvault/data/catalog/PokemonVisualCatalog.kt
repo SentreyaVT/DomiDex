@@ -50,6 +50,11 @@ private object CardmarketExpansionRegistry {
         // Cardmarket: Perfect Order / POR, source-verified against the public
         // catalogue's Rowlet, Dartrix and Decidueye ex printings.
         "me03" to "6443",
+        // Cardmarket: Delta Sovereignty / DLR.  The 2026-11-23 catalogue audit
+        // found every source-declared DLR product under expansion 6704.  This
+        // is a set bridge only; card product ids remain unresolved unless the
+        // exact physical printing has its own verified identity evidence.
+        "me06" to "6704",
         // Cardmarket expansion 6601 contains the 158-card 30th Celebration
         // main set plus the 30-card Classic Collection. The stable TCGdex
         // source ids remain separate even though Cardmarket groups both.
@@ -386,7 +391,8 @@ class PokemonVisualCatalog private constructor(
                     }
                 } else emptyList()
                 fillMissingSetLogos(german, english)
-                    .map { set ->
+                    .map { rawSet ->
+                        val set = DeltaHerrschaftOfficial.officialize(rawSet)
                         // The upstream set index currently omits the three letter-numbered
                         // RGB cards and the announced anniversary Black Star promos.
                         val minimum = when (set.id.lowercase(Locale.ROOT)) {
@@ -557,6 +563,8 @@ class PokemonVisualCatalog private constructor(
                 val cards = mergeThirtyYearsCatalogSupplement(
                     set, mergeLocalizedSetCards(germanCards.orEmpty(), englishCards.orEmpty()),
                 )
+                    .map(DeltaHerrschaftOfficial::officialize)
+                    .let(DeltaHerrschaftOfficial::requireComplete)
                     .sortedWith(compareBy({ (it.sourceLocalId ?: it.number).toIntOrNull() ?: Int.MAX_VALUE }, { it.sourceLocalId ?: it.number }))
                 CatalogSetCards(cards, cards.groupBy { collectorIdentity(it.sourceLocalId ?: it.number) })
             }

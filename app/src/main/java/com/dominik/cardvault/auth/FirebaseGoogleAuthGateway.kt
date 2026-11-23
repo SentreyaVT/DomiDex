@@ -6,6 +6,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.NoCredentialException
 import com.dominik.cardvault.R
 import com.google.android.gms.tasks.Task
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -95,6 +96,12 @@ class FirebaseGoogleAuthGateway(
             GoogleLoginResult.Success(currentAccount())
         } catch (_: GetCredentialCancellationException) {
             GoogleLoginResult.Cancelled
+        } catch (noCredential: NoCredentialException) {
+            // A device can legitimately have no eligible Google credential yet
+            // (new device, work profile or cleared Play Services state). Keep
+            // the existing Firebase session untouched and let the settings UI
+            // show its ordinary retry path instead of treating this as a crash.
+            GoogleLoginResult.Failed(noCredential)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {

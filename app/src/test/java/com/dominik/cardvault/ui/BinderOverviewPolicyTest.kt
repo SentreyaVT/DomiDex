@@ -25,6 +25,16 @@ class BinderOverviewPolicyTest {
         assertEquals(listOf("varied", "duplicates"), orderBinderOverview(listOf(duplicateHeavy, varied), BinderSortOption.HIGHEST_PROGRESS, BinderFilterOption.ALL).map { it.id })
     }
 
+    @Test fun `value sort uses known market value and never converts unpriced cards into value`() {
+        val lowValue = BinderOverviewRecord("low", "Low", BinderOverviewKind.SET, 99, 120, marketValueEur = 3.50)
+        val highValue = BinderOverviewRecord("high", "High", BinderOverviewKind.PRIVATE, 1, marketValueEur = 42.75)
+        val unknown = BinderOverviewRecord("unknown", "Unknown", BinderOverviewKind.SET, 500, 600)
+        assertEquals(
+            listOf("high", "low", "unknown"),
+            orderBinderOverview(listOf(lowValue, unknown, highValue), BinderSortOption.HIGHEST_VALUE, BinderFilterOption.ALL).map { it.id },
+        )
+    }
+
     @Test fun `progress sorts keep private binders after measurable set progress`() {
         val high = orderBinderOverview(listOf(privateLarge, setSparse, setComplete), BinderSortOption.HIGHEST_PROGRESS, BinderFilterOption.ALL)
         val low = orderBinderOverview(listOf(privateLarge, setComplete, setSparse), BinderSortOption.LOWEST_PROGRESS, BinderFilterOption.ALL)

@@ -2,6 +2,43 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
 
+### Local catalogue, pricing-state and R8 follow-up — 2026-11-23 Europe/Berlin
+
+**Local engineering state only; not signed, uploaded, deployed or published.**
+
+- `Mega-Entwicklung – Delta-Herrschaft` is guarded as the official German
+  `me06` / `DLR` 103/141 master set in Android and Web. Both clients reject a
+  partial `001`–`141` source response and, additionally, reject a response with
+  a missing image reference instead of replacing a usable cached catalogue.
+  Official German corrections and special-rarity ranges are covered by focused
+  Android and Web regression tests.
+- The Cardmarket set bridge `me06 -> 6704` is verified as a **set boundary**.
+  It does not manufacture individual prices. The current upstream feed has
+  absent and reused root product identifiers; they do not prove physical
+  printing/finish identity. The audit is recorded in
+  `docs/catalog-dlr-cardmarket-audit-20261123.md`. Unverifiable cards remain
+  explicitly unpriced or require the existing exact-price selection flow.
+- Android now distinguishes verified, stale, no-trend, missing-source and
+  conflicting price evidence without changing stored collection data or treating
+  missing prices as zero. Binder overview additionally supports sorting by
+  known collection value; unpriced cards remain after known values.
+- Release minification completed successfully with R8. Current outputs include
+  `app/build/outputs/mapping/release/mapping.txt` and `mapping.prt`; global
+  shrinking and optimisation are enabled. A fresh Google Play Console check can
+  only confirm the February 2027 DEX notice after a separately authorised
+  upload of a new signed bundle.
+- Local release lint completed without errors and reports 170 warnings. Most are
+  existing resource/dependency suggestions; `CredentialManager` now explicitly
+  handles `NoCredentialException`. The remaining warnings are not represented
+  as fixed. Android targeted catalogue, pricing, binder, login and scanner
+  regressions pass. Web typecheck and the full selected Web suite pass
+  (52 files / 773 tests). JSDOM Canvas diagnostics remain test-environment
+  notices, not test failures.
+
+This entry does not waive historical Gate 15 prerequisites, vendor native-symbol
+limits, physical-device evidence or any previously documented operational
+limitation. Full Sync remains the R27 data path; no Delta-Sync migration was made.
+
 ### Authorized Web hotfix and actual Legacy G9 result — 2026-10-04 23:48 Europe/Berlin
 
 The separately authorized Collection fix is now **LIVE**, not merely local.

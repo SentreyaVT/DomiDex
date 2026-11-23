@@ -91,10 +91,10 @@ android {
             ndk {
                 abiFilters += "arm64-v8a"
             }
-            // First R8 rollout: generate a real retrace mapping, without removing
-            // code/resources or rewriting executable logic (see release.keep).
+            // Produce a genuinely optimised release and an embedded retrace mapping.
+            // Runtime-name/JNI exceptions live in release.keep and must stay narrow.
             isMinifyEnabled = true
-            isShrinkResources = false
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }

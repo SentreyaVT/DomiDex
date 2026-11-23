@@ -3077,6 +3077,13 @@ private fun normalizeBinderMetadata(value: String): String = value.lowercase(Loc
 
 @Composable private fun PriceSourcesSection(card: CollectionCard, priceDate: String?, context: Context) = Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Text(stringResource(R.string.price_sources_title), fontWeight = FontWeight.Bold, color = MewRoseSoft)
+    Text("Preisstatus: ${card.priceStatus().label}", color = when (card.priceStatus()) {
+        com.dominik.cardvault.model.CardPriceStatus.VERIFIED -> VaultPositive
+        com.dominik.cardvault.model.CardPriceStatus.STALE,
+        com.dominik.cardvault.model.CardPriceStatus.NO_TREND_PRICE -> MewRoseSoft
+        com.dominik.cardvault.model.CardPriceStatus.SOURCE_MISSING,
+        com.dominik.cardvault.model.CardPriceStatus.CONFLICTING_MAPPING -> VaultTextMuted
+    }, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     Text(if (priceDate == null) stringResource(R.string.raw_reference_unavailable) else stringResource(R.string.raw_reference_value, euro(card.currentValueEur), priceDate), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
     if (card.externalProductId != null) {
         Button(onClick = { openOfficialPage(context, OfficialSourceLinks.cardmarketProduct(card.externalProductId)) }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.open_cardmarket_current)) }
@@ -3111,8 +3118,10 @@ private fun openOfficialPage(context: Context, url: String) {
     Column(Modifier.weight(1f)) { Text(card.name, fontWeight = FontWeight.Bold); Text("${card.set} · ${card.number}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(stringResource(R.string.card_metadata, card.language.label, card.condition, card.quantity), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp); if (card.externalProductId != null) Text(stringResource(R.string.catalog_linked_badge), color = MewIce, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
     Column(horizontalAlignment = Alignment.End) {
         Text(card.effectiveValueEur?.let { euro(it * card.quantity) } ?: stringResource(R.string.no_market_price), fontWeight = FontWeight.Bold, fontSize = if (card.effectiveValueEur == null) 11.sp else 14.sp)
-        if (card.usesPriceSelection) Text("Vergleichswert", color = MewIce, fontSize = 10.sp)
+        if (card.usesPriceSelection) Text("Vergleichswert · ${card.priceStatus().label}", color = MewIce, fontSize = 10.sp)
+        else if (card.priceStatus() == com.dominik.cardvault.model.CardPriceStatus.STALE) Text(card.priceStatus().label, color = MewRoseSoft, fontSize = 10.sp)
         else if (card.trendValueEur != null) Text((if (card.changePercent >= 0) "+" else "") + "%.1f%%".format(Locale.US, card.changePercent), color = if (card.changePercent >= 0) VaultPositive else MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        else Text(card.priceStatus().label, color = VaultTextMuted, fontSize = 10.sp)
     }
 } } }
 
