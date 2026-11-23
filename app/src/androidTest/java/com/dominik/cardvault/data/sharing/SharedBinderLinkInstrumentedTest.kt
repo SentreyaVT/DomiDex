@@ -23,7 +23,7 @@ class SharedBinderLinkInstrumentedTest {
     private val link = "https://domidex.web.app/share/$token"
     private val viewerClass get() = "${context.packageName}.SharedBinderActivity"
 
-    @Test fun verifiedShareRouteTargetsOnlyTheSeparatePortraitViewer() {
+    @Test fun verifiedShareRouteTargetsOnlyTheSeparateResizableViewer() {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link))
             .addCategory(Intent.CATEGORY_BROWSABLE).setPackage(context.packageName)
         val matches = context.packageManager.queryIntentActivities(intent, PackageManager.GET_RESOLVED_FILTER)
@@ -31,7 +31,10 @@ class SharedBinderLinkInstrumentedTest {
         assertTrue(sharingFilterAutoVerified())
         val info = context.packageManager.getActivityInfo(ComponentName(context.packageName, viewerClass), 0)
         assertTrue(info.exported)
-        assertEquals(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT, info.screenOrientation)
+        // Release 27 deliberately leaves the public viewer resizable. This keeps
+        // a shared binder usable on tablets and foldables instead of preserving
+        // the earlier phone-only portrait lock.
+        assertEquals(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED, info.screenOrientation)
         assertEquals(ActivityInfo.LAUNCH_SINGLE_TOP, info.launchMode)
         assertEquals(ActivityInfo.PERSIST_NEVER, info.persistableMode)
     }
