@@ -2,6 +2,33 @@
 
 This is a work-in-progress evidence ledger, not a release approval. Updated 2026-10-04.
 
+### Verification refresh — 2026-11-23 Europe/Berlin
+
+**Local verification only; no signing, upload, deployment or publication occurred.**
+
+- The current Android `lintRelease` run completed successfully after the Google
+  credential-cancellation hardening. It reports **165 warnings and no errors**;
+  the former `CredentialManagerMisuse` finding is absent. The generated reports
+  are local build outputs under `app/build/reports/` and are not release assets.
+- The full Android debug unit suite passed with **1,070 tests**, two explicit
+  opt-in/optional skips and no failures when the documented optional dated
+  binder-audit fixture is intentionally absent. A separately present but
+  incomplete old fixture is retained as a failing-input signal; it was not
+  deleted, weakened or treated as a product regression.
+- Current Web source type-check, production build and all tests pass
+  (**773 tests in 52 files**). Scoped lint of the tracked application, library,
+  component, hook and test sources is clean. Repository-wide Web lint is blocked
+  exclusively by the pre-existing untracked `backend/market-data/` workspace;
+  that directory is outside this change set and was not edited.
+- Fresh R8 minification completed successfully. The local mapping output exists
+  under `app/build/outputs/mapping/release/`; it must be regenerated from the
+  exact future signed bundle before any Play upload, rather than being attached
+  to a different artifact.
+
+These results do not close the historical physical-device, multi-device,
+WorkManager, live/load, billing, catalog-pricing-evidence or vendor-symbol gates.
+Full Sync remains the R27 data path; Delta Sync is still deliberately disabled.
+
 ### Local catalogue, pricing-state and R8 follow-up — 2026-11-23 Europe/Berlin
 
 **Local engineering state only; not signed, uploaded, deployed or published.**
