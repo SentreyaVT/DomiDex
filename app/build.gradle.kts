@@ -57,8 +57,11 @@ android {
         applicationId = "com.dominik.cardvault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 27
-        versionName = "1.0-closed-alpha.6"
+        // Google Play already reserves code 27 for the prior closed-alpha build.
+        // Keep the R27 engineering line identifiable while giving this upload a
+        // strictly newer, collision-free Play version code.
+        versionCode = 28
+        versionName = "1.0-closed-alpha.7"
         buildConfigField("boolean", "DOMIDEX_APP_CHECK_ENABLED", appCheckEnabled.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
