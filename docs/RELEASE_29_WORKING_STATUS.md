@@ -138,6 +138,13 @@ The 79 DLR entries remain unchanged (69 review, 10 unmatched): the existing audi
 
 The historical R27 Play receipt was reviewed read-only and does not establish an R29 bundle or current Play status. R29 still needs authorised release signing and exact-bundle evidence, physical/non-production validation, resolution or approved handling of the DLR P0 gap, and separately approved Firestore-rule release ordering before any future Play action.
 
+
+## Phase 8 Android-17 offline emulator run (26 November 2026)
+
+The existing debug APK was installed on the isolated `Medium_Phone_API_37.0` Android-17 emulator. The test kept airplane mode on with Wi-Fi and mobile data off because the local Firebase configuration is not independently proven non-production. Local-only onboarding, overview, Binder, card-search/filter offline/empty states, collection, settings, Back navigation, background/resume and force-stop restart all rendered without a crash or ANR. Cold starts measured 3,560 ms and 3,677 ms; hot resume measured 119 ms. The pending `CardmarketSyncWorker` remained network-blocked and was not run.
+
+No account, remote data, card, binder or price data was created. Camera permission stayed denied and the scanner/camera was not opened. Online/reconnection, Firebase/auth/sync, populated-card/variant/price flows, physical scanner work, two-device and reboot/WorkManager recovery remain untested or blocked; see `RELEASE_29_PHASE_8_REPORT.md`.
+
 ## Current blockers before Release 29
 
 1. **P0:** 79 DLR printings do not yet have an unambiguous Cardmarket identity
