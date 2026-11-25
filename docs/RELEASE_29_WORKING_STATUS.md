@@ -145,6 +145,11 @@ The existing debug APK was installed on the isolated `Medium_Phone_API_37.0` And
 
 No account, remote data, card, binder or price data was created. Camera permission stayed denied and the scanner/camera was not opened. Online/reconnection, Firebase/auth/sync, populated-card/variant/price flows, physical scanner work, two-device and reboot/WorkManager recovery remain untested or blocked; see `RELEASE_29_PHASE_8_REPORT.md`.
 
+
+## Preisidentitäts-Audit (26. November 2026)
+
+Das neue RELEASE_29_PRICE_IDENTITY_AUDIT.md inventarisiert 92 lokale Web-Katalogdateien mit 14.713 Karten (85 physische Sets / 13.615 Karten sowie 7 Pocket-Sets / 1.098 Karten). Diese JSON-Dateien enthalten keine Cardmarket-Produktkennungen und ihre fachlichen Variantenfelder sind kein Finish-Beweis. Der erneut ausgeführte, nur lesende DLR-Audit bestätigt 141/141 Karten/Bilder, 62 verifizierte Normal/Standard-Identitäten und Trendpreise sowie weiterhin 79 unbepreiste Drucke: 47 haben mehrere Fingerprint-Kandidaten, 32 keinen. Kein neuer Kandidat war eindeutig genug für eine Zuordnung. Android und Web enthalten dieselben 62 bestätigten Paare und zehn UNMATCHED-Nummern; die gezielten Mapping-Tests bestanden (Android 2/2, Web 5/5).
+
 ## Current blockers before Release 29
 
 1. **P0:** 79 DLR printings do not yet have an unambiguous Cardmarket identity
