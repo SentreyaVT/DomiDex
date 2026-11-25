@@ -67,7 +67,7 @@ internal object ScanQueuePolicy {
         .filter { it.id !in protectedScanIds && it.stage == ScanPipelineStage.SAVED }
         .minByOrNull(QueuedCardScan::capturedAtMillis)
 
-    /** Manual intake may reclaim a resolved item or pending automatic capture, never pending review. */
+    /** Manual intake may reclaim a resolved item or pending background preview/capture, never pending review. */
     fun evictionCandidateForManualCapture(
         scans: List<QueuedCardScan>,
         protectedScanId: String? = null,
@@ -77,12 +77,20 @@ internal object ScanQueuePolicy {
         ?: scans
             .filter {
                 it.id != protectedScanId && it.stage == ScanPipelineStage.CAPTURED &&
-                    it.origin == ScanCaptureOrigin.AUTOMATIC
+                    it.origin.isBackgroundIntake
             }
             .minByOrNull(QueuedCardScan::capturedAtMillis)
 }
 
-internal enum class ScanCaptureOrigin { AUTOMATIC, MANUAL, GALLERY }
+internal enum class ScanCaptureOrigin {
+    AUTOMATIC,
+    /** Low-resolution CameraX preview sample; final identity remains a collector-confirmed candidate. */
+    LIVE_PREVIEW,
+    MANUAL,
+    GALLERY;
+
+    val isBackgroundIntake: Boolean get() = this == AUTOMATIC || this == LIVE_PREVIEW
+}
 
 /**
  * One immutable, locally scoped work item for the rapid scanner.  The image stays in the app

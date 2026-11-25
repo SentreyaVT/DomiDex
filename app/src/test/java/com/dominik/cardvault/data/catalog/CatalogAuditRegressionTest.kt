@@ -73,19 +73,47 @@ class CatalogAuditRegressionTest {
         assertEquals(12345L, variants.getValue("verified-stamped").cardmarketProductId)
     }
 
-    @Test fun unreviewedCardLevelProductNeverLinksADeltaPrintingWithoutExactVariantEvidence() = runBlocking {
+    @Test fun unreviewedCardLevelProductNeverLinksAnAmbiguousDeltaPrintingWithoutExactVariantEvidence() = runBlocking {
         val catalog = PokemonVisualCatalog(PokemonCatalogMetadataCache()) { _ -> Buffer().writeUtf8("""{
-            "thirdParty":{"cardmarket":918810},
-            "pricing":{"cardmarket":{"idProduct":918810}},
+            "thirdParty":{"cardmarket":918812},
+            "pricing":{"cardmarket":{"idProduct":918812}},
             "variants_detailed":[
               {"variantId":"normal","type":"normal","size":"Standard"},
               {"variantId":"event","type":"holo","size":"Standard","stamp":["Event"]}
             ]
         }""") }
-        val card = visual("me06-001", "").copy(set = set.copy(id = "me06"))
+        val card = visual("me06-003", "").copy(set = set.copy(id = "me06"))
         val variants = catalog.withDeclaredPrintVariants(card).printVariants.associateBy { it.id }
         assertNull(variants.getValue("normal").cardmarketProductId)
         assertNull(variants.getValue("event").cardmarketProductId)
+    }
+
+    @Test fun reviewedDeltaNormalPrintingGetsOnlyItsVerifiedProduct() = runBlocking {
+        val catalog = PokemonVisualCatalog(PokemonCatalogMetadataCache()) { _ -> Buffer().writeUtf8("""{
+            "thirdParty":{"cardmarket":918810},
+            "pricing":{"cardmarket":{"idProduct":918810}},
+            "variants_detailed":[
+              {"variantId":"normal","type":"normal","size":"Standard"},
+              {"variantId":"reverse","type":"reverse","size":"Standard"}
+            ]}
+        """) }
+        val card = visual("me06-001", "").copy(set = set.copy(id = "me06"))
+        val variants = catalog.withDeclaredPrintVariants(card).printVariants.associateBy { it.id }
+        assertEquals(918810L, variants.getValue("normal").cardmarketProductId)
+        assertNull(variants.getValue("reverse").cardmarketProductId)
+    }
+
+    @Test fun independentlyFingerprintedDeltaPrintingCanRepairAMissingRootButNeverItsReverse() = runBlocking {
+        val catalog = PokemonVisualCatalog(PokemonCatalogMetadataCache()) { _ -> Buffer().writeUtf8("""{
+            "variants_detailed":[
+              {"variantId":"normal","type":"normal","size":"Standard"},
+              {"variantId":"reverse","type":"reverse","size":"Standard"}
+            ]}
+        """) }
+        val card = visual("me06-055", "").copy(set = set.copy(id = "me06"))
+        val variants = catalog.withDeclaredPrintVariants(card).printVariants.associateBy { it.id }
+        assertEquals(918878L, variants.getValue("normal").cardmarketProductId)
+        assertNull(variants.getValue("reverse").cardmarketProductId)
     }
 
     private fun visual(id: String, image: String) = PokemonVisualCard(

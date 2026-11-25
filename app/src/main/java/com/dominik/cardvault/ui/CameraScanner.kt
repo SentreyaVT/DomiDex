@@ -3,6 +3,7 @@ package com.dominik.cardvault.ui
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.graphics.Bitmap
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -45,7 +46,10 @@ import androidx.core.content.ContextCompat
 import com.dominik.cardvault.R
 import com.dominik.cardvault.ui.theme.*
 import java.io.File
+import java.io.FileOutputStream
+import java.util.Collections
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
@@ -206,8 +210,10 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     modifier: Modifier = Modifier,
     autoCaptureAllowed: Boolean = true,
     manualCaptureAllowed: Boolean = true,
+    liveRecognitionAllowed: Boolean = true,
     onCaptureStarted: (automatic: Boolean) -> Unit = {},
     onCaptureSaved: (File, Boolean, List<File>, automatic: Boolean) -> Unit = { _, _, _, _ -> },
+    onLivePreviewSaved: (File, Boolean) -> Unit = { file, _ -> file.delete() },
     onCaptureFailed: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -221,6 +227,9 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
     // Opt-in for this camera session only; reopening/restoring the scanner starts manually.
     var autoCaptureEnabled by remember { mutableStateOf(false) }
+    // Preview recognition is a separate, opt-in beta path. It only prepares a candidate for the
+    // existing review queue; it never changes automatic-photo behaviour or adds a card itself.
+    var liveRecognitionEnabled by remember { mutableStateOf(false) }
     var captureInProgress by remember { mutableStateOf(false) }
     var activeCaptureId by remember { mutableLongStateOf(0L) }
     var latestCapture by remember { mutableStateOf<File?>(null) }
@@ -230,6 +239,8 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     var torchEnabled by rememberSaveable { mutableStateOf(false) }
     var torchStrength by rememberSaveable { mutableIntStateOf(1) }
     val autoCaptureGate = remember { AutoCaptureGate(missingFramesToRearm = 3, readyFramesToCapture = 2) }
+    val liveRecognitionActive = remember { AtomicBoolean(false) }
+    val liveRecognitionCapacity = remember { AtomicBoolean(false) }
     val previewView = remember(context) {
         PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
     }
@@ -240,7 +251,13 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
         // Lifecycle-owner changes dispose this binding. Its replacement needs a live executor,
         // not the remembered instance that the previous binding has already shut down.
         val analysisExecutor = Executors.newSingleThreadExecutor()
-        val analyzer = FrameQualityAnalyzer { quality = it }
+        val analyzer = FrameQualityAnalyzer(
+            cacheDir = context.cacheDir,
+            liveRecognitionActive = liveRecognitionActive,
+            liveRecognitionCapacity = liveRecognitionCapacity,
+            onQuality = { quality = it },
+            onLivePreviewSaved = onLivePreviewSaved,
+        )
         camera.bindToLifecycle(lifecycleOwner, analysisExecutor, analyzer) {
             captureMessage = R.string.capture_failed
         }
@@ -354,6 +371,10 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
     LaunchedEffect(autoCaptureAllowed) {
         if (!autoCaptureAllowed) autoCaptureGate.disarm(quality.fingerprint)
     }
+    LaunchedEffect(liveRecognitionEnabled, liveRecognitionAllowed, captureInProgress) {
+        liveRecognitionCapacity.set(liveRecognitionAllowed)
+        liveRecognitionActive.set(liveRecognitionEnabled && liveRecognitionAllowed && !captureInProgress)
+    }
     LaunchedEffect(
         autoCaptureEnabled,
         autoCaptureAllowed,
@@ -396,10 +417,34 @@ internal object ScannerDebugState { var snapshot by mutableStateOf(ScannerDebugS
                             Text(if (torchEnabled) "Blitz an" else "Blitz", color = if (torchEnabled) MewIce else VaultTextMuted, fontSize = 9.sp)
                         }
                     }
-                    TextButton(onClick = { autoCaptureEnabled = !autoCaptureEnabled }) {
+                    TextButton(onClick = {
+                        autoCaptureEnabled = !autoCaptureEnabled
+                        if (autoCaptureEnabled) liveRecognitionEnabled = false
+                    }) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             DomiLineIcon(DomiIconKind.CHECK, if (autoCaptureEnabled) VaultPositive else VaultTextMuted, Modifier.size(18.dp))
                             Text(if (autoCaptureEnabled) "Auto an" else "Auto aus", color = if (autoCaptureEnabled) VaultPositive else VaultTextMuted, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    TextButton(
+                        onClick = {
+                            liveRecognitionEnabled = !liveRecognitionEnabled
+                            if (liveRecognitionEnabled) autoCaptureEnabled = false
+                        },
+                        enabled = liveRecognitionAllowed || liveRecognitionEnabled,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            DomiLineIcon(DomiIconKind.SCAN, if (liveRecognitionEnabled && liveRecognitionAllowed) MewIce else VaultTextMuted, Modifier.size(18.dp))
+                            Text(
+                                when {
+                                    liveRecognitionEnabled && !liveRecognitionAllowed -> "Live pausiert"
+                                    liveRecognitionEnabled -> "Live an"
+                                    else -> "Live aus"
+                                },
+                                color = if (liveRecognitionEnabled && liveRecognitionAllowed) MewIce else VaultTextMuted,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     }
                     Button(
@@ -654,7 +699,13 @@ private val QualityGuidance.stringResource: Int get() = when (this) {
     QualityGuidance.READY -> R.string.capture_ready
 }
 
-private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit) : ImageAnalysis.Analyzer, AutoCloseable {
+private class FrameQualityAnalyzer(
+    private val cacheDir: File,
+    private val liveRecognitionActive: AtomicBoolean,
+    private val liveRecognitionCapacity: AtomicBoolean,
+    private val onQuality: (FrameQuality) -> Unit,
+    private val onLivePreviewSaved: (File, Boolean) -> Unit,
+) : ImageAnalysis.Analyzer, AutoCloseable {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val samples = IntArray(16 * 20)
     private val previous = IntArray(16 * 20)
@@ -668,6 +719,8 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
     private val detector = CardFrameDetector()
     private val qualityWindow = FrameQualityWindow()
     private val overlayCorners = OverlayCornerStabilizer()
+    private val livePreviewGate = LivePreviewFrameGate()
+    private val pendingLivePreviewFiles = Collections.synchronizedSet(mutableSetOf<File>())
 
     override fun analyze(image: ImageProxy) {
         try {
@@ -741,6 +794,43 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                 baseReady -> AutoScanState.STABILIZING
                 else -> AutoScanState.CARD_DETECTED
             }
+            val quality = FrameQuality(
+                level = level,
+                guidance = guidance,
+                exposure = exposureScore,
+                sharpness = sharpnessScore,
+                stability = stabilityScore,
+                coverage = frame.coverage.coerceIn(0f, 1f),
+                perspective = frame.perspective.coerceIn(0f, 1f),
+                contourStability = contourStability,
+                stableFrames = stableReadyFrames,
+                corners = displayedCorners,
+                glare = clippedBright,
+                frameQualityScore = frameQualityScore,
+                captureEligible = captureEligible,
+                fingerprint = cardFingerprint,
+                previewAspectRatio = frameGeometry.previewAspectRatio,
+                frameSequence = frameSequence,
+            )
+            val liveActive = liveRecognitionActive.get() && liveRecognitionCapacity.get()
+            val liveFile = if (livePreviewGate.shouldProcess(
+                    eligible = liveActive && level == QualityLevel.GREEN && captureEligible,
+                    fingerprint = cardFingerprint,
+                    frameSequence = frameSequence,
+                    nowMillis = now,
+                )
+            ) {
+                LivePreviewFrameSampler.save(
+                    image = image,
+                    frame = detectedFrame,
+                    geometry = frameGeometry,
+                    cacheDir = cacheDir,
+                    frameSequence = frameSequence,
+                ).also { livePreviewGate.complete(success = it != null) }
+            } else {
+                if (!liveActive) livePreviewGate.pause()
+                null
+            }
             mainHandler.post {
                 ScannerDebugState.snapshot = ScannerDebugState.snapshot.copy(
                     state = scanState,
@@ -756,12 +846,23 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
                     usedMultiFrameEvidence = qualityWindow.hasTemporalEvidence,
                     reason = if (ScannerDebugState.snapshot.scanId.isBlank()) guidance.name else ScannerDebugState.snapshot.reason,
                 )
-                onQuality(FrameQuality(level, guidance, exposureScore, sharpnessScore, stabilityScore, frame.coverage.coerceIn(0f, 1f), frame.perspective.coerceIn(0f, 1f), contourStability, stableReadyFrames, displayedCorners, clippedBright, frameQualityScore, captureEligible, cardFingerprint, frameGeometry.previewAspectRatio, frameSequence))
+                onQuality(quality)
+                liveFile?.let { file ->
+                    pendingLivePreviewFiles += file
+                    // The existing queue owns deletion after its bounded processing lifecycle.
+                    // If the caller no longer accepts a live item, it must delete this local cache file.
+                    if (pendingLivePreviewFiles.remove(file)) onLivePreviewSaved(file, quality.captureEligible)
+                    else file.delete()
+                }
             }
         } finally { image.close() }
     }
 
     override fun close() {
+        val files = synchronized(pendingLivePreviewFiles) {
+            pendingLivePreviewFiles.toList().also { pendingLivePreviewFiles.clear() }
+        }
+        files.forEach(File::delete)
         mainHandler.removeCallbacksAndMessages(null)
         detector.close()
     }
@@ -835,6 +936,60 @@ private class FrameQualityAnalyzer(private val onQuality: (FrameQuality) -> Unit
         } else detected
         trackedFrame = smoothed
         return smoothed
+    }
+}
+
+/**
+ * Creates a small, local grayscale JPEG from an already qualified CameraX frame. The preview
+ * image is deliberately bounded to avoid competing with the full-resolution ImageCapture path;
+ * it exists only long enough for the existing queued OCR/review flow to inspect it.
+ */
+private object LivePreviewFrameSampler {
+    private const val WIDTH = 480
+    private const val HEIGHT = 672
+    private const val PADDING = .07f
+
+    fun save(
+        image: ImageProxy,
+        frame: CardFrame,
+        geometry: CameraFrameGeometry,
+        cacheDir: File,
+        frameSequence: Long,
+    ): File? {
+        if (image.format != ImageFormat.YUV_420_888 || frame.corners.size != 4 || image.planes.isEmpty()) return null
+        val sourceCorners = frame.corners.map { (x, y) -> geometry.previewToSource(x, y) }
+        val left = (sourceCorners.minOf { it.first } - PADDING).coerceIn(0f, 1f)
+        val top = (sourceCorners.minOf { it.second } - PADDING).coerceIn(0f, 1f)
+        val right = (sourceCorners.maxOf { it.first } + PADDING).coerceIn(0f, 1f)
+        val bottom = (sourceCorners.maxOf { it.second } + PADDING).coerceIn(0f, 1f)
+        if (right - left < .12f || bottom - top < .12f) return null
+
+        val plane = image.planes.first()
+        val pixels = IntArray(WIDTH * HEIGHT)
+        for (row in 0 until HEIGHT) {
+            val y = ((top + (row + .5f) / HEIGHT * (bottom - top)) * (image.height - 1))
+                .toInt().coerceIn(0, image.height - 1)
+            for (column in 0 until WIDTH) {
+                val x = ((left + (column + .5f) / WIDTH * (right - left)) * (image.width - 1))
+                    .toInt().coerceIn(0, image.width - 1)
+                val luma = plane.buffer.get(y * plane.rowStride + x * plane.pixelStride).toInt() and 0xFF
+                pixels[row * WIDTH + column] = 0xFF000000.toInt() or (luma shl 16) or (luma shl 8) or luma
+            }
+        }
+        val bitmap = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888)
+        val file = File(cacheDir, "cardvault-live-preview-${SystemClock.elapsedRealtime()}-$frameSequence.jpg")
+        return try {
+            bitmap.setPixels(pixels, 0, WIDTH, 0, 0, WIDTH, HEIGHT)
+            FileOutputStream(file).use { output ->
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 88, output)) return null
+            }
+            file.takeIf { it.length() > 0L }
+        } catch (_: Exception) {
+            null
+        } finally {
+            if (file.length() == 0L) file.delete()
+            bitmap.recycle()
+        }
     }
 }
 

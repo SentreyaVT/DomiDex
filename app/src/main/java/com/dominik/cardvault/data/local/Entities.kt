@@ -56,8 +56,8 @@ data class BinderEntity(
     val setKey: String,
     val name: String,
     val heroAsset: String? = null,
-    val createdAtEpochMillis: Long,
-    val updatedAtEpochMillis: Long,
+    val createdAtEpochMillis: Long = 0L,
+    val updatedAtEpochMillis: Long = 0L,
 )
 
 @Entity(
@@ -298,6 +298,8 @@ data class CollectionSyncProjection(
     val syncState: String,
     val remoteRevision: Long,
     val deletedAtEpochMillis: Long?,
+    /** Immutable ownership creation time, replicated for cross-client view ordering. */
+    val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
     val name: String,
     val setId: String,
@@ -465,6 +467,8 @@ data class CollectionProjection(
     val effectOverride: String?,
     val sourceSetId: String?,
     val sourceCardId: String?,
+    val createdAtEpochMillis: Long = 0L,
+    val updatedAtEpochMillis: Long = 0L,
 )
 
 data class BinderProjection(

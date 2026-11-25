@@ -325,6 +325,87 @@ internal fun BinderOverviewControls(
     }
 }
 
+/** Set-reader controls affect only the presentation of the currently opened binder. */
+@Composable
+internal fun SetBinderCardControls(
+    sort: SetBinderCardSort,
+    onlyMissing: Boolean,
+    onSortChanged: (SetBinderCardSort) -> Unit,
+    onOnlyMissingChanged: (Boolean) -> Unit,
+) {
+    var sortOpen by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.weight(1f)) {
+            OutlinedButton(onClick = { sortOpen = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                DomiLineIcon(DomiIconKind.SYNC, MaterialTheme.colorScheme.primary, Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp)); Text(sort.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
+                SetBinderCardSort.entries.forEach { option -> DropdownMenuItem(
+                    text = { Text(option.label, color = if (option == sort) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) },
+                    onClick = { onSortChanged(option); sortOpen = false },
+                ) }
+            }
+        }
+        FilterChip(
+            selected = onlyMissing,
+            onClick = { onOnlyMissingChanged(!onlyMissing) },
+            label = { Text("Nur fehlende", maxLines = 1) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
+ * A sorted private-binder catalogue.  This explicitly leaves the drag-and-drop
+ * page layout untouched: selecting a row opens the existing detail view instead
+ * of relocating a card just because the collector changed a view preference.
+ */
+@Composable
+internal fun PrivateBinderSortedCardsDialog(
+    cards: List<PrivateBinderCard>,
+    sort: PrivateBinderCardSort,
+    onSortChanged: (PrivateBinderCardSort) -> Unit,
+    onCardSelected: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var sortOpen by remember { mutableStateOf(false) }
+    val ordered = remember(cards, sort) { orderedPrivateBinderCards(cards, sort) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Karten sortiert ansehen") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Diese Ansicht ändert keine Binderplätze.", color = VaultTextMuted, fontSize = 11.sp)
+                Box {
+                    OutlinedButton(onClick = { sortOpen = true }, modifier = Modifier.fillMaxWidth()) { Text(sort.label) }
+                    DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
+                        PrivateBinderCardSort.entries.forEach { option -> DropdownMenuItem(
+                            text = { Text(option.label, color = if (option == sort) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) },
+                            onClick = { onSortChanged(option); sortOpen = false },
+                        ) }
+                    }
+                }
+                LazyColumn(Modifier.heightIn(max = 370.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(ordered, key = PrivateBinderCard::placementId) { placement ->
+                        OutlinedCard(onClick = { onCardSelected(placement.placementId) }, modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                AsyncImage(placement.card.imageUrl, null, Modifier.size(38.dp, 54.dp), contentScale = ContentScale.Crop)
+                                Column(Modifier.weight(1f)) {
+                                    Text(placement.card.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("#${placement.card.number} · ${placement.card.finish} · ${placement.card.variant}", color = VaultTextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Text(placement.card.effectiveValueEur?.let(::privateBinderEuro) ?: "–", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } },
+    )
+}
+
 @Composable
 internal fun PrivateBinderShelfCard(
     binder: PrivateBinderSummary,
@@ -569,6 +650,10 @@ internal fun PrivateBinderReaderScreen(
     var priceDetailsEntryId by rememberSaveable(binder.id) { mutableStateOf<Long?>(null) }
     var holoEditorPlacementId by rememberSaveable(binder.id) { mutableStateOf<String?>(null) }
     var movingPlacementId by rememberSaveable(binder.id) { mutableStateOf<String?>(null) }
+    var privateCardSort by rememberSaveable(binder.id) {
+        mutableStateOf(PrivateBinderCardSort.fromStorage(visualPreferences.getString("private_card_sort:${binder.id}", null)))
+    }
+    var sortedCardsOpen by rememberSaveable(binder.id) { mutableStateOf(false) }
     var removalCandidate by remember { mutableStateOf<PrivateBinderCard?>(null) }
     var working by remember { mutableStateOf(false) }
     var operationError by remember { mutableStateOf<String?>(null) }
@@ -684,6 +769,10 @@ internal fun PrivateBinderReaderScreen(
                     Text("Karte")
                 }
             }
+        }
+
+        TextButton(onClick = { sortedCardsOpen = true }, enabled = !working, modifier = Modifier.align(Alignment.End)) {
+            Text("Karten sortiert ansehen", fontSize = 11.sp)
         }
 
         operationError?.let { Text(it, color = VaultError, fontSize = 11.sp) }
@@ -841,6 +930,21 @@ internal fun PrivateBinderReaderScreen(
                     }
                 }
             },
+        )
+    }
+    if (sortedCardsOpen) {
+        PrivateBinderSortedCardsDialog(
+            cards = placements,
+            sort = privateCardSort,
+            onSortChanged = { option ->
+                privateCardSort = option
+                visualPreferences.edit().putString("private_card_sort:${binder.id}", option.storageValue).apply()
+            },
+            onCardSelected = { placementId ->
+                sortedCardsOpen = false
+                detailPlacementId = placementId
+            },
+            onDismiss = { sortedCardsOpen = false },
         )
     }
     selectedDetail?.let { placement ->

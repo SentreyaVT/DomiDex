@@ -1008,6 +1008,8 @@ private fun CollectionSyncProjection.toRemoteMap(mutation: CollectionSyncOutboxE
     "lastMutationId" to mutation.mutationId,
     "updatedAt" to FieldValue.serverTimestamp(),
     "updatedAtClient" to updatedAtEpochMillis,
+    // Immutable local creation evidence is used only for cross-client display sorting.
+    "createdAtClient" to createdAtEpochMillis,
     "deleted" to (deletedAtEpochMillis != null || mutation.operation == COLLECTION_SYNC_OPERATION_DELETE),
     "deletedAtClient" to deletedAtEpochMillis,
     "name" to name,

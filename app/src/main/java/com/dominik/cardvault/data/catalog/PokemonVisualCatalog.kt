@@ -184,15 +184,19 @@ private object CardmarketProductRegistry {
     fun idFor(sourceCardId: String): Long? = bySourceCardId[sourceCardId.lowercase(Locale.ROOT)]
 }
 
+/** Existing reviewed registries are card-level by design; DLR additionally binds finish and variant. */
 internal fun verifiedCardmarketProductId(sourceCardId: String): Long? =
     CardmarketProductRegistry.idFor(sourceCardId)
+
+internal fun verifiedCardmarketProductId(sourceCardId: String, finish: String, variant: String): Long? =
+    DeltaHerrschaftCardmarketMapping.verifiedProductId(sourceCardId.lowercase(Locale.ROOT), finish, variant)
+        ?: verifiedCardmarketProductId(sourceCardId)
 
 private fun attachVerifiedCardmarketProduct(
     sourceCardId: String,
     variants: List<PokemonPrintVariant>,
     blockedVariantIds: Set<String> = emptySet(),
 ): List<PokemonPrintVariant> {
-    val productId = verifiedCardmarketProductId(sourceCardId)
     return variants.map { variant ->
         // A missing link can use a reviewed bridge; contradictory evidence cannot.
         if (variant.id in blockedVariantIds) return@map variant.copy(cardmarketProductId = null)
@@ -200,6 +204,7 @@ private fun attachVerifiedCardmarketProduct(
         // English detail fallback uses lowercase "standard". Preserve its label,
         // finish and edition; only this eligibility comparison is case-insensitive.
         val ordinary = variant.variant.trim().lowercase(Locale.ROOT) in setOf("standard", "normal", "holo", "reverse holo")
+        val productId = verifiedCardmarketProductId(sourceCardId, variant.finish, variant.variant)
         val candidate = if (variant.cardmarketProductId == null && ordinary) productId else variant.cardmarketProductId
         variant.copy(cardmarketProductId = candidate.takeUnless { isQuarantinedCardmarketIdentity(sourceCardId, it) })
     }

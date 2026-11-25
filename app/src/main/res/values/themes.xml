@@ -3,8 +3,8 @@
 
     <style name="Theme.CardVault" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/launch_night</item>
-        <item name="android:navigationBarColor">@color/launch_night</item>
-        <item name="android:statusBarColor">@color/launch_night</item>
+        <!-- Android 15+ owns transparent edge-to-edge system bars.  Their icon
+             appearance is controlled by CardVaultTheme, not obsolete bar colours. -->
         <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

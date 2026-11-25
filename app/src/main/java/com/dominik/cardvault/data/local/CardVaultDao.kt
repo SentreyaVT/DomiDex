@@ -32,7 +32,7 @@ interface CardVaultDao {
                e.externalProductSource, e.externalProductId,
                CASE WHEN """ + SAFE_COLLECTION_PRICE_LINK_SQL + """ THEN COALESCE(linked.id, c.id) ELSE '' END AS priceCardId,
                c.imageUrl, COALESCE(e.effectOverride, c.effectOverride) AS effectOverride
-               , e.binderId, e.sourceSetId, e.sourceCardId
+               , e.binderId, e.sourceSetId, e.sourceCardId, e.createdAtEpochMillis, e.updatedAtEpochMillis
         FROM collection_entries e
         JOIN catalog_cards c ON c.id = e.cardId
         LEFT JOIN catalog_cards linked ON linked.externalSource = e.externalProductSource
@@ -637,7 +637,7 @@ interface CardVaultDao {
 
     @Query("""
         SELECT e.id AS entryId, e.ownerUid, e.syncId, e.syncState, e.remoteRevision,
-               e.deletedAtEpochMillis, e.updatedAtEpochMillis,
+               e.deletedAtEpochMillis, e.createdAtEpochMillis, e.updatedAtEpochMillis,
                c.name, c.setId, c.setName, c.collectorNumber, c.language,
                COALESCE(e.finishOverride, c.finish) AS finish,
                COALESCE(e.variantOverride, c.variant) AS variant,

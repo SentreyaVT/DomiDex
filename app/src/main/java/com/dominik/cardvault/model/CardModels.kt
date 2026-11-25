@@ -39,6 +39,10 @@ data class CollectionCard(
     val sourceSetId: String? = null,
     val sourceCardId: String? = null,
     val priceSelection: CardPriceSelection? = null,
+    /** Original ownership creation time. Null means legacy/import data did not provide evidence. */
+    val createdAtEpochMillis: Long? = null,
+    /** Last ownership edit time. Null means legacy/import data did not provide evidence. */
+    val updatedAtEpochMillis: Long? = null,
 ) {
     val trendValueEur: Double? get() = currentValueEur.takeIf {
         priceUpdatedAtEpochMillis != null && it.isFinite() && it > 0.0 &&
@@ -134,6 +138,8 @@ data class PrivateBinderSummary(
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
     val lastOpenedAtEpochMillis: Long?,
+    /** Latest actual placement creation in this binder; null for a binder with no placements. */
+    val lastCardAddedAtEpochMillis: Long? = null,
     /** Owner of this exact summary emission; never use a later auth snapshot for sharing. */
     val ownerUid: String? = null,
     val alternativePricedCards: Int = 0,
@@ -149,6 +155,9 @@ data class PrivateBinderCard(
     /** Presentation override scoped to this binder placement, never to collection identity. */
     val holoEffectId: String? = null,
     val holoIntensity: Float = 0f,
+    /** Placement metadata, separate from a card's collection ownership timestamps. */
+    val createdAtEpochMillis: Long? = null,
+    val updatedAtEpochMillis: Long? = null,
 )
 
 sealed interface BinderTarget {

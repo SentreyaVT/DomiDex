@@ -236,6 +236,8 @@ class RoomCollectionRepository(
                 sourceCardId = row.sourceCardId,
                 priceSelection = selectionsByEntry[row.entryId]?.selectionOrNull()
                     ?.takeIf { row.externalProductSource == com.dominik.cardvault.data.sync.CardmarketSyncContract.SOURCE },
+                createdAtEpochMillis = row.createdAtEpochMillis,
+                updatedAtEpochMillis = row.updatedAtEpochMillis,
             )
         }
     }
@@ -262,6 +264,7 @@ class RoomCollectionRepository(
                     createdAtEpochMillis = binder.createdAtEpochMillis,
                     updatedAtEpochMillis = binder.updatedAtEpochMillis,
                     lastOpenedAtEpochMillis = binder.lastOpenedAtEpochMillis,
+                    lastCardAddedAtEpochMillis = placementsByBinder[binder.id].orEmpty().maxOfOrNull { it.createdAtEpochMillis },
                     ownerUid = binder.ownerUid,
                     alternativePricedCards = cards.filter { it.usesPriceSelection }.sumOf { it.quantity },
                     trendPricedCards = cards.filter { it.trendValueEur != null }.sumOf { it.quantity },
@@ -641,6 +644,8 @@ class RoomCollectionRepository(
                             card = card,
                             holoEffectId = placement.holoEffectId,
                             holoIntensity = placement.holoIntensity,
+                            createdAtEpochMillis = placement.createdAtEpochMillis,
+                            updatedAtEpochMillis = placement.updatedAtEpochMillis,
                         )
                     }
                 }

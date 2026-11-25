@@ -57,6 +57,18 @@ class BinderOverviewPolicyTest {
         assertEquals(listOf("set-b", "set-a", "private-c"), orderBinderOverview(all, BinderSortOption.LAST_OPENED, BinderFilterOption.ALL).map { it.id })
     }
 
+    @Test fun `last-added release and missing sorts use their own source fields`() {
+        val older = BinderOverviewRecord("old", "Alt", BinderOverviewKind.SET, ownedCards = 4, totalSlots = 10, completedSlots = 4, lastAddedAtEpochMillis = 10, releaseDate = "2024-01-01")
+        val newer = BinderOverviewRecord("new", "Neu", BinderOverviewKind.SET, ownedCards = 7, totalSlots = 10, completedSlots = 7, lastAddedAtEpochMillis = 20, releaseDate = "2025-01-01")
+        val unknown = BinderOverviewRecord("unknown", "Legacy", BinderOverviewKind.SET, ownedCards = 1, totalSlots = 10, completedSlots = 1)
+        val all = listOf(older, unknown, newer)
+
+        assertEquals(listOf("new", "old", "unknown"), orderBinderOverview(all, BinderSortOption.LAST_ADDED, BinderFilterOption.ALL).map { it.id })
+        assertEquals(listOf("new", "old", "unknown"), orderBinderOverview(all, BinderSortOption.NEWEST_SET, BinderFilterOption.ALL).map { it.id })
+        assertEquals(listOf("old", "new", "unknown"), orderBinderOverview(all, BinderSortOption.OLDEST_SET, BinderFilterOption.ALL).map { it.id })
+        assertEquals(listOf("unknown", "old", "new"), orderBinderOverview(all, BinderSortOption.MOST_MISSING, BinderFilterOption.ALL).map { it.id })
+    }
+
     @Test fun `unknown slot counts are neither complete nor incomplete and have no percentage`() {
         val unknown = BinderOverviewRecord("unknown", "Unloaded", BinderOverviewKind.SET, 500)
         val all = listOf(unknown, setComplete, setSparse)

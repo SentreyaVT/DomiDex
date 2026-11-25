@@ -14,11 +14,18 @@ internal enum class BinderOverviewTab(val storageValue: String) {
 
 internal enum class BinderSortOption(val storageValue: String, val label: String) {
     MOST_CARDS("most_cards", "Meiste Karten"),
+    FEWEST_CARDS("fewest_cards", "Wenigste Karten"),
     HIGHEST_VALUE("highest_value", "Höchster Sammlungswert"),
     HIGHEST_PROGRESS("highest_progress", "Höchster Fortschritt"),
     LOWEST_PROGRESS("lowest_progress", "Niedrigster Fortschritt"),
+    MOST_MISSING("most_missing", "Meiste fehlende Karten"),
+    FEWEST_MISSING("fewest_missing", "Wenigste fehlende Karten"),
     A_TO_Z("a_to_z", "A–Z"),
+    Z_TO_A("z_to_a", "Z–A"),
     LAST_OPENED("last_opened", "Zuletzt geöffnet"),
+    LAST_ADDED("last_added", "Zuletzt hinzugefügt"),
+    NEWEST_SET("newest_set", "Neueste Sets zuerst"),
+    OLDEST_SET("oldest_set", "Älteste Sets zuerst"),
     COMPLETE_FIRST("complete_first", "Vollständig zuerst"),
     INCOMPLETE_FIRST("incomplete_first", "Unvollständig zuerst");
 
@@ -49,6 +56,10 @@ internal data class BinderOverviewRecord(
     val totalSlots: Int? = null,
     val marketValueEur: Double = 0.0,
     val lastOpenedAtEpochMillis: Long? = null,
+    /** Actual newest ownership/placement time; null is retained for legacy data without evidence. */
+    val lastAddedAtEpochMillis: Long? = null,
+    /** Source-declared YYYY-MM-DD (or null when the catalogue provides no date). */
+    val releaseDate: String? = null,
     /** Filled canonical set slots; physical card count stays independent for the default sort. */
     val completedSlots: Int? = null,
 ) {
@@ -60,6 +71,9 @@ internal data class BinderOverviewRecord(
 
     val isIncomplete: Boolean
         get() = kind == BinderOverviewKind.SET && totalSlots != null && totalSlots > 0 && !isComplete
+
+    val missingSlots: Int?
+        get() = totalSlots?.takeIf { it > 0 }?.let { (it - (completedSlots ?: ownedCards)).coerceAtLeast(0) }
 }
 
 internal fun binderOverviewRecordsForTab(
@@ -89,16 +103,23 @@ internal fun orderBinderOverview(
     val nameThenId = compareBy<BinderOverviewRecord>({ it.name.lowercase() }, { it.id })
     val primary = when (sort) {
         BinderSortOption.MOST_CARDS -> compareByDescending<BinderOverviewRecord> { it.ownedCards }
+        BinderSortOption.FEWEST_CARDS -> compareBy<BinderOverviewRecord> { it.ownedCards }
         BinderSortOption.HIGHEST_VALUE -> compareByDescending<BinderOverviewRecord> { it.marketValueEur }
         BinderSortOption.HIGHEST_PROGRESS -> compareByDescending<BinderOverviewRecord> { it.progress ?: -1.0 }
         BinderSortOption.LOWEST_PROGRESS -> compareBy<BinderOverviewRecord> { it.progress ?: Double.MAX_VALUE }
+        BinderSortOption.MOST_MISSING -> compareByDescending<BinderOverviewRecord> { it.missingSlots ?: -1 }
+        BinderSortOption.FEWEST_MISSING -> compareBy<BinderOverviewRecord> { it.missingSlots ?: Int.MAX_VALUE }
         BinderSortOption.A_TO_Z -> nameThenId
+        BinderSortOption.Z_TO_A -> compareByDescending<BinderOverviewRecord> { it.name.lowercase() }.thenByDescending { it.id }
         BinderSortOption.LAST_OPENED -> compareByDescending<BinderOverviewRecord> { it.lastOpenedAtEpochMillis ?: Long.MIN_VALUE }
+        BinderSortOption.LAST_ADDED -> compareByDescending<BinderOverviewRecord> { it.lastAddedAtEpochMillis ?: Long.MIN_VALUE }
+        BinderSortOption.NEWEST_SET -> compareByDescending<BinderOverviewRecord> { it.releaseDate ?: "" }
+        BinderSortOption.OLDEST_SET -> compareBy<BinderOverviewRecord> { it.releaseDate ?: "\uffff" }
         BinderSortOption.COMPLETE_FIRST -> compareByDescending<BinderOverviewRecord> { it.isComplete }
             .thenByDescending { it.ownedCards }
         BinderSortOption.INCOMPLETE_FIRST -> compareByDescending<BinderOverviewRecord> { it.isIncomplete }
             .thenByDescending { it.ownedCards }
     }
-    return if (sort == BinderSortOption.A_TO_Z) filtered.sortedWith(primary)
+    return if (sort == BinderSortOption.A_TO_Z || sort == BinderSortOption.Z_TO_A) filtered.sortedWith(primary)
     else filtered.sortedWith(primary.then(nameThenId))
 }

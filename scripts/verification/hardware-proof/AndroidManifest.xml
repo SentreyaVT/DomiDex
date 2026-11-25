@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.CAMERA" tools:node="remove" />
+    <!-- Replace the entire disposable application's component tree. No product startup. -->
+    <application android:name="android.app.Application" android:label="DomiDex isolated hardware proof"
+        android:allowBackup="false" tools:node="replace">
+        <!-- Genuine bundled ML Kit initialization and original registrar discovery only. -->
+        <provider android:name="com.google.mlkit.common.internal.MlKitInitProvider"
+            android:authorities="${applicationId}.mlkitinitprovider" android:exported="false" android:initOrder="99" />
+        <service android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
+            android:directBootAware="true" android:exported="false">
+            <meta-data android:name="com.google.firebase.components:com.google.mlkit.vision.text.internal.TextRegistrar"
+                android:value="com.google.firebase.components.ComponentRegistrar" />
+            <meta-data android:name="com.google.firebase.components:com.google.mlkit.vision.common.internal.VisionCommonRegistrar"
+                android:value="com.google.firebase.components.ComponentRegistrar" />
+            <meta-data android:name="com.google.firebase.components:com.google.mlkit.common.internal.CommonComponentRegistrar"
+                android:value="com.google.firebase.components.ComponentRegistrar" />
+        </service>
+    </application>
+</manifest>

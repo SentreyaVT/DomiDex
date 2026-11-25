@@ -1211,6 +1211,8 @@ private fun isOnline(context: Context): Boolean {
                     totalSlots = capacity,
                     marketValueEur = setCards.sumOf { (it.effectiveValueEur ?: 0.0) * it.quantity },
                     lastOpenedAtEpochMillis = setLastOpenedByName[setName],
+                    lastAddedAtEpochMillis = setCards.mapNotNull(CollectionCard::createdAtEpochMillis).maxOrNull(),
+                    releaseDate = resolveBinderSourceSet(setName, setCards, catalogSets)?.releaseDate?.takeIf { it.isNotBlank() },
                     completedSlots = progress,
                 )
             }
@@ -1222,6 +1224,7 @@ private fun isOnline(context: Context): Boolean {
                     ownedCards = binder.ownedCards,
                     marketValueEur = binder.marketValueEur,
                     lastOpenedAtEpochMillis = binder.lastOpenedAtEpochMillis,
+                    lastAddedAtEpochMillis = binder.lastCardAddedAtEpochMillis,
                 )
             }
             val recordsForTab = binderOverviewRecordsForTab(setRecords + privateRecords, overviewTab)
@@ -1355,6 +1358,7 @@ private fun isOnline(context: Context): Boolean {
     onHideReferenceBinder: (() -> Unit)? = null,
     visualCatalog: PokemonVisualCatalog = remember { PokemonVisualCatalog() },
 ) {
+    val binderPreferences = LocalContext.current.getSharedPreferences("cardvault_binders", Context.MODE_PRIVATE)
     val privateBinderSummaries by repository.privateBinders.collectAsState(initial = emptyList())
     var setReferences by remember(setName) { mutableStateOf<List<CollectionCard>>(emptyList()) }
     var sourceSetCards by remember(setName) { mutableStateOf(wachsendesChaosSourceCards(setName)) }
@@ -1362,6 +1366,12 @@ private fun isOnline(context: Context): Boolean {
     val displayedCoverUrl = fallbackCardImageUrl(refreshedCoverUrl, coverUrl)
     var referencesLoading by remember(setName) { mutableStateOf(true) }
     var refreshVersion by rememberSaveable(setName) { mutableIntStateOf(0) }
+    var cardSort by rememberSaveable(setName) {
+        mutableStateOf(SetBinderCardSort.fromStorage(binderPreferences.getString("set_card_sort:$setName", null)))
+    }
+    var onlyMissingCards by rememberSaveable(setName) {
+        mutableStateOf(binderPreferences.getBoolean("set_only_missing:$setName", false))
+    }
     LaunchedEffect(setName, refreshVersion) {
         referencesLoading = true
         try {
@@ -1424,11 +1434,14 @@ private fun isOnline(context: Context): Boolean {
         }
     }
     val arrangedCards = remember(setName, cards, cardCapacity, setReferences, refreshVersion) { arrangeBinderCards(setName, cards, cardCapacity, setReferences) }
-    val binderPageCount = ((arrangedCards.size + 8) / 9).coerceAtLeast(1)
-    val faces = remember(arrangedCards, binderPageCount) {
+    val displayedCards = remember(arrangedCards, cardSort, onlyMissingCards) {
+        orderedSetBinderCards(arrangedCards, cardSort, onlyMissingCards)
+    }
+    val binderPageCount = ((displayedCards.size + 8) / 9).coerceAtLeast(1)
+    val faces = remember(displayedCards, binderPageCount) {
         buildList {
             add(BinderFace.White)
-            arrangedCards.chunked(9).ifEmpty { listOf(emptyList()) }.forEach { add(BinderFace.Pockets(it)) }
+            displayedCards.chunked(9).ifEmpty { listOf(emptyList()) }.forEach { add(BinderFace.Pockets(it)) }
             add(BinderFace.White)
         }
     }
@@ -1503,6 +1516,18 @@ private fun isOnline(context: Context): Boolean {
                 }
             }
         }
+        SetBinderCardControls(
+            sort = cardSort,
+            onlyMissing = onlyMissingCards,
+            onSortChanged = { option ->
+                cardSort = option
+                binderPreferences.edit().putString("set_card_sort:$setName", option.storageValue).apply()
+            },
+            onOnlyMissingChanged = { enabled ->
+                onlyMissingCards = enabled
+                binderPreferences.edit().putBoolean("set_only_missing:$setName", enabled).apply()
+            },
+        )
         // Each animated page owns its face snapshot; an outgoing index must never
         // be dereferenced against a newer (possibly shorter) reference list.
         AnimatedContent(targetState = page to faces[page], contentKey = { it.first }, modifier = Modifier.weight(1f), transitionSpec = {
@@ -3961,7 +3986,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
         origin: ScanCaptureOrigin,
     ) {
         val protectedIds = reportFlow.protectedScanIds(queuedScans) + listOfNotNull(selectedScanId)
-        if (origin == ScanCaptureOrigin.AUTOMATIC && !ScanQueuePolicy.allowsAutomaticCapture(queuedScans, pendingCameraCaptures > 0, protectedIds)) {
+        if (origin.isBackgroundIntake && !ScanQueuePolicy.allowsAutomaticCapture(queuedScans, pendingCameraCaptures > 0, protectedIds)) {
             scanSession = scanSession.recordTerminal("rejected:${file.name}", ScanPipelineStage.FAILED)
             file.delete()
             evidenceFiles.forEach(File::delete)
@@ -3969,7 +3994,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
             return
         }
         while (queuedScans.size >= ScanQueuePolicy.MAX_TOTAL_BACKLOG) {
-            val eviction = if (origin == ScanCaptureOrigin.AUTOMATIC) {
+            val eviction = if (origin.isBackgroundIntake) {
                 ScanQueuePolicy.automaticEvictionCandidate(queuedScans, protectedIds)
             } else {
                 ScanQueuePolicy.evictionCandidateForManualCapture(queuedScans.filterNot { it.id in protectedIds }, selectedScanId)
@@ -4346,6 +4371,7 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                 modifier = Modifier.fillMaxSize(),
                 autoCaptureAllowed = automaticCaptureAllowed,
                 manualCaptureAllowed = manualCaptureAllowed,
+                liveRecognitionAllowed = automaticCaptureAllowed,
                 onCaptureStarted = { _ ->
                     // Capture is intentionally independent from prior work items. Do not clear an
                     // ongoing queue entry here: the camera is free as soon as its JPEG is saved.
@@ -4360,6 +4386,12 @@ private fun artworkLabel(result: ArtworkVerification): String = when (result.mat
                         temporalFiles,
                         origin = if (automatic) ScanCaptureOrigin.AUTOMATIC else ScanCaptureOrigin.MANUAL,
                     )
+                },
+                onLivePreviewSaved = { file, eligible ->
+                    // Live preview samples deliberately use the same bounded queue and the
+                    // same candidate/collector-confirmation flow as photos. They never write
+                    // collection or binder data directly.
+                    enqueueScan(file, eligible, origin = ScanCaptureOrigin.LIVE_PREVIEW)
                 },
                 onCaptureFailed = {
                     pendingCameraCaptures = 0
