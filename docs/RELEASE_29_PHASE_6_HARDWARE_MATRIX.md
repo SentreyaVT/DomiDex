@@ -18,7 +18,7 @@
 | Invalid/incomplete frame, held card, removal/new card, sequence replay, in-flight gating | Same gate unit tests | Covered in simulation | No |
 | Bounded queue hand-off | Source review of `LIVE_PREVIEW` through `ScanQueuePolicy` | Review only | No |
 | Android CameraX lifecycle/crop/rotation/cache files | Current source review only | Not device-validated | No |
-| Full Android Gradle/unit/emulator execution | Blocked by absent authorised `app/google-services.json` | Not run | No |
+| Full Android Gradle unit suite, debug lint and debug APK | 1,088 tests with 0 failures/errors (2 documented opt-in skips); lint and assemble passed | Automated local evidence only | No |
 
 ## Required physical matrix
 

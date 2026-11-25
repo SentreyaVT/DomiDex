@@ -116,10 +116,11 @@ rules, host the Web app, upload an AAB, or publish a release.
 
 ## Phase 6 local follow-up (25 November 2026)
 
-The current checkout's Android Gradle verification is blocked before compilation
-by the intentionally untracked, absent `app/google-services.json`; no Firebase
-identity or placeholder was fabricated. `RELEASE_29_PHASE_6_REPORT.md` records
-the exact required authorised local configuration. The required physical
+An authorised, intentionally untracked local `app/google-services.json` is now
+available for `com.dominik.cardvault`; no Firebase identity or placeholder was
+fabricated. Current Gradle evidence is **1,088 tests with 0 failures/errors and
+2 documented opt-in skips**, debug lint passed with no error-level SARIF finding,
+and a debug APK assembled locally. The required physical
 scanner/two-device/offline/WorkManager cases are prepared in
 `RELEASE_29_PHASE_6_HARDWARE_MATRIX.md` and are all explicitly not executed.
 
