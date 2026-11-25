@@ -114,6 +114,21 @@ approval.
 The above evidence is local only. It does not constitute an approval to deploy
 rules, host the Web app, upload an AAB, or publish a release.
 
+## Phase 6 local follow-up (25 November 2026)
+
+The current checkout's Android Gradle verification is blocked before compilation
+by the intentionally untracked, absent `app/google-services.json`; no Firebase
+identity or placeholder was fabricated. `RELEASE_29_PHASE_6_REPORT.md` records
+the exact required authorised local configuration. The required physical
+scanner/two-device/offline/WorkManager cases are prepared in
+`RELEASE_29_PHASE_6_HARDWARE_MATRIX.md` and are all explicitly not executed.
+
+For the separately experimental Web `backend/market-data/` area, Phase 6 fixed
+four unambiguous runtime-source lint findings and its isolated Node suite passed
+174/174. The remaining 205 full-lint findings are test-only and were neither
+suppressed nor mass-rewritten. They remain a release-gate follow-up; the prior
+Web application test/typecheck/build evidence is unaffected.
+
 ## Current blockers before Release 29
 
 1. **P0:** 79 DLR printings do not yet have an unambiguous Cardmarket identity
