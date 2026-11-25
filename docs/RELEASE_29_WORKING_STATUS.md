@@ -169,3 +169,25 @@ Das neue RELEASE_29_PRICE_IDENTITY_AUDIT.md inventarisiert 92 lokale Web-Katalog
    the timestamp-writing Android/Web clients. This is a release-ordering
    requirement, not authorization to deploy.
 
+## Phase 9 blocker remediation evidence (26 November 2026)
+
+`RELEASE_29_PHASE_9_BLOCKER_EVIDENCE.md` records the current source-backed
+closure path for each remaining class of blocker. The Web test harness backlog
+is no longer a blocker: its former 205 test-only diagnostics were corrected
+without lint suppressions or production-path changes. The resulting local checks
+passed: market-data Node tests 174/174, complete Web suite 52 files/779 tests,
+full lint with zero diagnostics, typecheck and production build.
+
+The DLR pricing blocker cannot truthfully be marked closed from the public
+export: the official Pokémon checklist confirms printed identities but not
+Cardmarket product identities; Cardmarket's documented Product API is capable
+of supplying the needed number/rarity/image/product evidence but requires an
+approved professional-seller API application. Public page access encountered a
+Cloudflare verification challenge and was not bypassed. The only safe closure is
+authorised API access or manual, reproducibly recorded product-page evidence for
+each of the 79 prints. No price or product ID was guessed.
+
+Physical scanner/two-device/online/recovery proof likewise needs actual
+designated devices, non-production data/environment and explicit camera
+permission. The Android-17 offline emulator evidence does not replace it.
+
